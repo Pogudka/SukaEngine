@@ -1,10 +1,10 @@
 {
   "name": "Pause",
   "nodes": [
-    { "type": "Label", "name": "PauseTitle", "text": "PAUSE", "x": 300, "y": 500, "font_size": 40 }
+    { "type": "Label", "name": "PauseTitle", "text": "PAUSE", "x": 520, "y": 200, "font_size": 64 }
   ],
   "ui": [
-    { "id": "resume", "x": 240, "y": 700, "w": 240, "h": 100, "text": "RESUME", "action": "change_scene:scenes/main.json" },
-    { "id": "menu", "x": 240, "y": 840, "w": 240, "h": 100, "text": "MENU", "action": "change_scene:scenes/menu.json" }
+    { "id": "resume", "x": 360, "y": 380, "w": 260, "h": 120, "text": "RESUME", "action": "change_scene:scenes/main.json" },
+    { "id": "menu",   "x": 660, "y": 380, "w": 260, "h": 120, "text": "MENU",   "action": "change_scene:scenes/menu.json" }
   ]
 }
