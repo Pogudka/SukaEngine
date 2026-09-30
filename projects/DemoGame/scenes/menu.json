@@ -1,18 +1,9 @@
 {
   "name": "Menu",
   "nodes": [
-    { "type": "Label", "name": "GameTitle", "text": "Demo Game", "x": 200, "y": 300, "font_size": 48 },
-    { "type": "Label", "name": "Subtitle", "text": "SukaEngine v0.8.0", "x": 200, "y": 380, "font_size": 24 }
+    { "type": "Label", "name": "Title", "text": "Demo Game", "x": 470, "y": 220, "font_size": 72 }
   ],
   "ui": [
-    { "id": "start", "x": 240, "y": 700, "w": 240, "h": 120, "text": "START", "action": "restart_scene:scenes/main.json" }
+    { "id": "start", "x": 490, "y": 420, "w": 300, "h": 120, "text": "START", "action": "restart_scene:scenes/main.json" }
   ]
-}{
-  "name": "Menu",
-  "nodes": [
-    { "type": "Label", "name": "GameTitle", "text": "Demo Game", "x": 200, "y": 300, "font_size": 48 },
-    { "type": "Label", "name": "Subtitle", "text": "SukaEngine v0.8.0", "x": 200, "y": 380, "font_size": 24 }
-  ],
-  "ui": [
-    { "id": "start", "x": 240, "y": 700, "w": 240, "h": 120, "text": "START", "action": "restart_scene:scenes/main.json" }
-  ]
+}
