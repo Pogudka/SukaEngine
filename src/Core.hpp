@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdlib>
 #include <cstdio>
+#include <iostream>
 
 namespace suka {
 
@@ -53,13 +54,12 @@ inline std::string colorToHex(unsigned int c) {
     return buf;
 }
 
-// ===== ТЕМЫ =====
 struct Theme {
     std::string name;
-    unsigned int bg;      // фон
-    unsigned int accent;  // акцент / выделение
-    unsigned int ink;     // основной текст
-    unsigned int button;  // заливка кнопок
+    unsigned int bg;
+    unsigned int accent;
+    unsigned int ink;
+    unsigned int button;
 };
 
 inline std::vector<Theme>& themeList() {
