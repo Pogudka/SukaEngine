@@ -133,8 +133,8 @@ struct UiButton {
 
 class InputManager {
 public:
-    float screenWidth = 720.0f;
-    float screenHeight = 1280.0f;
+    float screenWidth = 1280.0f;
+    float screenHeight = 720.0f;
 
     VirtualJoystick joystick;
     std::vector<UiButton>* ui = nullptr;
