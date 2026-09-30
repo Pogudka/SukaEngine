@@ -1,0 +1,8 @@
+{
+  "scripts": [
+    { "node": "ScriptBox", "path": "scripts/box.lua" }
+  ,
+    { "node": "Player", "path": "scripts/player.lua" },
+    { "node": "Player", "path": "scripts/player.lua" },
+    { "node": "Player", "path": "scripts/player.lua" }]
+}

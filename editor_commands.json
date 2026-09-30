@@ -1,0 +1,9 @@
+{
+  "commands": [
+    { "action": "create_script", "name": "Player", "path": "scripts/player.lua" },
+    { "action": "select", "name": "Player" },
+    { "action": "set_color", "name": "Player", "color": "#00FF88" },
+    { "action": "add", "type": "Coin", "name": "BonusCoin", "x": 400, "y": 300 },
+    { "action": "save", "path": "scenes/main_edited.json" }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Main",
+  "nodes": [
+    { "type": "Player", "name": "Player", "x": 200, "y": 400, "speed": 260 }
+  ],
+  "ui": [
+    { "id": "pause", "x": 20, "y": 20, "w": 100, "h": 60, "text": "II", "action": "change_scene:scenes/pause.json" }
+  ]
+}

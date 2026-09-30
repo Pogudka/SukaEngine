@@ -1,0 +1,21 @@
+{
+  "name": "Main",
+  "nodes": [
+    { "type": "Label", "name": "TitleLabel", "text": "Demo Game {coins}", "x": 100, "y": 80, "font_size": 32 },
+    { "type": "Sprite2D", "name": "Hero", "texture": "assets/hero.png", "x": 360, "y": 640, "w": 96, "h": 96 },
+    { "type": "Player", "name": "Player", "x": 200, "y": 400, "speed": 260 },
+    { "type": "Enemy", "name": "Enemy1", "x": 350, "y": 400, "speed": 120 },
+    { "type": "Coin", "name": "Coin1", "x": 207, "y": 397 },
+    { "type": "Coin", "name": "Coin2", "x": 211, "y": 390 },
+    { "type": "Node2D", "name": "ScriptBox", "x": 100, "y": 700 },
+    { "type": "Camera2D", "name": "Camera", "follow": "Player", "x": 200, "y": 400 },
+    { "type": "Node2D", "name": "CameraAnchor", "x": 0, "y": 0 }
+  ],
+  "ui": [
+    { "id": "jump", "x": 560, "y": 1000, "w": 120, "h": 120, "text": "JUMP" },
+    { "id": "attack", "x": 560, "y": 860, "w": 120, "h": 120, "text": "ATK" },
+    { "id": "tapcoin", "x": 560, "y": 720, "w": 120, "h": 80, "text": "+1", "action": "add_var:coins:1" },
+    { "id": "plat", "x": 20, "y": 100, "w": 100, "h": 60, "text": "PLAT", "action": "change_scene:scenes/platform.json" },
+    { "id": "pause", "x": 20, "y": 20, "w": 100, "h": 60, "text": "II", "action": "change_scene:scenes/pause.json" }
+  ]
+}
