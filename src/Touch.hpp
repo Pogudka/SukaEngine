@@ -14,7 +14,6 @@ struct RawTouch {
 class TouchProcessor {
 public:
     void onTouch(const RawTouch& raw, Scene& scene, InputManager& input) {
-        // UI-кнопки: каждый палец держит свою кнопку
         for (auto& b : scene.ui) {
             const bool inside =
                 raw.x >= b.touch.rect.x && raw.x <= b.touch.rect.x + b.touch.rect.w &&
@@ -32,17 +31,15 @@ public:
             }
         }
 
-        // джойстик: живёт, пока жив его палец
         if (raw.action == RawTouch::Action::Down || raw.action == RawTouch::Action::Move) {
-            if (raw.x < 360) {
+            if (raw.x < 640) {
                 if (!input.joystick.active && raw.action == RawTouch::Action::Down) {
                     input.joystick.active = true;
                     joyFinger_ = raw.id;
                 }
                 if (input.joystick.active && raw.id == joyFinger_) {
-                    input.joystick.axisX = (raw.x - 180) / 180.0f;
-                    input.joystick.axisY = (raw.y - 640) / 180.0f;
-
+                    input.joystick.axisX = (raw.x - 320) / 320.0f;
+                    input.joystick.axisY = (raw.y - 360) / 360.0f;
                     if (input.joystick.axisX >  1.0f) input.joystick.axisX =  1.0f;
                     if (input.joystick.axisX < -1.0f) input.joystick.axisX = -1.0f;
                     if (input.joystick.axisY >  1.0f) input.joystick.axisY =  1.0f;
@@ -59,9 +56,7 @@ public:
         }
     }
 
-    void resetJoystick() {
-        joyFinger_ = -1;
-    }
+    void resetJoystick() { joyFinger_ = -1; }
 
 private:
     int joyFinger_ = -1;
