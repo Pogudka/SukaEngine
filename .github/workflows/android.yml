@@ -11,10 +11,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK components
+      - name: Find and use Android SDK
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653" "cmake;3.22.1"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          SDKM="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" -name sdkmanager -type f 2>/dev/null | head -n1)"
+          echo "FOUND_SDKMANAGER=$SDKM"
+          if [ -z "$SDKM" ]; then
+            echo "sdkmanager nowhere in ANDROID_HOME, scanning whole fs..."
+            SDKM="$(find / -name sdkmanager -type f 2>/dev/null | head -n1)"
+            echo "FOUND_SDKMANAGER2=$SDKM"
+          fi
+          if [ -z "$SDKM" ]; then echo "NO SDKMANAGER FOUND"; exit 1; fi
+          ROOT="$(dirname "$(dirname "$(dirname "$SDKM")")")"
+          echo "SDK_ROOT=$ROOT"
+          yes | "$SDKM" --sdk_root="$ROOT" --licenses >/dev/null 2>&1 || true
+          "$SDKM" --sdk_root="$ROOT" "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;25.2.9519653" "cmake;3.22.1"
 
       - name: Build APK
         uses: gradle/gradle-build-action@v3
