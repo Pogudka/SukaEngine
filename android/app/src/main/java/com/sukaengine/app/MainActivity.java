@@ -19,7 +19,7 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.widget.EditText;
-import androidx.appcompat.app.AlertDialog;
+import android.app.AlertDialog;
 
 import java.io.File;
 import java.io.FileInputStream;
