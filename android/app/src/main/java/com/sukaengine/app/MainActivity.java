@@ -95,11 +95,13 @@ public class MainActivity extends Activity {
         } catch (Exception e) { }
     }
 
+    // mode: 0=text, 1=name, 2=action, 3=number
     private void openDialog(final String title, final String current, final int mode) {
         g_dialog = true;
         runOnUiThread(() -> {
             final EditText et = new EditText(MainActivity.this);
-            et.setInputType(InputType.TYPE_CLASS_TEXT);
+            if (mode == 3) et.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
+            else et.setInputType(InputType.TYPE_CLASS_TEXT);
             et.setText(current); et.selectAll();
             et.setTextColor(Color.WHITE);
             new AlertDialog.Builder(MainActivity.this)
@@ -109,7 +111,8 @@ public class MainActivity extends Activity {
                     String v = et.getText().toString();
                     if (mode == 0) nativeSetText(v);
                     else if (mode == 1) nativeSetName(v);
-                    else nativeSetAction(v);
+                    else if (mode == 2) nativeSetAction(v);
+                    else nativeSetNumber(v);
                     g_dialog = false;
                 })
                 .setNegativeButton("Cancel", (d, w) -> g_dialog = false)
@@ -125,6 +128,7 @@ public class MainActivity extends Activity {
     native void nativeSetText(String text);
     native void nativeSetName(String text);
     native void nativeSetAction(String text);
+    native void nativeSetNumber(String text);
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
@@ -153,13 +157,14 @@ public class MainActivity extends Activity {
                 int rt = frame.indexOf("REQ_TEXT|");
                 int rn = frame.indexOf("REQ_NAME|");
                 int ra = frame.indexOf("REQ_ACTION|");
-                if (!g_dialog && (rt >= 0 || rn >= 0 || ra >= 0)) {
-                    int idx = rt >= 0 ? rt : (rn >= 0 ? rn : ra);
-                    int mode = (rt >= 0 && idx == rt) ? 0 : ((rn >= 0 && idx == rn) ? 1 : 2);
+                int rnum = frame.indexOf("REQ_NUM|");
+                if (!g_dialog && (rt >= 0 || rn >= 0 || ra >= 0 || rnum >= 0)) {
+                    int idx = rt >= 0 ? rt : (rn >= 0 ? rn : (ra >= 0 ? ra : rnum));
+                    int mode = (idx == rt && rt >= 0) ? 0 : ((idx == rn && rn >= 0) ? 1 : ((idx == ra && ra >= 0) ? 2 : 3));
                     String rest = frame.substring(idx);
                     int nl = rest.indexOf('\n'); if (nl >= 0) rest = rest.substring(0, nl);
                     int bar = rest.indexOf('|'); String cur = bar >= 0 ? rest.substring(bar + 1) : "";
-                    String title = mode == 0 ? "Text" : (mode == 1 ? "Name" : "Action");
+                    String title = mode == 0 ? "Text" : (mode == 1 ? "Name" : (mode == 2 ? "Action" : "Value"));
                     openDialog(title, cur, mode); continue;
                 }
 
@@ -252,7 +257,7 @@ public class MainActivity extends Activity {
                     paint.setColor(Color.parseColor(p[6]));
                     float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
 
-                    if (shape.equals("glow")) {   // LIGHT: радиальное свечение
+                    if (shape.equals("glow")) {
                         int col = Color.parseColor(p[6]);
                         int r = (col >> 16) & 255, g2 = (col >> 8) & 255, b2 = col & 255;
                         RadialGradient rg = new RadialGradient(x + w/2, y + h/2, Math.max(w, h)/2,
@@ -279,12 +284,19 @@ public class MainActivity extends Activity {
                     String tex = p.length > 8 ? p[8] : "";
 
                     c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang);
+
+                    if (!tex.isEmpty()) {
+                        // TEX-ONLY: текстура заменяет фон и текст кнопки
+                        Bitmap bm = loadBitmap(tex);
+                        if (bm != null) {
+                            c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint);
+                            c.restore();
+                            return;
+                        }
+                    }
+
                     paint.setColor(fill);
                     c.drawRoundRect(new RectF(-w/2, -h/2, w/2, h/2), 12f, 12f, paint);
-                    if (!tex.isEmpty()) {
-                        Bitmap bm = loadBitmap(tex);
-                        if (bm != null) c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint);
-                    }
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
                     paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
                     paint.setTextSize(Math.min(30f, h * 0.45f));
@@ -329,4 +341,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                }
+                                                   }
