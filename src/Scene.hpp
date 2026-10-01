@@ -19,6 +19,7 @@ public:
     std::vector<UiButton> ui;
     float gravity = 0.0f;
     std::string bg;                                  // BG-FIX: фон сцены, "#RRGGBB" или пусто=тема
+    float camX = 0.0f, camY = 0.0f;                  // PAN-FIX: смещение обзора превью (pinch)
     bool bgSet() const { return !bg.empty(); }
 
     void update(Context& ctx, double dt) {
