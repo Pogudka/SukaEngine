@@ -65,7 +65,7 @@ struct Theme {
 inline std::vector<Theme>& themeList() {
     static std::vector<Theme> t = {
         { "Cream & Red",   parseColor("#FFF3E0"), parseColor("#D62828"), parseColor("#1A1A2E"), parseColor("#D62828") },
-        { "Teal & Navy",   parseColor("#2EC4B6"), parseColor("#1A1A2E"), parseColor("#1A1A2E"), parseColor("#1A1A2E") },
+        { "Teal & Navy",   parseColor("#16213E"), parseColor("#4CC9F0"), parseColor("#EAF2FF"), parseColor("#2D4A7B") },
         { "Night & Paper", parseColor("#111111"), parseColor("#F4EDE4"), parseColor("#F4EDE4"), parseColor("#F4EDE4") }
     };
     return t;
