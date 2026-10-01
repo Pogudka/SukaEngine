@@ -67,6 +67,30 @@ public:
         updateImpl(scene, ctx, dt, scenes, nullptr, vars);
     }
 
+    // CALL-FIX: дёргает Lua-функцию по имени из любой кнопки (action = call:имя).
+    // Выполняется БЕЗ привязанной ноды (h->node = nullptr), поэтому get_x/set_x
+    // внутри вернут 0 — но set_var/add_var/spawn/destroy/pair_destroy/distance/
+    // overlaps/set_text/get_text/change_scene/restart_scene/play_sound/print
+    // работают, т.к. они идут через h->scenes->current() и h->vars, а не через h->node.
+    // Это ровно модель "назвал функцию на английском -> вызываешь", как в Godot.
+    bool callGlobal(const std::string& fn, Context& ctx, SceneManager& scenes,
+                    std::map<std::string, double>& vars) {
+        host_.node = nullptr;
+        host_.ctx = &ctx;
+        host_.scenes = &scenes;
+        host_.sound = nullptr;
+        host_.vars = &vars;
+        for (auto& kv : entries_) {
+            if (kv.second.vm->has(fn)) {
+                kv.second.vm->host = &host_;
+                kv.second.vm->call(fn, {});
+                return true;
+            }
+        }
+        std::cout << "[Scripts] callGlobal: no function '" << fn << "'\n";
+        return false;
+    }
+
 private:
     void updateImpl(Scene& scene, Context& ctx, double dt,
                     SceneManager& scenes, SoundManager* sound,
@@ -108,7 +132,7 @@ private:
     }
 
     void registerNatives(LuaVM& vm) {
-        // ===== существующие (свои нода/vars/ввод/сцена/звук) — без изменений =====
+        // ===== существующие (свои нода/vars/ввод/сцена/звук) =====
         vm.setNative("print", [](LuaVM& v, std::vector<LuaValue>& a) {
             std::string s; for (auto& x : a) s += x.toString();
             std::cout << "[Lua] " << s << "\n"; return LuaValue();
@@ -178,7 +202,7 @@ private:
             return LuaValue();
         });
 
-        // ===== НОВЫЕ: приведение типов (без них текст с числом = "nil") =====
+        // ===== приведение типов (без них текст+число = "nil") =====
         vm.setNative("tostring", [](LuaVM& v, std::vector<LuaValue>& a) {
             return LuaValue::strV(a.empty() ? std::string("nil") : a[0].toString());
         });
@@ -190,7 +214,7 @@ private:
             return LuaValue::numV(0);
         });
 
-        // ===== НОВЫЕ: любая нода по имени =====
+        // ===== любая нода по имени =====
         vm.setNative("node_exists", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.empty()) return LuaValue::boolV(false);
             return LuaValue::boolV(findAny(v, a[0].str) != nullptr);
@@ -262,7 +286,7 @@ private:
             return LuaValue();
         });
 
-        // ===== НОВЫЕ: тексты (только у Label) =====
+        // ===== тексты (только у Label) =====
         vm.setNative("set_text", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.size() < 2) return LuaValue();
             Node* n = findAny(v, a[0].str);
@@ -277,7 +301,7 @@ private:
             return LuaValue::strV(l ? l->text : std::string(""));
         });
 
-        // ===== НОВЫЕ: жизнь объектов =====
+        // ===== жизнь объектов =====
         vm.setNative("destroy", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.empty()) return LuaValue();
             Node* n = findAny(v, a[0].str);
@@ -310,7 +334,7 @@ private:
             return LuaValue();
         });
 
-        // ===== НОВЫЕ: геометрия-триггеры =====
+        // ===== геометрия-триггеры =====
         vm.setNative("distance", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.size() < 2) return LuaValue::numV(0);
             Node2D* x = findAny2D(v, a[0].str); Node2D* y = findAny2D(v, a[1].str);
