@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <utility>
+#include <set>
 
 #include "Core.hpp"
 #include "Project.hpp"
@@ -15,6 +16,7 @@
 #include "Settings.hpp"
 #include "Hub.hpp"
 #include "Editor.hpp"
+#include "Script.hpp"
 
 namespace suka {
 
@@ -37,7 +39,6 @@ public:
         return true;
     }
 
-    // вызывается из JNI, когда пользователь ввёл текст в диалоге
     void setNodeText(const std::string& t) {
         if (!editor_) return;
         Node* sn = editor_->selected();
@@ -150,6 +151,7 @@ private:
         if (!fileExists(fontPath_)) fontPath_ = PROJECT_ROOT + "/assets/fonts/Ubuntu-Regular.ttf";
         sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
         if (!sceneMgr_->restartScene(pi.mainScene, resources_)) return false;
+        scripts_.load(pi.rootPath);                       // <-- привязка скриптов к нодам
         Scene* sc = sceneMgr_->current();
         UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
         input_.setUi(&sc->ui); touch_.resetJoystick(); appMode_ = AppMode::Game; return true;
@@ -161,6 +163,7 @@ private:
         processUi();
         if (appMode_ != AppMode::Game) return "";
         sceneMgr_->update(ctx_, 1.0 / 60.0, input_, resources_);
+        scripts_.update(*sceneMgr_->current(), ctx_, 1.0 / 60.0, *sceneMgr_, ctx_.vars);   // <-- гоняем on_start/on_update (без звука)
         std::string out;
         if (ctx_.coinCollectedThisFrame) out += "SOUND coin\n";
         if (ctx_.jumpPressedThisFrame)   out += "SOUND jump\n";
@@ -203,6 +206,13 @@ private:
         return "";
     }
 
+    void attachScript(const std::string& name) {           // SCR: заготовка + привязка автоименем
+        std::string rel = "scripts/" + name + ".lua";
+        ProjectCreator::createScript(project_.rootPath, rel, name);
+        scripts_.load(project_.rootPath);
+        scripted_.insert(name);
+    }
+
     bool enterEditor(const std::string& dir) {
         ProjectInfo pi;
         if (!ProjectLoader::load(PROJECT_ROOT + "/projects/" + dir + "/project.json", pi)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
@@ -242,10 +252,11 @@ private:
             addLbl("InShp", "Shape  " + s->shape, 900, 222, 16, th.ink);
             addLbl("InCol", "Color  " + colorToHex(s->color), 900, 246, 16, th.ink);
             if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 270, 16, th.ink);
+            if (scripted_.count(sel)) addLbl("InScript", "script: scripts/" + sel + ".lua", 900, 294, 16, GODOT_ORANGE);
         } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
 
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
-        for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 300, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+        for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 320, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
         const char* shapes[4] = { "square","circle","diamond","triangle" }; const char* shTxt[4] = { "SQ","CI","DI","TR" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("sh")+std::to_string(k); b.touch.rect = Rect{300+(float)k*56, 34, 52, 26}; b.text = shTxt[k]; b.action = std::string("ed_shape:")+shapes[k]; b.color = th.button; editorScene_.ui.push_back(b); }
         const char* cols[3] = { "#D62828","#2EC4B6","#F4EDE4" };
@@ -255,6 +266,7 @@ private:
         UiButton back; back.touch.id="eback"; back.touch.rect=Rect{812,34,44,26}; back.text="<"; back.action="ed_back"; back.color=GODOT_ORANGE; editorScene_.ui.push_back(back);
         UiButton plus; plus.touch.id="plus"; plus.touch.rect=Rect{860,34,36,26}; plus.text="+"; plus.action="create_open"; plus.color=GODOT_ORANGE; editorScene_.ui.push_back(plus);
         UiButton txt; txt.touch.id="txt"; txt.touch.rect=Rect{900,34,44,26}; txt.text="TXT"; txt.action="edit_text"; txt.color=th.button; editorScene_.ui.push_back(txt);
+        UiButton scr; scr.touch.id="scr"; scr.touch.rect=Rect{948,34,44,26}; scr.text="SCR"; scr.action="ed_scr"; scr.color=th.button; editorScene_.ui.push_back(scr);
 
         if (showCreate_) {
             const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
@@ -271,9 +283,8 @@ private:
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
             if (b.action == "create_open") { showCreate_ = !showCreate_; changed = true; }
-            else if (b.action == "edit_text") {
-                if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; }
-            }
+            else if (b.action == "edit_text") { if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } }
+            else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
             else if (b.action.rfind("create:", 0) == 0) {
                 std::string rest = b.action.substr(7); size_t c = rest.find(':');
                 std::string type = rest.substr(0, c); std::string shape = (c == std::string::npos) ? "" : rest.substr(c + 1);
@@ -298,7 +309,6 @@ private:
         for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D\n"; }
         emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, out);
     }
-
     void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH, std::string& out) {
         if (!n) return;
         std::string tn = std::string(n->typeName());
@@ -326,6 +336,7 @@ private:
 
     AppMode appMode_ = AppMode::Hub;
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
+    ScriptSystem scripts_; std::set<std::string> scripted_;
     bool showCreate_ = false, dragging_ = false, pendingText_ = false; Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
