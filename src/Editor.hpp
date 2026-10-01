@@ -24,13 +24,9 @@ public:
 
         std::vector<std::string> parts;
         if (scene.root) {
-            for (const auto& ch : scene.root->getChildren()) {
-                parts.push_back(nodeJson(*ch, 4));
-            }
+            for (const auto& ch : scene.root->getChildren()) parts.push_back(nodeJson(*ch, 4));
         }
-        for (size_t i = 0; i < parts.size(); ++i) {
-            f << parts[i] << (i + 1 < parts.size() ? ",\n" : "\n");
-        }
+        for (size_t i = 0; i < parts.size(); ++i) f << parts[i] << (i + 1 < parts.size() ? ",\n" : "\n");
 
         f << "  ],\n";
         f << "  \"ui\": [\n";
@@ -45,12 +41,13 @@ public:
             s += "\"h\": " + std::to_string((int)b.touch.rect.h) + ", ";
             s += "\"text\": \"" + b.text + "\", ";
             s += "\"action\": \"" + b.action + "\", ";
-            s += "\"color\": \"" + colorToHex(b.color) + "\" }";
+            s += "\"color\": \"" + colorToHex(b.color) + "\", ";
+            s += "\"angle\": " + std::to_string(b.angle);
+            if (!b.texture.empty()) s += ", \"texture\": \"" + b.texture + "\"";
+            s += " }";
             uiparts.push_back(s);
         }
-        for (size_t i = 0; i < uiparts.size(); ++i) {
-            f << uiparts[i] << (i + 1 < uiparts.size() ? ",\n" : "\n");
-        }
+        for (size_t i = 0; i < uiparts.size(); ++i) f << uiparts[i] << (i + 1 < uiparts.size() ? ",\n" : "\n");
 
         f << "  ]\n";
         f << "}\n";
@@ -108,6 +105,11 @@ private:
         else if (t == "Camera2D") {
             s += ", \"follow\": \"" + static_cast<Camera2D*>(n2)->followName + "\"";
         }
+        else if (t == "Light2D") {
+            Light2D* li = static_cast<Light2D*>(n2);
+            s += ", \"radius\": " + std::to_string((int)li->radius);
+            s += ", \"intensity\": " + std::to_string(li->intensity);
+        }
 
         s += " }";
         return s;
@@ -120,7 +122,6 @@ public:
         scene_ = scene;
         selected_ = nullptr;
         selectedUi_.clear();
-        std::cout << "[Editor] attached to scene: " << sceneName() << "\n";
     }
 
     Scene* scene() const { return scene_; }
@@ -131,11 +132,8 @@ public:
         if (!scene_ || !scene_->root) return;
         selectedUi_.clear();
         selected_ = scene_->root->findNode(name);
-        std::cout << "[Editor] select: " << name
-                  << (selected_ ? "" : "  (NOT FOUND)") << "\n";
     }
 
-    // ---- UI-кнопки (отдельный слой, не дерево нод) ----
     std::string selectedUi() const { return selectedUi_; }
     void selectUi(const std::string& id) { selected_ = nullptr; selectedUi_ = id; }
     UiButton* findUi(const std::string& id) {
@@ -151,7 +149,6 @@ public:
         b.touch.id = id; b.text = text; b.action = action; b.color = color;
         b.touch.rect = Rect{x, y, w, h};
         scene_->ui.push_back(b);
-        std::cout << "[Editor] add ui: " << id << "\n";
     }
     void deleteUi(const std::string& id) {
         if (!scene_) return;
@@ -159,15 +156,24 @@ public:
             if (it->touch.id == id) {
                 if (selectedUi_ == id) selectedUi_.clear();
                 scene_->ui.erase(it);
-                std::cout << "[Editor] delete ui: " << id << "\n";
                 return;
             }
         }
     }
 
+    // CLONE-FIX: копия выбранного узла с поддеревом под новым именем
+    Node2D* cloneSelected(const std::string& newName) {
+        if (!scene_ || !scene_->root || !selected_) return nullptr;
+        std::unique_ptr<Node> cp = selected_->cloneNode();
+        cp->name = newName;
+        Node* raw = cp.get();
+        scene_->root->addChild(std::move(cp));
+        return dynamic_cast<Node2D*>(raw);
+    }
+
     void moveSelected(float dx, float dy) {
         Node2D* n2 = selected_ ? dynamic_cast<Node2D*>(selected_) : nullptr;
-        if (!n2) { std::cout << "[Editor] move failed: nothing selected\n"; return; }
+        if (!n2) return;
         n2->position.x += dx;
         n2->position.y += dy;
     }
@@ -188,6 +194,7 @@ public:
         else if (type == "Coin") n = std::make_unique<Coin>();
         else if (type == "Solid2D") n = std::make_unique<Solid2D>();
         else if (type == "Camera2D") n = std::make_unique<Camera2D>();
+        else if (type == "Light2D") n = std::make_unique<Light2D>();
         else n = std::make_unique<Node2D>();
         n->name = name;
         n->position = Vec2{x, y};
