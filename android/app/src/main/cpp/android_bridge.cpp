@@ -39,6 +39,22 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_sukaengine_app_MainActivity_nativeSetText(JNIEnv* env, jobject, jstring text) {
     if (!g_app || !text) return;
     const char* t = env->GetStringUTFChars(text, nullptr);
-    g_app->setNodeText(std::string(t));
+    g_app->submitText(std::string(t));
+    env->ReleaseStringUTFChars(text, t);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeSetName(JNIEnv* env, jobject, jstring text) {
+    if (!g_app || !text) return;
+    const char* t = env->GetStringUTFChars(text, nullptr);
+    g_app->submitName(std::string(t));
+    env->ReleaseStringUTFChars(text, t);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeSetAction(JNIEnv* env, jobject, jstring text) {
+    if (!g_app || !text) return;
+    const char* t = env->GetStringUTFChars(text, nullptr);
+    g_app->submitAction(std::string(t));
     env->ReleaseStringUTFChars(text, t);
 }
