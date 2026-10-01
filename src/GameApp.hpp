@@ -6,6 +6,7 @@
 #include <utility>
 #include <set>
 #include <algorithm>
+#include <cmath>
 
 #include "Core.hpp"
 #include "Project.hpp"
@@ -61,7 +62,7 @@ public:
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
             if (t.action == RawTouch::Action::Down && inVP) {
                 float wx = 640 + (x - CX) / S, wy = 360 + (y - CY) / S;
-                std::string hit = hitTest(cur->root.get(), wx, wy);
+                std::string hit = hitTest(cur->root.get(), wx, wy);   // FIX-2: магнит
                 if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); }
             } else if (t.action == RawTouch::Action::Move && dragging_ && dragNode_) {
                 dragNode_->position.x = 640 + (x - CX) / S;
@@ -195,16 +196,32 @@ private:
         out.push_back({ depth, n.name, std::string(n.typeName()) });
         for (const auto& ch : n.getChildren()) collectHier(*ch, depth + 1, out);
     }
+
+    // FIX-2: hitTest с магнитом. Проход 1 — точка в расширенном bbox (min 28).
+    // Проход 2 — ближайший центр в радиусе 45. Служебные __bg__/__*__ не хватаются.
     std::string hitTest(const Node* n, float wx, float wy) {
         if (!n) return "";
+        std::string bestBox, bestNear; float bestDist = 1e9f;
+        collectHit(n, wx, wy, bestBox, bestNear, bestDist);
+        if (!bestBox.empty()) return bestBox;
+        return bestNear;
+    }
+    void collectHit(const Node* n, float wx, float wy, std::string& bestBox, std::string& bestNear, float& bestDist) const {
+        if (!n) return;
         std::string tn = std::string(n->typeName());
-        if (tn != "Node" && tn != "Camera2D") {
+        if (tn != "Node" && tn != "Camera2D" && n->name.rfind("__", 0) != 0) {
             const Node2D* d = static_cast<const Node2D*>(n);
-            float hw = d->w > 0 ? d->w / 2 : 24, hh = d->h > 0 ? d->h / 2 : 24;
-            if (wx >= d->position.x - hw && wx <= d->position.x + hw && wy >= d->position.y - hh && wy <= d->position.y + hh) return d->name;
+            float hw = d->w > 0 ? d->w / 2 : 24; if (hw < 28) hw = 28;
+            float hh = d->h > 0 ? d->h / 2 : 24; if (hh < 28) hh = 28;
+            if (wx >= d->position.x - hw && wx <= d->position.x + hw &&
+                wy >= d->position.y - hh && wy <= d->position.y + hh) {
+                if (bestBox.empty()) bestBox = d->name;   // первая попавшая в box
+            }
+            float dx = wx - d->position.x, dy = wy - d->position.y;
+            float dist = std::sqrt(dx*dx + dy*dy);
+            if (dist < 45.0f && dist < bestDist) { bestDist = dist; bestNear = d->name; }
         }
-        for (const auto& ch : n->getChildren()) { std::string h = hitTest(ch.get(), wx, wy); if (!h.empty()) return h; }
-        return "";
+        for (const auto& ch : n->getChildren()) collectHit(ch.get(), wx, wy, bestBox, bestNear, bestDist);
     }
 
     void attachScript(const std::string& name) {
@@ -223,7 +240,7 @@ private:
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; pendingText_ = false; fsPath_ = "";   // сброс браузера
+        showCreate_ = false; pendingText_ = false; fsPath_ = "";
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -241,7 +258,7 @@ private:
         if (editor_ && editor_->scene() && editor_->scene()->root) collectHier(*editor_->scene()->root, 0, hier);
         Node* selNode = editor_ ? editor_->selected() : nullptr; std::string sel = selNode ? selNode->name : std::string{};
         for (size_t i = 0; i < hier.size(); ++i) {
-            if (i >= 10) { addLbl("HierMore", "  ...", 8, 64 + (float)i * 30, 16, th.ink); break; }   // обрезка древа
+            if (i >= 10) { addLbl("HierMore", "  ...", 8, 64 + (float)i * 30, 16, th.ink); break; }
             std::string pad(hier[i].depth * 2, ' '); UiButton b; b.touch.id = "h" + std::to_string(i);
             b.touch.rect = Rect{8, 64 + (float)i * 30, 284, 28}; b.text = pad + hier[i].name + "   " + hier[i].type; b.action = "ed_select:" + hier[i].name;
             b.color = (sel == hier[i].name) ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b);
@@ -260,8 +277,9 @@ private:
             if (scripted_.count(sel)) addLbl("InScript", "script: scripts/" + sel + ".lua", 900, 294, 16, GODOT_ORANGE);
         } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
 
+        // FIX-3: стрелки движения вниз справа (удобно большому пальцу в ландшафте)
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
-        for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 320, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+        for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 640, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
 
         float tx = 300;
         const char* shapes[4] = { "square","circle","diamond","triangle" }; const char* shTxt[4] = { "SQ","CI","DI","TR" };
@@ -282,7 +300,6 @@ private:
             for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*98, 560, 92, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
         }
 
-        // ---- живой FileSystem (левая нижняя колонка) ----
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
         std::string shown = fsPath_.empty() ? std::string("res/") : ("res/" + fsPath_);
         addLbl("FsPath", shown, 10, 406, 15, GODOT_ORANGE);
@@ -313,9 +330,12 @@ private:
         Node* sn = editor_->selected(); std::string sel = sn ? sn->name : std::string{}; bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
+            // FIX-1: .. — срезать хвостовой слэш, потом искать родительский
             if (b.action == "fs_up") {
-                size_t sl = fsPath_.find_last_of('/');
-                fsPath_ = (sl == std::string::npos) ? "" : fsPath_.substr(0, sl + 1);
+                std::string tmp = fsPath_;
+                while (!tmp.empty() && tmp.back() == '/') tmp.pop_back();
+                size_t sl = tmp.find_last_of('/');
+                fsPath_ = (sl == std::string::npos) ? std::string("") : tmp.substr(0, sl + 1);
                 changed = true;
             }
             else if (b.action.rfind("fs_enter:", 0) == 0) { fsPath_ += b.action.substr(9) + "/"; changed = true; }
