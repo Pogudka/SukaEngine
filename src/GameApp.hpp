@@ -473,9 +473,9 @@ private:
             float w = sw*S, h = sh*S, rx = cx - w/2, ry = cy - h/2;
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
-                if (tn == "Label") out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|14|" + colorToHex(d->color) + "|" + ang + "\n";
-                else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555|" + ang + "\n";
-                else if (d->hasAppearance()) out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(d->color) + "|" + ang + "\n";
+                if (tn == "Label") out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|14|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
+                else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555|" + std::to_string(ang) + "\n";
+                else if (d->hasAppearance()) out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
             }
         }
         for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, out);
