@@ -151,7 +151,7 @@ private:
         if (!fileExists(fontPath_)) fontPath_ = PROJECT_ROOT + "/assets/fonts/Ubuntu-Regular.ttf";
         sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
         if (!sceneMgr_->restartScene(pi.mainScene, resources_)) return false;
-        scripts_.load(pi.rootPath);                       // <-- привязка скриптов к нодам
+        scripts_.load(pi.rootPath);
         Scene* sc = sceneMgr_->current();
         UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
         input_.setUi(&sc->ui); touch_.resetJoystick(); appMode_ = AppMode::Game; return true;
@@ -163,7 +163,7 @@ private:
         processUi();
         if (appMode_ != AppMode::Game) return "";
         sceneMgr_->update(ctx_, 1.0 / 60.0, input_, resources_);
-        scripts_.update(*sceneMgr_->current(), ctx_, 1.0 / 60.0, *sceneMgr_, ctx_.vars);   // <-- гоняем on_start/on_update (без звука)
+        scripts_.update(*sceneMgr_->current(), ctx_, 1.0 / 60.0, *sceneMgr_, ctx_.vars);
         std::string out;
         if (ctx_.coinCollectedThisFrame) out += "SOUND coin\n";
         if (ctx_.jumpPressedThisFrame)   out += "SOUND jump\n";
@@ -206,7 +206,7 @@ private:
         return "";
     }
 
-    void attachScript(const std::string& name) {           // SCR: заготовка + привязка автоименем
+    void attachScript(const std::string& name) {
         std::string rel = "scripts/" + name + ".lua";
         ProjectCreator::createScript(project_.rootPath, rel, name);
         scripts_.load(project_.rootPath);
@@ -219,7 +219,9 @@ private:
         project_ = pi; fontPath_ = pi.rootPath + "/" + pi.defaultFont;
         if (!fileExists(fontPath_)) fontPath_ = PROJECT_ROOT + "/assets/fonts/Ubuntu-Regular.ttf";
         sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
-        if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
+        // FIX-2: редактор грузит ИГРОВУЮ сцену (main.json), а не mainScene (у DemoGame это menu.json)
+        if (!sceneMgr_->restartScene("scenes/main.json", resources_))
+            if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
         showCreate_ = false; pendingText_ = false;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
@@ -231,7 +233,8 @@ private:
         auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
             auto l = std::make_unique<Label>(); l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y}; editorScene_.root->addChild(std::move(l));
         };
-        auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = 0xFF0E0E16u; fsBg->w = 280; fsBg->h = 130; fsBg->position = Vec2{150, 623}; editorScene_.root->addChild(std::move(fsBg));
+        // FIX-1: фон файлового менеджера в RGBA (было 0xFF0E0E16 = красный из-за ARGB)
+        auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = 0x0E0E16FFu; fsBg->w = 280; fsBg->h = 130; fsBg->position = Vec2{150, 623}; editorScene_.root->addChild(std::move(fsBg));
         addLbl("TabScene", "Scene", 20, 8, 20, GODOT_ORANGE); addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink); addLbl("TabScr", "Script", 210, 8, 20, th.ink); addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
         addLbl("DHdr", "Scene", 10, 40, 18, th.ink); addLbl("IHdr", "Inspector", 900, 40, 18, th.ink);
         std::vector<HierRow> hier;
@@ -257,22 +260,26 @@ private:
 
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 320, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
-        const char* shapes[4] = { "square","circle","diamond","triangle" }; const char* shTxt[4] = { "SQ","CI","DI","TR" };
-        for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("sh")+std::to_string(k); b.touch.rect = Rect{300+(float)k*56, 34, 52, 26}; b.text = shTxt[k]; b.action = std::string("ed_shape:")+shapes[k]; b.color = th.button; editorScene_.ui.push_back(b); }
-        const char* cols[3] = { "#D62828","#2EC4B6","#F4EDE4" };
-        for (int k = 0; k < 3; ++k) { UiButton b; b.touch.id = std::string("col")+std::to_string(k); b.touch.rect = Rect{524+(float)k*56, 34, 52, 26}; b.text = ""; b.action = std::string("ed_color:")+cols[k]; b.color = parseColor(cols[k]); editorScene_.ui.push_back(b); }
-        UiButton del; del.touch.id="del"; del.touch.rect=Rect{692,34,52,26}; del.text="DEL"; del.action="ed_del"; del.color=parseColor("#D62828"); editorScene_.ui.push_back(del);
-        UiButton save; save.touch.id="save"; save.touch.rect=Rect{748,34,60,26}; save.text="SAVE"; save.action="ed_save"; save.color=parseColor("#2E7D32"); editorScene_.ui.push_back(save);
-        UiButton back; back.touch.id="eback"; back.touch.rect=Rect{812,34,44,26}; back.text="<"; back.action="ed_back"; back.color=GODOT_ORANGE; editorScene_.ui.push_back(back);
-        UiButton plus; plus.touch.id="plus"; plus.touch.rect=Rect{860,34,36,26}; plus.text="+"; plus.action="create_open"; plus.color=GODOT_ORANGE; editorScene_.ui.push_back(plus);
-        UiButton txt; txt.touch.id="txt"; txt.touch.rect=Rect{900,34,44,26}; txt.text="TXT"; txt.action="edit_text"; txt.color=th.button; editorScene_.ui.push_back(txt);
-        UiButton scr; scr.touch.id="scr"; scr.touch.rect=Rect{948,34,44,26}; scr.text="SCR"; scr.action="ed_scr"; scr.color=th.button; editorScene_.ui.push_back(scr);
 
+        // FIX-3: тулбар единым курсором tx, шаг 46, ширина 44 -> конец 898 < 900, Inspector чист, наложений нет
+        float tx = 300;
+        const char* shapes[4] = { "square","circle","diamond","triangle" }; const char* shTxt[4] = { "SQ","CI","DI","TR" };
+        for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("sh")+std::to_string(k); b.touch.rect = Rect{tx,34,44,26}; tx+=46; b.text = shTxt[k]; b.action = std::string("ed_shape:")+shapes[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+        const char* cols[3] = { "#D62828","#2EC4B6","#F4EDE4" };
+        for (int k = 0; k < 3; ++k) { UiButton b; b.touch.id = std::string("col")+std::to_string(k); b.touch.rect = Rect{tx,34,44,26}; tx+=46; b.text = ""; b.action = std::string("ed_color:")+cols[k]; b.color = parseColor(cols[k]); editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="del"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="DEL"; b.action="ed_del"; b.color=parseColor("#D62828"); editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="save"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SAVE"; b.action="ed_save"; b.color=parseColor("#2E7D32"); editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="eback"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="<"; b.action="ed_back"; b.color=GODOT_ORANGE; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="plus"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="+"; b.action="create_open"; b.color=GODOT_ORANGE; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="txt"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="TXT"; b.action="edit_text"; b.color=th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="scr"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SCR"; b.action="ed_scr"; b.color=th.button; editorScene_.ui.push_back(b); }
+
+        // FIX-4: панель создания в СВОБОДНУЮ нижнюю полосу (y560..600, x300..892), а не под вьюпорт
         if (showCreate_) {
             const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
             const char* cs[6] = { "square","circle","diamond","triangle","","" };
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
-            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{470, 150+(float)k*50, 240, 44}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*98, 560, 92, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
         }
         addLbl("FsHdr", "FileSystem", 10, 566, 18, th.ink); addLbl("Fs1", "res/", 10, 592, 16, th.ink); addLbl("Fs2", "  scenes/", 10, 614, 16, th.ink); addLbl("Fs3", "  assets/", 10, 636, 16, th.ink); addLbl("Fs4", "  scripts/", 10, 658, 16, th.ink);
     }
@@ -296,7 +303,7 @@ private:
             else if (b.action.rfind("ed_color:", 0) == 0) { if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; } }
             else if (b.action.rfind("ed_move:", 0) == 0) { std::string d = b.action.substr(8); float dx = (d=="l")?-16:(d=="r")?16:0; float dy = (d=="u")?-16:(d=="d")?16:0; editor_->moveSelected(dx, dy); changed = true; }
             else if (b.action == "ed_del") { if (!sel.empty()) { editor_->deleteNode(sel); changed = true; } }
-            else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/" + project_.mainScene); }
+            else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/scenes/main.json"); }
             else if (b.action == "ed_back") { appMode_ = AppMode::Hub; rebuildHub(); return; }
         }
         if (changed) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
