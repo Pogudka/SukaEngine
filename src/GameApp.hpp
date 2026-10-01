@@ -298,7 +298,9 @@ private:
         std::vector<std::pair<std::string,std::string>> hier;
         if (editor_ && editor_->scene() && editor_->scene()->root)
             collectHier(*editor_->scene()->root, hier);
-        std::string sel = editor_ ? editor_->selected() : std::string();
+
+        Node* selNode = editor_ ? editor_->selected() : nullptr;          // FIX: selected() -> Node*
+        std::string sel = selNode ? selNode->name : std::string{};
 
         for (size_t i = 0; i < hier.size(); ++i) {
             UiButton b;
@@ -322,16 +324,16 @@ private:
         const char* shapes[4] = { "square", "circle", "diamond", "triangle" };
         const char* shTxt[4]  = { "SQ", "CI", "DI", "TR" };
         for (int k = 0; k < 4; ++k) {
-            UiButton b; b.touch.id = std::string("sh") + k;
-            b.touch.rect = Rect{720 + k * 130, 300, 120, 64};
+            UiButton b; b.touch.id = std::string("sh") + std::to_string(k);   // FIX: to_string
+            b.touch.rect = Rect{720 + (float)k * 130, 300, 120, 64};          // FIX: (float)k
             b.text = shTxt[k]; b.action = std::string("ed_shape:") + shapes[k]; b.color = th.button;
             editorScene_.ui.push_back(b);
         }
 
         const char* cols[3] = { "#D62828", "#2EC4B6", "#F4EDE4" };
         for (int k = 0; k < 3; ++k) {
-            UiButton b; b.touch.id = std::string("col") + k;
-            b.touch.rect = Rect{720 + k * 130, 380, 120, 64};
+            UiButton b; b.touch.id = std::string("col") + std::to_string(k);  // FIX
+            b.touch.rect = Rect{720 + (float)k * 130, 380, 120, 64};          // FIX
             b.text = ""; b.action = std::string("ed_color:") + cols[k]; b.color = parseColor(cols[k]);
             editorScene_.ui.push_back(b);
         }
@@ -339,8 +341,8 @@ private:
         const char* mv[4] = { "l", "u", "d", "r" };
         const char* mvTxt[4] = { "<", "^", "v", ">" };
         for (int k = 0; k < 4; ++k) {
-            UiButton b; b.touch.id = std::string("mv") + k;
-            b.touch.rect = Rect{720 + k * 130, 460, 120, 64};
+            UiButton b; b.touch.id = std::string("mv") + std::to_string(k);   // FIX
+            b.touch.rect = Rect{720 + (float)k * 130, 460, 120, 64};          // FIX
             b.text = mvTxt[k]; b.action = std::string("ed_move:") + mv[k]; b.color = th.button;
             editorScene_.ui.push_back(b);
         }
@@ -360,7 +362,8 @@ private:
 
     void processEditorActions() {
         if (!editor_) return;
-        std::string sel = editor_->selected();
+        Node* sn = editor_->selected();                                       // FIX: Node*
+        std::string sel = sn ? sn->name : std::string{};
         bool changed = false;
 
         for (auto& b : editorScene_.ui) {
@@ -373,7 +376,7 @@ private:
                 if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; }
             }
             else if (b.action.rfind("ed_color:", 0) == 0) {
-                if (!sel.empty()) { editor_->setColor(sel, parseColor(b.action.substr(9))); changed = true; }
+                if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; }  // FIX: строка, не parseColor
             }
             else if (b.action.rfind("ed_move:", 0) == 0) {
                 std::string d = b.action.substr(8);
