@@ -129,6 +129,8 @@ struct UiButton {
     std::string text;
     std::string action;
     unsigned int color = 0xFF3A3A4A;
+    float angle = 0.0f;              // BTN-ROT: поворот кнопки в градусах
+    std::string texture;             // BTN-TEX: относительный путь к картинке
 };
 
 class InputManager {
