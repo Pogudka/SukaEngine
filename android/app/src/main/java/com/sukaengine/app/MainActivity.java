@@ -93,7 +93,8 @@ public class MainActivity extends Activity {
         } catch (Exception e) { }
     }
 
-    private void openTextDialog(final String current) {
+    // mode: 0=text, 1=name, 2=action
+    private void openDialog(final String title, final String current, final int mode) {
         g_dialog = true;
         runOnUiThread(() -> {
             final EditText et = new EditText(MainActivity.this);
@@ -101,9 +102,15 @@ public class MainActivity extends Activity {
             et.setText(current); et.selectAll();
             et.setTextColor(Color.WHITE);
             new AlertDialog.Builder(MainActivity.this)
-                .setTitle("Text")
+                .setTitle(title)
                 .setView(et)
-                .setPositiveButton("OK", (d, w) -> { nativeSetText(et.getText().toString()); g_dialog = false; })
+                .setPositiveButton("OK", (d, w) -> {
+                    String v = et.getText().toString();
+                    if (mode == 0) nativeSetText(v);
+                    else if (mode == 1) nativeSetName(v);
+                    else nativeSetAction(v);
+                    g_dialog = false;
+                })
                 .setNegativeButton("Cancel", (d, w) -> g_dialog = false)
                 .setOnCancelListener(d -> g_dialog = false)
                 .show();
@@ -115,6 +122,8 @@ public class MainActivity extends Activity {
     native void nativeTouch(int action, float x, float y);
     native void nativeMultiTouch(int phase, float x0, float y0, float x1, float y1);
     native void nativeSetText(String text);
+    native void nativeSetName(String text);
+    native void nativeSetAction(String text);
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
@@ -140,12 +149,17 @@ public class MainActivity extends Activity {
                 g_stepHead = frame.replace("\n", "|");
                 if (g_stepHead.length() > 70) g_stepHead = g_stepHead.substring(0, 70);
 
-                int ri = frame.indexOf("REQ_TEXT");
-                if (ri >= 0 && !g_dialog) {
-                    String rest = frame.substring(ri);
+                int rt = frame.indexOf("REQ_TEXT|");
+                int rn = frame.indexOf("REQ_NAME|");
+                int ra = frame.indexOf("REQ_ACTION|");
+                if (!g_dialog && (rt >= 0 || rn >= 0 || ra >= 0)) {
+                    int idx = rt >= 0 ? rt : (rn >= 0 ? rn : ra);
+                    int mode = (rt >= 0 && idx == rt) ? 0 : ((rn >= 0 && idx == rn) ? 1 : 2);
+                    String rest = frame.substring(idx);
                     int nl = rest.indexOf('\n'); if (nl >= 0) rest = rest.substring(0, nl);
                     int bar = rest.indexOf('|'); String cur = bar >= 0 ? rest.substring(bar + 1) : "";
-                    openTextDialog(cur); continue;
+                    String title = mode == 0 ? "Text" : (mode == 1 ? "Name" : "Action");
+                    openDialog(title, cur, mode); continue;
                 }
 
                 Canvas c = getHolder().lockCanvas();
@@ -276,4 +290,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-            }
+                            }
