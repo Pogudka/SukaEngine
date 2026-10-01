@@ -1,9 +1,0 @@
-{
-  "name": "Game3 Game",
-  "engine": "SukaEngine",
-  "package": "com.sukaengine.Game3",
-  "version": "0.1.0",
-  "main_scene": "scenes/menu.json",
-  "orientation": "portrait",
-  "default_font": "assets/fonts/Ubuntu-Regular.ttf"
-}
