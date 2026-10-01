@@ -193,7 +193,7 @@ public:
                 if (jsonGetNumber(obj, "x", x)) node2d->position.x = x;
                 if (jsonGetNumber(obj, "y", y)) node2d->position.y = y;
 
-                std::string shapeStr, colorStr, texStr;
+                std::string shapeStr, colorStr, texStr, actStr;
                 jsonGetString(obj, "shape", shapeStr);
                 if (!shapeStr.empty()) node2d->shape = shapeStr;
                 jsonGetString(obj, "color", colorStr);
@@ -202,6 +202,9 @@ public:
                     jsonGetString(obj, "texture", texStr);
                     if (!texStr.empty()) node2d->texture = texStr;
                 }
+                jsonGetString(obj, "action", actStr);          // TOUCH-FIX
+                if (!actStr.empty()) node2d->action = actStr;
+
                 float aw = 0, ah = 0;
                 if (jsonGetNumber(obj, "w", aw)) node2d->w = aw;
                 if (jsonGetNumber(obj, "h", ah)) node2d->h = ah;
