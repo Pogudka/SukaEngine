@@ -18,6 +18,8 @@ public:
     std::unique_ptr<Node> root;
     std::vector<UiButton> ui;
     float gravity = 0.0f;
+    std::string bg;                                  // BG-FIX: фон сцены, "#RRGGBB" или пусто=тема
+    bool bgSet() const { return !bg.empty(); }
 
     void update(Context& ctx, double dt) {
         if (root) {
