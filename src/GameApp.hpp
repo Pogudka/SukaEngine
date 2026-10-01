@@ -51,11 +51,37 @@ public:
         return true;
     }
 
+    // TXT-FIX: теперь понимает и UI-кнопку, и Label
     void setNodeText(const std::string& t) {
         if (!editor_) return;
+        std::string uid = editor_->selectedUi();
+        if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->text = t; return; }
         Node* sn = editor_->selected();
         if (sn && std::string(sn->typeName()) == "Label")
             static_cast<Label*>(sn)->text = t;
+    }
+
+    // NAME-FIX: применяет введённое имя при создании объекта/кнопки
+    void applyCreatedName(const std::string& name) {
+        if (!editor_ || name.empty()) { pendingName_ = false; return; }
+        if (pendingKind_ == 0) {
+            editor_->addNode(pendingType_, name, 640, 360);
+            if (!pendingShape_.empty()) editor_->setShape(name, pendingShape_);
+            editor_->select(name);
+        } else if (pendingKind_ == 1) {
+            editor_->addUi(name, name, 580, 335, 120, 50, std::string(""), currentTheme().accent);
+            editor_->selectUi(name);
+        }
+        pendingName_ = false; showCreate_ = false;
+    }
+
+    // ACT-FIX: применяет введённое действие к выбранной кнопке
+    void applyAction(const std::string& act) {
+        if (!editor_) { pendingAction_ = false; return; }
+        std::string uid = editor_->selectedUi();
+        UiButton* b = uid.empty() ? nullptr : editor_->findUi(uid);
+        if (b) b->action = act;
+        pendingAction_ = false;
     }
 
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
@@ -85,15 +111,25 @@ public:
             const float CX = VX0 + VW / 2, CY = VY0 + VH / 2, S = 0.46875f;
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
             Scene* es = editor_ ? editor_->scene() : nullptr;
-            if (t.action == RawTouch::Action::Down && inVP && es && es->root) {
+            if (t.action == RawTouch::Action::Down && inVP && es) {
                 float wx = 640 + es->camX + (x - CX) / S;
                 float wy = 360 + es->camY + (y - CY) / S;
-                std::string hit = hitTest(es->root.get(), wx, wy);
-                if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); }
-            } else if (t.action == RawTouch::Action::Move && dragging_ && dragNode_ && es) {
-                dragNode_->position.x = 640 + es->camX + (x - CX) / S;
-                dragNode_->position.y = 360 + es->camY + (y - CY) / S;
-            } else if (t.action == RawTouch::Action::Up) { dragging_ = false; dragNode_ = nullptr; }
+                // UI-FIX: приоритет кнопкам (они поверх), потом ноды
+                std::string uiHit = hitUi(es, wx, wy);
+                if (!uiHit.empty()) {
+                    editor_->selectUi(uiHit);
+                    dragUi_ = editor_->findUi(uiHit);
+                    dragging_ = (dragUi_ != nullptr);
+                } else if (es->root) {
+                    std::string hit = hitTest(es->root.get(), wx, wy);
+                    if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); }
+                }
+            } else if (t.action == RawTouch::Action::Move && dragging_ && es) {
+                float wx = 640 + es->camX + (x - CX) / S;
+                float wy = 360 + es->camY + (y - CY) / S;
+                if (dragUi_) { dragUi_->touch.rect.x = wx - dragUi_->touch.rect.w / 2; dragUi_->touch.rect.y = wy - dragUi_->touch.rect.h / 2; }
+                else if (dragNode_) { dragNode_->position.x = wx; dragNode_->position.y = wy; }
+            } else if (t.action == RawTouch::Action::Up) { dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; }
         }
         touch_.onTouch(t, *cur, input_);
     }
@@ -111,6 +147,13 @@ private:
         if (appMode_ == AppMode::Hub) return &hubScene_;
         if (appMode_ == AppMode::Editor) return &editorScene_;
         return (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
+    }
+    std::string hitUi(Scene* es, float wx, float wy) {
+        for (auto& b : es->ui) {
+            if (wx >= b.touch.rect.x && wx <= b.touch.rect.x + b.touch.rect.w &&
+                wy >= b.touch.rect.y && wy <= b.touch.rect.y + b.touch.rect.h) return b.touch.id;
+        }
+        return "";
     }
 
     // ---------------- HUB ----------------
@@ -201,12 +244,13 @@ private:
 
     void processUi() {
         Scene* sc = sceneMgr_->current(); if (!sc) return;
-        const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:";
+        const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:";
         for (auto& b : sc->ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
             if (b.action.rfind(pHub, 0) == 0) { appMode_ = AppMode::Hub; rebuildHub(); return; }
             else if (b.action.rfind(pRestart, 0) == 0) sceneMgr_->requestChange(b.action.substr(pRestart.size()), true);
             else if (b.action.rfind(pChange, 0) == 0)  sceneMgr_->requestChange(b.action.substr(pChange.size()), false);
+            else if (b.action.rfind(pCall, 0) == 0) { scripts_.callGlobal(b.action.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars); }   // CALL-FIX
             else if (b.action.rfind(pAdd, 0) == 0 || b.action.rfind(pSet, 0) == 0) {
                 bool isAdd = b.action.rfind(pAdd, 0) == 0;
                 std::string rest = b.action.substr(isAdd ? pAdd.size() : pSet.size());
@@ -234,7 +278,7 @@ private:
         std::string tn = std::string(n->typeName());
         if (tn != "Node" && tn != "Camera2D" && n->name.rfind("__", 0) != 0) {
             const Node2D* d = static_cast<const Node2D*>(n);
-            float hw = (d->w * d->scale.x) > 0 ? (d->w * d->scale.x) / 2 : 24; if (hw < 28) hw = 28;   // SCL-FIX: хват по масштабу
+            float hw = (d->w * d->scale.x) > 0 ? (d->w * d->scale.x) / 2 : 24; if (hw < 28) hw = 28;
             float hh = (d->h * d->scale.y) > 0 ? (d->h * d->scale.y) / 2 : 24; if (hh < 28) hh = 28;
             if (wx >= d->position.x - hw && wx <= d->position.x + hw &&
                 wy >= d->position.y - hh && wy <= d->position.y + hh) {
@@ -263,7 +307,8 @@ private:
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; showBg_ = false; pendingText_ = false; fsPath_ = ""; manip_ = Manip::Move; pinching_ = false;
+        showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false;
+        fsPath_ = ""; manip_ = Manip::Move; pinching_ = false;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -290,29 +335,55 @@ private:
         std::vector<HierRow> hier;
         if (editor_ && editor_->scene() && editor_->scene()->root) collectHier(*editor_->scene()->root, 0, hier);
         Node* selNode = editor_ ? editor_->selected() : nullptr; std::string sel = selNode ? selNode->name : std::string{};
+        std::string selUi = editor_ ? editor_->selectedUi() : std::string{};
+        size_t row = 0;
         for (size_t i = 0; i < hier.size(); ++i) {
-            if (i >= 10) { addLbl("HierMore", "  ...", 8, 64 + (float)i * 30, 16, th.ink); break; }
-            std::string pad(hier[i].depth * 2, ' '); UiButton b; b.touch.id = "h" + std::to_string(i);
-            b.touch.rect = Rect{8, 64 + (float)i * 30, 284, 28}; b.text = pad + hier[i].name + "   " + hier[i].type; b.action = "ed_select:" + hier[i].name;
-            b.color = (sel == hier[i].name) ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b);
+            if (row >= 10) { addLbl("HierMore", "  ...", 8, 64 + (float)row * 30, 16, th.ink); break; }
+            std::string pad(hier[i].depth * 2, ' '); UiButton b; b.touch.id = "h" + std::to_string(row);
+            b.touch.rect = Rect{8, 64 + (float)row * 30, 284, 28}; b.text = pad + hier[i].name + "   " + hier[i].type; b.action = "ed_select:" + hier[i].name;
+            b.color = (sel == hier[i].name) ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b); ++row;
+        }
+        // UI-FIX: кнопки сцены в дереве
+        if (editor_ && editor_->scene()) {
+            for (auto& ub : editor_->scene()->ui) {
+                if (row >= 14) { addLbl("HierMore2", "  ...", 8, 64 + (float)row * 30, 16, th.ink); break; }
+                UiButton b; b.touch.id = "hu" + std::to_string(row);
+                b.touch.rect = Rect{8, 64 + (float)row * 30, 284, 28}; b.text = "  " + ub.touch.id + "   Button"; b.action = "ed_selectui:" + ub.touch.id;
+                b.color = (selUi == ub.touch.id) ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b); ++row;
+            }
         }
 
-        Node2D* s = (editor_ && !sel.empty()) ? editor_->find2d(sel) : nullptr;
-        if (s) {
-            addLbl("InName", s->name, 900, 64, 22, GODOT_ORANGE); addLbl("InType", std::string(s->typeName()), 900, 92, 16, th.ink);
-            addLbl("InTrHdr", "Transform", 900, 124, 18, th.ink);
-            addLbl("InPos", "Position  (" + std::to_string((int)s->position.x) + ", " + std::to_string((int)s->position.y) + ")", 900, 150, 16, th.ink);
-            addLbl("InRot", "Rotation  " + std::to_string((int)(s->rotation * 57.2957795f)), 900, 174, 16, th.ink);
-            addLbl("InScl", "Scale  (" + std::to_string((int)(s->scale.x*100)) + "%, " + std::to_string((int)(s->scale.y*100)) + "%)", 900, 198, 16, th.ink);
-            addLbl("InShp", "Shape  " + s->shape, 900, 222, 16, th.ink);
-            addLbl("InCol", "Color  " + colorToHex(s->color), 900, 246, 16, th.ink);
-            if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 270, 16, th.ink);
-            if (scripted_.count(sel)) addLbl("InScript", "script: scripts/" + sel + ".lua", 900, 294, 16, GODOT_ORANGE);
-        } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
+        if (!selUi.empty()) {                                  // инспектор кнопки
+            UiButton* ub = editor_->findUi(selUi);
+            if (ub) {
+                addLbl("InName", ub->touch.id, 900, 64, 22, GODOT_ORANGE);
+                addLbl("InType", "Button", 900, 92, 16, th.ink);
+                addLbl("InTrHdr", "Rect", 900, 124, 18, th.ink);
+                addLbl("InPos", "Pos  (" + std::to_string((int)ub->touch.rect.x) + ", " + std::to_string((int)ub->touch.rect.y) + ")", 900, 150, 16, th.ink);
+                addLbl("InSiz", "Size (" + std::to_string((int)ub->touch.rect.w) + ", " + std::to_string((int)ub->touch.rect.h) + ")", 900, 174, 16, th.ink);
+                addLbl("InCol", "Color " + colorToHex(ub->color), 900, 198, 16, th.ink);
+                addLbl("InText", "Text: " + ub->text, 900, 222, 16, th.ink);
+                addLbl("InAct", "Action: " + (ub->action.empty() ? std::string("(none)") : ub->action), 900, 246, 16, th.ink);
+            }
+        } else {
+            Node2D* s = (editor_ && !sel.empty()) ? editor_->find2d(sel) : nullptr;
+            if (s) {
+                addLbl("InName", s->name, 900, 64, 22, GODOT_ORANGE); addLbl("InType", std::string(s->typeName()), 900, 92, 16, th.ink);
+                addLbl("InTrHdr", "Transform", 900, 124, 18, th.ink);
+                addLbl("InPos", "Position  (" + std::to_string((int)s->position.x) + ", " + std::to_string((int)s->position.y) + ")", 900, 150, 16, th.ink);
+                addLbl("InRot", "Rotation  " + std::to_string((int)(s->rotation * 57.2957795f)), 900, 174, 16, th.ink);
+                addLbl("InScl", "Scale  (" + std::to_string((int)(s->scale.x*100)) + "%, " + std::to_string((int)(s->scale.y*100)) + "%)", 900, 198, 16, th.ink);
+                addLbl("InShp", "Shape  " + s->shape, 900, 222, 16, th.ink);
+                addLbl("InCol", "Color  " + colorToHex(s->color), 900, 246, 16, th.ink);
+                if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 270, 16, th.ink);
+                if (scripted_.count(sel)) addLbl("InScript", "script: scripts/" + sel + ".lua", 900, 294, 16, GODOT_ORANGE);
+            } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
+        }
 
         std::string sb = (editor_ && editor_->scene() && editor_->scene()->bgSet()) ? editor_->scene()->bg : std::string("(theme)");
         addLbl("InBg", "scene bg: " + sb, 900, 320, 16, th.ink);
-        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 344, 120, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 344, 80, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{984, 344, 80, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; editorScene_.ui.push_back(b); }
 
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 640, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
@@ -336,6 +407,7 @@ private:
             for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*74, 560, 70, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
             { UiButton b; b.touch.id="ctcam"; b.touch.rect=Rect{300+6*74,560,70,40}; b.text="CAM"; b.action="create_cam"; b.color=th.accent; editorScene_.ui.push_back(b); }
             { UiButton b; b.touch.id="ctlit"; b.touch.rect=Rect{300+7*74,560,70,40}; b.text="LIGHT"; b.action="create_light"; b.color=parseColor("#FFD700"); editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctbtn"; b.touch.rect=Rect{300+8*74,560,70,40}; b.text="BTN"; b.action="create_btn"; b.color=parseColor("#2EC4B6"); editorScene_.ui.push_back(b); }
         }
         if (showBg_) {
             const char* bgs[6] = { "#FFF3E0","#111111","#16213E","#2EC4B6","#D62828","#87CEEB" };
@@ -370,7 +442,10 @@ private:
 
     void processEditorActions() {
         if (!editor_) return;
-        Node* sn = editor_->selected(); std::string sel = sn ? sn->name : std::string{}; bool changed = false;
+        Node* sn = editor_->selected(); std::string sel = sn ? sn->name : std::string{};
+        std::string selUi = editor_->selectedUi();
+        UiButton* ub = selUi.empty() ? nullptr : editor_->findUi(selUi);
+        bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
             if (b.action == "fs_up") {
@@ -385,7 +460,7 @@ private:
                 std::string rel = b.action.substr(8);
                 if (sceneMgr_->restartScene(rel, resources_)) {
                     editor_->attach(sceneMgr_->current());
-                    scripted_.clear(); showCreate_ = false; showBg_ = false; dragging_ = false; dragNode_ = nullptr; pinching_ = false;
+                    scripted_.clear(); showCreate_ = false; showBg_ = false; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                     changed = true;
                 }
             }
@@ -396,8 +471,14 @@ private:
             else if (b.action == "bg_open") { showBg_ = !showBg_; showCreate_ = false; changed = true; }
             else if (b.action.rfind("bg_set:", 0) == 0) { if (editor_->scene()) editor_->scene()->bg = b.action.substr(7); showBg_ = false; changed = true; }
             else if (b.action == "bg_clear") { if (editor_->scene()) editor_->scene()->bg.clear(); showBg_ = false; changed = true; }
-            else if (b.action == "edit_text") { if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } }
+            else if (b.action == "edit_text") {
+                if (ub) { pendingText_ = true; pendingTextCur_ = ub->text; }
+                else if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; }
+            }
+            else if (b.action == "edit_action") { if (ub) { pendingAction_ = true; pendingActionCur_ = ub->action; } }
             else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
+            else if (b.action.rfind("ed_selectui:", 0) == 0) { editor_->selectUi(b.action.substr(12)); changed = true; }
+            else if (b.action == "create_btn") { pendingName_ = true; pendingKind_ = 1; showCreate_ = false; changed = true; }
             else if (b.action == "create_cam") {
                 std::string name = "Cam" + std::to_string(createCounter_++);
                 editor_->addNode("Camera2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true;
@@ -408,30 +489,34 @@ private:
             }
             else if (b.action.rfind("create:", 0) == 0) {
                 std::string rest = b.action.substr(7); size_t c = rest.find(':');
-                std::string type = rest.substr(0, c); std::string shape = (c == std::string::npos) ? "" : rest.substr(c + 1);
-                std::string name = "Obj" + std::to_string(createCounter_++);
-                editor_->addNode(type, name, 640, 360); if (!shape.empty()) editor_->setShape(name, shape); editor_->select(name); showCreate_ = false; changed = true;
+                pendingName_ = true; pendingKind_ = 0;
+                pendingType_ = rest.substr(0, c); pendingShape_ = (c == std::string::npos) ? "" : rest.substr(c + 1);
+                showCreate_ = false; changed = true;
             }
             else if (b.action.rfind("ed_select:", 0) == 0) { editor_->select(b.action.substr(10)); changed = true; }
             else if (b.action.rfind("ed_shape:", 0) == 0) { if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; } }
-            else if (b.action.rfind("ed_color:", 0) == 0) { if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; } }
+            else if (b.action.rfind("ed_color:", 0) == 0) {
+                if (ub) { ub->color = parseColor(b.action.substr(9)); changed = true; }
+                else if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; }
+            }
             else if (b.action.rfind("ed_move:", 0) == 0) {
                 std::string d = b.action.substr(8);
-                Node2D* n = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
-                if (manip_ == Manip::Move) {
-                    float dx = (d=="l")?-16:(d=="r")?16:0;
-                    float dy = (d=="u")?-16:(d=="d")?16:0;
-                    editor_->moveSelected(dx, dy);
-                } else if (manip_ == Manip::Rotate && n) {
-                    float dr = (d=="l")?-15.0f:(d=="r")?15.0f:0.0f;
-                    n->rotation += dr * 3.14159265f / 180.0f;
-                } else if (manip_ == Manip::Scale && n) {
-                    float f = (d=="u")?1.1f:(d=="d")?(1.0f/1.1f):1.0f;
-                    n->scale.x *= f; n->scale.y *= f;
+                if (ub) {
+                    if (manip_ == Manip::Move) { float dx=(d=="l")?-16:(d=="r")?16:0; float dy=(d=="u")?-16:(d=="d")?16:0; ub->touch.rect.x+=dx; ub->touch.rect.y+=dy; }
+                    else if (manip_ == Manip::Scale) { float f=(d=="u")?1.1f:(d=="d")?(1.0f/1.1f):1.0f; ub->touch.rect.w*=f; ub->touch.rect.h*=f; }
+                    changed = true;
+                } else {
+                    Node2D* n = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
+                    if (manip_ == Manip::Move) { float dx=(d=="l")?-16:(d=="r")?16:0; float dy=(d=="u")?-16:(d=="d")?16:0; editor_->moveSelected(dx, dy); }
+                    else if (manip_ == Manip::Rotate && n) { float dr=(d=="l")?-15.0f:(d=="r")?15.0f:0.0f; n->rotation += dr * 3.14159265f / 180.0f; }
+                    else if (manip_ == Manip::Scale && n) { float f=(d=="u")?1.1f:(d=="d")?(1.0f/1.1f):1.0f; n->scale.x*=f; n->scale.y*=f; }
+                    changed = true;
                 }
-                changed = true;
             }
-            else if (b.action == "ed_del") { if (!sel.empty()) { editor_->deleteNode(sel); changed = true; } }
+            else if (b.action == "ed_del") {
+                if (ub) { editor_->deleteUi(selUi); changed = true; }
+                else if (!sel.empty()) { editor_->deleteNode(sel); changed = true; }
+            }
             else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/scenes/main.json"); }
             else if (b.action == "ed_back") { appMode_ = AppMode::Hub; rebuildHub(); return; }
         }
@@ -445,7 +530,6 @@ private:
         for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640 - sc.camX)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D|0\n"; }
         for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360 - sc.camY)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D|0\n"; }
         emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, sc.camX, sc.camY, out);
-        // UI-FIX: все кнопки сцены видны в превью (спроецированы как мир)
         for (auto& b : sc.ui) {
             float bcx = CX + (b.touch.rect.x + b.touch.rect.w/2 - sc.camX - 640)*S;
             float bcy = CY + (b.touch.rect.y + b.touch.rect.h/2 - sc.camY - 360)*S;
@@ -467,8 +551,8 @@ private:
         }
         else if (tn != "Node") {
             const Node2D* d = static_cast<const Node2D*>(n);
-            float ang = d->rotation * 57.2957795f;                       // ROT-FIX
-            float sw = d->w * d->scale.x, sh = d->h * d->scale.y;        // SCL-FIX
+            float ang = d->rotation * 57.2957795f;
+            float sw = d->w * d->scale.x, sh = d->h * d->scale.y;
             float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;
             float w = sw*S, h = sh*S, rx = cx - w/2, ry = cy - h/2;
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
@@ -487,6 +571,8 @@ private:
         emitViewport(*editor_->scene(), out);
         processEditorActions();
         if (pendingText_ && appMode_ == AppMode::Editor) { out += "REQ_TEXT|" + pendingTextCur_ + "\n"; pendingText_ = false; }
+        if (pendingName_ && appMode_ == AppMode::Editor) { out += "REQ_NAME|" + std::string(pendingKind_==1?"Button":"Object") + "\n"; }
+        if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
         input_.endFrame(); return out;
     }
 
@@ -495,8 +581,10 @@ private:
     ScriptSystem scripts_; std::set<std::string> scripted_;
     Manip manip_ = Manip::Move;
     bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false, pinching_ = false;
+    bool pendingName_ = false, pendingAction_ = false; int pendingKind_ = 0;
+    std::string pendingType_, pendingShape_, pendingActionCur_;
     float pinchMX_ = 0, pinchMY_ = 0;
-    Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
+    Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
