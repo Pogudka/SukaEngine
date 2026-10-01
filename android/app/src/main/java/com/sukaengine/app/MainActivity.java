@@ -183,8 +183,23 @@ public class MainActivity extends Activity {
         }
         @Override public boolean onTouchEvent(MotionEvent e) {
             int a = e.getActionMasked();
+            int count = e.getPointerCount();
+            int rw = getWidth(), rh = getHeight();
+            if (count >= 2) {
+                float x0 = rw > 0 ? e.getX(0) * LOGIC_W / rw : e.getX(0);
+                float y0 = rh > 0 ? e.getY(0) * LOGIC_H / rh : e.getY(0);
+                float x1 = rw > 0 ? e.getX(1) * LOGIC_W / rw : e.getX(1);
+                float y1 = rh > 0 ? e.getY(1) * LOGIC_H / rh : e.getY(1);
+                int ph = (a == MotionEvent.ACTION_POINTER_DOWN || a == MotionEvent.ACTION_DOWN) ? 1
+                       : (a == MotionEvent.ACTION_POINTER_UP   || a == MotionEvent.ACTION_UP)   ? 3 : 2;
+                nativeMultiTouch(ph, x0, y0, x1, y1);
+                return true;
+            }
             if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_MOVE || a == MotionEvent.ACTION_UP) {
-                int rw = getWidth(), rh = getHeight(); float lx = rw > 0 ? e.getX()*LOGIC_W/rw : e.getX(); float ly = rh > 0 ? e.getY()*LOGIC_H/rh : e.getY(); nativeTouch(a, lx, ly); }
+                float lx = rw > 0 ? e.getX() * LOGIC_W / rw : e.getX();
+                float ly = rh > 0 ? e.getY() * LOGIC_H / rh : e.getY();
+                nativeTouch(a, lx, ly);
+            }
             return true;
         }
     }
