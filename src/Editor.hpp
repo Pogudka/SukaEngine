@@ -18,6 +18,8 @@ public:
 
         f << "{\n";
         f << "  \"name\": \"" << scene.name << "\",\n";
+        f << "  \"gravity\": " << scene.gravity << ",\n";          // FIX: раньше терялась при SAVE
+        if (scene.bgSet()) f << "  \"bg\": \"" << scene.bg << "\",\n";   // BG-FIX: сохраняем фон
         f << "  \"nodes\": [\n";
 
         std::vector<std::string> parts;
