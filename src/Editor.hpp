@@ -23,9 +23,7 @@ public:
         f << "  \"nodes\": [\n";
 
         std::vector<std::string> parts;
-        if (scene.root) {
-            for (const auto& ch : scene.root->getChildren()) parts.push_back(nodeJson(*ch, 4));
-        }
+        if (scene.root) for (const auto& ch : scene.root->getChildren()) parts.push_back(nodeJson(*ch, 4));
         for (size_t i = 0; i < parts.size(); ++i) f << parts[i] << (i + 1 < parts.size() ? ",\n" : "\n");
 
         f << "  ],\n";
@@ -44,6 +42,7 @@ public:
             s += "\"color\": \"" + colorToHex(b.color) + "\", ";
             s += "\"angle\": " + std::to_string(b.angle);
             if (!b.texture.empty()) s += ", \"texture\": \"" + b.texture + "\"";
+            if (!b.group.empty()) s += ", \"group\": \"" + b.group + "\"";   // GROUP-FIX
             s += " }";
             uiparts.push_back(s);
         }
@@ -58,18 +57,15 @@ private:
     static std::string nodeJson(Node& n, int indent) {
         std::string pad(indent, ' ');
         Node2D* n2 = dynamic_cast<Node2D*>(&n);
-
         std::string s = pad + "{ ";
         s += std::string("\"type\": \"") + n.typeName() + "\", ";
         s += "\"name\": \"" + n.name + "\"";
-
         if (n2) {
             s += ", \"x\": " + std::to_string((int)n2->position.x);
             s += ", \"y\": " + std::to_string((int)n2->position.y);
             s += ", \"rotation\": " + std::to_string(n2->rotation * 57.2957795f);
             s += ", \"scale_x\": " + std::to_string(n2->scale.x);
             s += ", \"scale_y\": " + std::to_string(n2->scale.y);
-
             if (n2->hasAppearance()) {
                 s += ", \"shape\": \"" + n2->shape + "\"";
                 s += ", \"color\": \"" + colorToHex(n2->color) + "\"";
@@ -78,39 +74,14 @@ private:
                 s += ", \"h\": " + std::to_string((int)n2->h);
             }
         }
-
         std::string t = n.typeName();
-        if (t == "Label") {
-            Label* l = static_cast<Label*>(n2);
-            s += ", \"text\": \"" + l->text + "\"";
-            s += ", \"font_size\": " + std::to_string(l->fontSize);
-        }
-        else if (t == "Sprite2D") {
-            Sprite2D* sp = static_cast<Sprite2D*>(n2);
-            s += ", \"texture\": \"" + sp->texturePath + "\"";
-            s += ", \"w\": " + std::to_string((int)sp->size.x);
-            s += ", \"h\": " + std::to_string((int)sp->size.y);
-        }
-        else if (t == "Player") {
-            Player* p = static_cast<Player*>(n2);
-            s += ", \"speed\": " + std::to_string((int)p->speed);
-            s += ", \"mode\": \"" + p->mode + "\"";
-        }
-        else if (t == "Enemy") {
-            s += ", \"speed\": " + std::to_string((int)static_cast<Enemy*>(n2)->speed);
-        }
-        else if (t == "Coin") {
-            s += ", \"radius\": " + std::to_string((int)static_cast<Coin*>(n2)->radius);
-        }
-        else if (t == "Camera2D") {
-            s += ", \"follow\": \"" + static_cast<Camera2D*>(n2)->followName + "\"";
-        }
-        else if (t == "Light2D") {
-            Light2D* li = static_cast<Light2D*>(n2);
-            s += ", \"radius\": " + std::to_string((int)li->radius);
-            s += ", \"intensity\": " + std::to_string(li->intensity);
-        }
-
+        if (t == "Label") { Label* l = static_cast<Label*>(n2); s += ", \"text\": \"" + l->text + "\""; s += ", \"font_size\": " + std::to_string(l->fontSize); }
+        else if (t == "Sprite2D") { Sprite2D* sp = static_cast<Sprite2D*>(n2); s += ", \"texture\": \"" + sp->texturePath + "\""; s += ", \"w\": " + std::to_string((int)sp->size.x); s += ", \"h\": " + std::to_string((int)sp->size.y); }
+        else if (t == "Player") { Player* p = static_cast<Player*>(n2); s += ", \"speed\": " + std::to_string((int)p->speed); s += ", \"mode\": \"" + p->mode + "\""; }
+        else if (t == "Enemy") s += ", \"speed\": " + std::to_string((int)static_cast<Enemy*>(n2)->speed);
+        else if (t == "Coin") s += ", \"radius\": " + std::to_string((int)static_cast<Coin*>(n2)->radius);
+        else if (t == "Camera2D") s += ", \"follow\": \"" + static_cast<Camera2D*>(n2)->followName + "\"";
+        else if (t == "Light2D") { Light2D* li = static_cast<Light2D*>(n2); s += ", \"radius\": " + std::to_string((int)li->radius); s += ", \"intensity\": " + std::to_string(li->intensity); }
         s += " }";
         return s;
     }
@@ -118,12 +89,7 @@ private:
 
 class Editor {
 public:
-    void attach(Scene* scene) {
-        scene_ = scene;
-        selected_ = nullptr;
-        selectedUi_.clear();
-    }
-
+    void attach(Scene* scene) { scene_ = scene; selected_ = nullptr; selectedUi_.clear(); }
     Scene* scene() const { return scene_; }
     std::string sceneName() const { return scene_ ? scene_->name : std::string("-"); }
     Node* selected() const { return selected_; }
@@ -141,27 +107,18 @@ public:
         for (auto& b : scene_->ui) if (b.touch.id == id) return &b;
         return nullptr;
     }
-    void addUi(const std::string& id, const std::string& text,
-               float x, float y, float w, float h,
-               const std::string& action, unsigned color) {
+    void addUi(const std::string& id, const std::string& text, float x, float y, float w, float h, const std::string& action, unsigned color) {
         if (!scene_) return;
-        UiButton b;
-        b.touch.id = id; b.text = text; b.action = action; b.color = color;
+        UiButton b; b.touch.id = id; b.text = text; b.action = action; b.color = color;
         b.touch.rect = Rect{x, y, w, h};
         scene_->ui.push_back(b);
     }
     void deleteUi(const std::string& id) {
         if (!scene_) return;
-        for (auto it = scene_->ui.begin(); it != scene_->ui.end(); ++it) {
-            if (it->touch.id == id) {
-                if (selectedUi_ == id) selectedUi_.clear();
-                scene_->ui.erase(it);
-                return;
-            }
-        }
+        for (auto it = scene_->ui.begin(); it != scene_->ui.end(); ++it)
+            if (it->touch.id == id) { if (selectedUi_ == id) selectedUi_.clear(); scene_->ui.erase(it); return; }
     }
 
-    // CLONE-FIX: копия выбранного узла с поддеревом под новым именем
     Node2D* cloneSelected(const std::string& newName) {
         if (!scene_ || !scene_->root || !selected_) return nullptr;
         std::unique_ptr<Node> cp = selected_->cloneNode();
@@ -174,14 +131,11 @@ public:
     void moveSelected(float dx, float dy) {
         Node2D* n2 = selected_ ? dynamic_cast<Node2D*>(selected_) : nullptr;
         if (!n2) return;
-        n2->position.x += dx;
-        n2->position.y += dy;
+        n2->position.x += dx; n2->position.y += dy;
     }
-
     void setTextSelected(const std::string& text) {
         if (!selected_) return;
-        if (std::string(selected_->typeName()) == "Label")
-            static_cast<Label*>(selected_)->text = text;
+        if (std::string(selected_->typeName()) == "Label") static_cast<Label*>(selected_)->text = text;
     }
 
     Node2D* addNode(const std::string& type, const std::string& name, float x, float y) {
@@ -196,8 +150,7 @@ public:
         else if (type == "Camera2D") n = std::make_unique<Camera2D>();
         else if (type == "Light2D") n = std::make_unique<Light2D>();
         else n = std::make_unique<Node2D>();
-        n->name = name;
-        n->position = Vec2{x, y};
+        n->name = name; n->position = Vec2{x, y};
         Node2D* raw = n.get();
         scene_->root->addChild(std::move(n));
         return raw;
@@ -216,15 +169,9 @@ public:
         if (!scene_ || !scene_->root) return nullptr;
         return dynamic_cast<Node2D*>(scene_->root->findNode(name));
     }
-    void setShape(const std::string& name, const std::string& shape) {
-        Node2D* n = find2d(name); if (n) n->shape = shape;
-    }
-    void setColor(const std::string& name, const std::string& color) {
-        Node2D* n = find2d(name); if (n) n->color = parseColor(color);
-    }
-    void setTexture(const std::string& name, const std::string& path) {
-        Node2D* n = find2d(name); if (n) n->texture = path;
-    }
+    void setShape(const std::string& name, const std::string& shape) { Node2D* n = find2d(name); if (n) n->shape = shape; }
+    void setColor(const std::string& name, const std::string& color) { Node2D* n = find2d(name); if (n) n->color = parseColor(color); }
+    void setTexture(const std::string& name, const std::string& path) { Node2D* n = find2d(name); if (n) n->texture = path; }
 
     std::vector<std::string> hierarchyLines() const {
         std::vector<std::string> out;
@@ -239,7 +186,6 @@ public:
         walk(*scene_->root, 0);
         return out;
     }
-
     std::vector<std::string> inspectorLines() const {
         std::vector<std::string> out;
         if (!selected_) { out.push_back("(nothing selected)"); return out; }
@@ -248,15 +194,10 @@ public:
         out.push_back("type: " + std::string(selected_->typeName()));
         if (n2) {
             out.push_back("pos: (" + std::to_string((int)n2->position.x) + ", " + std::to_string((int)n2->position.y) + ")");
-            if (n2->hasAppearance()) {
-                out.push_back("shape: " + n2->shape);
-                out.push_back("color: " + colorToHex(n2->color));
-                out.push_back("size: (" + std::to_string((int)n2->w) + ", " + std::to_string((int)n2->h) + ")");
-            }
+            if (n2->hasAppearance()) { out.push_back("shape: " + n2->shape); out.push_back("color: " + colorToHex(n2->color)); }
         }
         return out;
     }
-
     std::vector<std::string> sceneViewLines() const { return {}; }
 
     bool save(const std::string& path) {
