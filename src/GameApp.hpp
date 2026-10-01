@@ -56,13 +56,14 @@ public:
         t.x = x; t.y = y;
         Scene* cur = uiScene();
         if (!cur) return;
-        if (appMode_ == AppMode::Editor && !showCreate_) {
+        if (appMode_ == AppMode::Editor && !showCreate_ && !showBg_) {
             const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
             const float CX = VX0 + VW / 2, CY = VY0 + VH / 2, S = 0.46875f;
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
-            if (t.action == RawTouch::Action::Down && inVP) {
+            Scene* es = editor_ ? editor_->scene() : nullptr;        // DRAG-FIX: сцена, не панели
+            if (t.action == RawTouch::Action::Down && inVP && es && es->root) {
                 float wx = 640 + (x - CX) / S, wy = 360 + (y - CY) / S;
-                std::string hit = hitTest(cur->root.get(), wx, wy);   // FIX-2: магнит
+                std::string hit = hitTest(es->root.get(), wx, wy);
                 if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); }
             } else if (t.action == RawTouch::Action::Move && dragging_ && dragNode_) {
                 dragNode_->position.x = 640 + (x - CX) / S;
@@ -196,9 +197,6 @@ private:
         out.push_back({ depth, n.name, std::string(n.typeName()) });
         for (const auto& ch : n.getChildren()) collectHier(*ch, depth + 1, out);
     }
-
-    // FIX-2: hitTest с магнитом. Проход 1 — точка в расширенном bbox (min 28).
-    // Проход 2 — ближайший центр в радиусе 45. Служебные __bg__/__*__ не хватаются.
     std::string hitTest(const Node* n, float wx, float wy) {
         if (!n) return "";
         std::string bestBox, bestNear; float bestDist = 1e9f;
@@ -215,7 +213,7 @@ private:
             float hh = d->h > 0 ? d->h / 2 : 24; if (hh < 28) hh = 28;
             if (wx >= d->position.x - hw && wx <= d->position.x + hw &&
                 wy >= d->position.y - hh && wy <= d->position.y + hh) {
-                if (bestBox.empty()) bestBox = d->name;   // первая попавшая в box
+                if (bestBox.empty()) bestBox = d->name;
             }
             float dx = wx - d->position.x, dy = wy - d->position.y;
             float dist = std::sqrt(dx*dx + dy*dy);
@@ -240,7 +238,7 @@ private:
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; pendingText_ = false; fsPath_ = "";
+        showCreate_ = false; showBg_ = false; pendingText_ = false; fsPath_ = "";
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -277,7 +275,11 @@ private:
             if (scripted_.count(sel)) addLbl("InScript", "script: scripts/" + sel + ".lua", 900, 294, 16, GODOT_ORANGE);
         } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
 
-        // FIX-3: стрелки движения вниз справа (удобно большому пальцу в ландшафте)
+        // BG-FIX: строка фона сцены + кнопка BG в инспекторе
+        std::string sb = (editor_ && editor_->scene() && editor_->scene()->bgSet()) ? editor_->scene()->bg : std::string("(theme)");
+        addLbl("InBg", "scene bg: " + sb, 900, 320, 16, th.ink);
+        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 344, 120, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
+
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 640, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
 
@@ -298,6 +300,12 @@ private:
             const char* cs[6] = { "square","circle","diamond","triangle","","" };
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
             for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*98, 560, 92, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+        }
+        // BG-FIX: палитра фона сцены (взаимоисключающая с +)
+        if (showBg_) {
+            const char* bgs[6] = { "#FFF3E0","#111111","#16213E","#2EC4B6","#D62828","#87CEEB" };
+            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("bgsw")+std::to_string(k); b.touch.rect = Rect{300+(float)k*84, 560, 80, 40}; b.text = ""; b.action = std::string("bg_set:")+bgs[k]; b.color = parseColor(bgs[k]); editorScene_.ui.push_back(b); }
+            UiButton cl; cl.touch.id = "bgclr"; cl.touch.rect = Rect{300+6*84, 560, 80, 40}; cl.text = "CLR"; cl.action = "bg_clear"; cl.color = th.button; editorScene_.ui.push_back(cl);
         }
 
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
@@ -330,7 +338,6 @@ private:
         Node* sn = editor_->selected(); std::string sel = sn ? sn->name : std::string{}; bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
-            // FIX-1: .. — срезать хвостовой слэш, потом искать родительский
             if (b.action == "fs_up") {
                 std::string tmp = fsPath_;
                 while (!tmp.empty() && tmp.back() == '/') tmp.pop_back();
@@ -343,11 +350,14 @@ private:
                 std::string rel = b.action.substr(8);
                 if (sceneMgr_->restartScene(rel, resources_)) {
                     editor_->attach(sceneMgr_->current());
-                    scripted_.clear(); showCreate_ = false; dragging_ = false; dragNode_ = nullptr;
+                    scripted_.clear(); showCreate_ = false; showBg_ = false; dragging_ = false; dragNode_ = nullptr;
                     changed = true;
                 }
             }
-            else if (b.action == "create_open") { showCreate_ = !showCreate_; changed = true; }
+            else if (b.action == "create_open") { showCreate_ = !showCreate_; showBg_ = false; changed = true; }
+            else if (b.action == "bg_open") { showBg_ = !showBg_; showCreate_ = false; changed = true; }
+            else if (b.action.rfind("bg_set:", 0) == 0) { if (editor_->scene()) editor_->scene()->bg = b.action.substr(7); showBg_ = false; changed = true; }
+            else if (b.action == "bg_clear") { if (editor_->scene()) editor_->scene()->bg.clear(); showBg_ = false; changed = true; }
             else if (b.action == "edit_text") { if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } }
             else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
             else if (b.action.rfind("create:", 0) == 0) {
@@ -369,6 +379,7 @@ private:
 
     void emitViewport(const Scene& sc, std::string& out) {
         const float VX0 = 300, VY0 = 64, VW = 592, VH = 492; const float CX = VX0 + VW/2, CY = VY0 + VH/2, S = 0.46875f;
+        if (sc.bgSet()) out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|" + sc.bg + "\n";  // BG-FIX: фон сцены в окне
         out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B\n";
         for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D\n"; }
         for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D\n"; }
@@ -402,7 +413,7 @@ private:
     AppMode appMode_ = AppMode::Hub;
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
-    bool showCreate_ = false, dragging_ = false, pendingText_ = false; Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
+    bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false; Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
