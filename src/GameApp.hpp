@@ -52,10 +52,10 @@ public:
         return true;
     }
 
-    // CRASH-FIX: JNI только кладёт результат в слот; применяет рендер-поток.
     void submitText(const std::string& t)   { std::lock_guard<std::mutex> lk(dlgMtx_); textRes_ = t;   hasText_ = true; }
     void submitName(const std::string& t)   { std::lock_guard<std::mutex> lk(dlgMtx_); nameRes_ = t;   hasName_ = true; }
     void submitAction(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); actionRes_ = t; hasAction_ = true; }
+    void submitNumber(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); numRes_ = t;    hasNum_ = true; }
 
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
         if (appMode_ != AppMode::Editor || showCreate_ || showBg_) return;
@@ -80,6 +80,17 @@ public:
         Scene* cur = uiScene();
         if (!cur) return;
 
+        // TOUCH-FIX: в игре тап по объекту с action = нажатие кнопки
+        if (appMode_ == AppMode::Game && t.action == RawTouch::Action::Down && sceneMgr_ && sceneMgr_->current()) {
+            Scene* gs = sceneMgr_->current();
+            float wx, wy; unprojGame(*gs, x, y, wx, wy);
+            std::string hit = hitTest(gs->root.get(), wx, wy);
+            if (!hit.empty()) {
+                Node2D* n = gs->root->findNode(hit) ? dynamic_cast<Node2D*>(gs->root->findNode(hit)) : nullptr;
+                if (n && !n->action.empty()) { pendingNodeAction_ = n->action; return; }
+            }
+        }
+
         if (appMode_ == AppMode::Editor && !showCreate_ && !showBg_) {
             Scene* es = editor_ ? editor_->scene() : nullptr;
             Node2D* g = (editor_ && editor_->selectedUi().empty()) ?
@@ -89,6 +100,15 @@ public:
                 float scx, scy; proj(*es, g->position.x, g->position.y, scx, scy);
 
                 if (t.action == RawTouch::Action::Down) {
+                    // PAR-FIX: режим выбора родителя — тап по объекту цепляет к нему
+                    if (pickParent_ && !pickChild_.empty()) {
+                        float wx, wy; unproj(*es, x, y, wx, wy);
+                        std::string hit = hitTest(es->root.get(), wx, wy);
+                        if (!hit.empty() && hit != pickChild_) { doAttach(pickChild_, hit); }
+                        pickParent_ = false; pickChild_.clear();
+                        buildEditorPanels(); input_.setUi(&editorScene_.ui);
+                        return;
+                    }
                     float dx = x - scx, dy = y - scy;
                     float dist = std::sqrt(dx*dx + dy*dy);
                     if (manip_ == Manip::Rotate) {
@@ -100,12 +120,13 @@ public:
                             return;
                         }
                     } else if (manip_ == Manip::Scale) {
-                        float hx = scx + (g->w * 0.46875f) / 2, hy = scy + (g->h * 0.46875f) / 2;
-                        if (std::sqrt((x-hx)*(x-hx) + (y-hy)*(y-hy)) < 30.0f) {
-                            gizmoScl_ = true;
-                            gizmoStartDist_ = dist > 1 ? dist : 1;
-                            gizmoStartSX_ = g->scale.x; gizmoStartSY_ = g->scale.y;
-                            return;
+                        float hw = (g->w * g->scale.x) * 0.46875f / 2;
+                        float hh = (g->h * g->scale.y) * 0.46875f / 2;
+                        if (std::fabs((x - (scx + hw + 24))) < 26 && std::fabs(dy) < 26) {   // ручка X
+                            gizmoSclX_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSX_ = g->scale.x; return;
+                        }
+                        if (std::fabs((y - (scy + hh + 24))) < 26 && std::fabs(dx) < 26) {   // ручка Y
+                            gizmoSclY_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSY_ = g->scale.y; return;
                         }
                     } else {
                         if (std::fabs(dy) < 16 && dx > 8 && dx < 64) { lockAxis_ = 1; dragging_ = true; dragNode_ = g; editor_->select(g->name); return; }
@@ -118,15 +139,19 @@ public:
                         g->rotation = gizmoStartRot_ + (std::atan2(dy, dx) - gizmoStartAngle_);
                         return;
                     }
-                    if (gizmoScl_) {
-                        float dist = std::sqrt((x-scx)*(x-scx) + (y-scy)*(y-scy));
-                        float f = dist / gizmoStartDist_;
-                        g->scale.x = gizmoStartSX_ * f; g->scale.y = gizmoStartSY_ * f;
+                    if (gizmoSclX_) {
+                        float f = (x - scx) / ((g->w * 0.46875f / 2) + 24);
+                        if (f > 0.05f) g->scale.x = gizmoStartSX_ * f;
+                        return;
+                    }
+                    if (gizmoSclY_) {
+                        float f = (y - scy) / ((g->h * 0.46875f / 2) + 24);
+                        if (f > 0.05f) g->scale.y = gizmoStartSY_ * f;
                         return;
                     }
                 }
                 else if (t.action == RawTouch::Action::Up) {
-                    gizmoRot_ = false; gizmoScl_ = false; lockAxis_ = 0;
+                    gizmoRot_ = false; gizmoSclX_ = false; gizmoSclY_ = false; lockAxis_ = 0;
                 }
             }
 
@@ -171,12 +196,21 @@ private:
         return (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
     }
     void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) {
-        sx = 300 + 296 + (wx - sc.camX - 640) * 0.46875f;
-        sy = 64 + 246 + (wy - sc.camY - 360) * 0.46875f;
+        sx = 596 + (wx - sc.camX - 640) * 0.46875f;
+        sy = 310 + (wy - sc.camY - 360) * 0.46875f;
     }
     void unproj(const Scene& sc, float sx, float sy, float& wx, float& wy) {
         wx = 640 + sc.camX + (sx - 596) / 0.46875f;
         wy = 360 + sc.camY + (sy - 310) / 0.46875f;
+    }
+    void unprojGame(const Scene& sc, float sx, float sy, float& wx, float& wy) {
+        Node* cn = sc.root ? sc.root->findByType("Camera2D") : nullptr;
+        if (cn) {
+            Camera2D* cam = static_cast<Camera2D*>(cn);
+            float z = cam->zoom > 0.01f ? cam->zoom : 1.0f;
+            wx = (sx - 640) / z + cam->position.x;
+            wy = (sy - 360) / z + cam->position.y;
+        } else { wx = sx; wy = sy; }
     }
     std::string hitUi(Scene* es, float wx, float wy) {
         for (auto& b : es->ui) {
@@ -184,6 +218,29 @@ private:
                 wy >= b.touch.rect.y && wy <= b.touch.rect.y + b.touch.rect.h) return b.touch.id;
         }
         return "";
+    }
+
+    // PAR-FIX: прицепить/отцепить узел (группы)
+    void doAttach(const std::string& child, const std::string& parent) {
+        if (!editor_ || !editor_->scene() || !editor_->scene()->root) return;
+        Node* root = editor_->scene()->root.get();
+        if (child == parent) return;
+        Node* cn = root->findNode(child);
+        Node* pn = root->findNode(parent);
+        if (!cn || !pn) return;
+        if (cn->containsName(parent)) return;
+        Node* owner = root->findParentOf(child);
+        if (!owner || owner == pn) return;
+        std::unique_ptr<Node> up = owner->takeChild(child);
+        if (up) pn->addChild(std::move(up));
+    }
+    void doDetach(const std::string& child) {
+        if (!editor_ || !editor_->scene() || !editor_->scene()->root) return;
+        Node* root = editor_->scene()->root.get();
+        Node* owner = root->findParentOf(child);
+        if (!owner || owner == root) return;
+        std::unique_ptr<Node> up = owner->takeChild(child);
+        if (up) root->addChild(std::move(up));
     }
 
     // ---------------- HUB ----------------
@@ -261,6 +318,7 @@ private:
     std::string stepGame() {
         if (!sceneMgr_ || !sceneMgr_->current()) return "";
         ctx_.coinCollectedThisFrame = false; ctx_.jumpPressedThisFrame = false; ctx_.input = input_.state();
+        if (!pendingNodeAction_.empty()) { runAction(pendingNodeAction_); pendingNodeAction_.clear(); }
         processUi();
         if (appMode_ != AppMode::Game) return "";
         sceneMgr_->update(ctx_, 1.0 / 60.0, input_, resources_);
@@ -272,21 +330,27 @@ private:
         input_.endFrame(); return out;
     }
 
-    void processUi() {
+    void runAction(const std::string& act) {
         Scene* sc = sceneMgr_->current(); if (!sc) return;
         const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:";
+        if (act.rfind(pHub, 0) == 0) { appMode_ = AppMode::Hub; rebuildHub(); }
+        else if (act.rfind(pRestart, 0) == 0) sceneMgr_->requestChange(act.substr(pRestart.size()), true);
+        else if (act.rfind(pChange, 0) == 0)  sceneMgr_->requestChange(act.substr(pChange.size()), false);
+        else if (act.rfind(pCall, 0) == 0) scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars);
+        else if (act.rfind(pAdd, 0) == 0 || act.rfind(pSet, 0) == 0) {
+            bool isAdd = act.rfind(pAdd, 0) == 0;
+            std::string rest = act.substr(isAdd ? pAdd.size() : pSet.size());
+            size_t c = rest.find(':');
+            if (c != std::string::npos) { std::string name = rest.substr(0, c); double v = atof(rest.substr(c + 1).c_str()); if (isAdd) ctx_.vars[name] += v; else ctx_.vars[name] = v; }
+        }
+    }
+
+    void processUi() {
+        Scene* sc = sceneMgr_->current(); if (!sc) return;
         for (auto& b : sc->ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
-            if (b.action.rfind(pHub, 0) == 0) { appMode_ = AppMode::Hub; rebuildHub(); return; }
-            else if (b.action.rfind(pRestart, 0) == 0) sceneMgr_->requestChange(b.action.substr(pRestart.size()), true);
-            else if (b.action.rfind(pChange, 0) == 0)  sceneMgr_->requestChange(b.action.substr(pChange.size()), false);
-            else if (b.action.rfind(pCall, 0) == 0) scripts_.callGlobal(b.action.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars);
-            else if (b.action.rfind(pAdd, 0) == 0 || b.action.rfind(pSet, 0) == 0) {
-                bool isAdd = b.action.rfind(pAdd, 0) == 0;
-                std::string rest = b.action.substr(isAdd ? pAdd.size() : pSet.size());
-                size_t c = rest.find(':');
-                if (c != std::string::npos) { std::string name = rest.substr(0, c); double v = atof(rest.substr(c + 1).c_str()); if (isAdd) ctx_.vars[name] += v; else ctx_.vars[name] = v; }
-            }
+            runAction(b.action);
+            if (appMode_ != AppMode::Game) return;
         }
     }
 
@@ -337,8 +401,8 @@ private:
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false;
-        fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0;
+        showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
+        fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; pickParent_ = false;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -362,7 +426,6 @@ private:
             editorScene_.ui.push_back(b);
         }
 
-        // SCROLL-FIX: собираем строки (ноды+кнопки) и показываем окно в 10 строк, не залезая в FILES
         std::vector<HierRow> hier;
         if (editor_ && editor_->scene() && editor_->scene()->root) collectHier(*editor_->scene()->root, 0, hier);
         struct Row { std::string text, action; bool sel; };
@@ -397,38 +460,55 @@ private:
             UiButton* ub = editor_->findUi(selUi);
             if (ub) {
                 addLbl("InName", ub->touch.id, 900, 64, 22, GODOT_ORANGE); addLbl("InType", "Button", 900, 92, 16, th.ink);
-                addLbl("InTrHdr", "Rect", 900, 124, 18, th.ink);
-                addLbl("InPos", "Pos  (" + std::to_string((int)ub->touch.rect.x) + ", " + std::to_string((int)ub->touch.rect.y) + ")", 900, 150, 16, th.ink);
-                addLbl("InSiz", "Size (" + std::to_string((int)ub->touch.rect.w) + ", " + std::to_string((int)ub->touch.rect.h) + ")", 900, 174, 16, th.ink);
-                addLbl("InCol", "Color " + colorToHex(ub->color), 900, 198, 16, th.ink);
-                addLbl("InText", "Text: " + ub->text, 900, 222, 16, th.ink);
-                addLbl("InAct", "Action: " + (ub->action.empty() ? std::string("(none)") : ub->action), 900, 246, 16, th.ink);
-                addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 270, 16, th.ink);
-                addLbl("InTex", "Texture: " + (ub->texture.empty() ? std::string("(none)") : ub->texture), 900, 294, 16, th.ink);
+                addLbl("InPos", "Pos  (" + std::to_string((int)ub->touch.rect.x) + ", " + std::to_string((int)ub->touch.rect.y) + ")", 900, 124, 16, th.ink);
+                addLbl("InSiz", "Size (" + std::to_string((int)ub->touch.rect.w) + ", " + std::to_string((int)ub->touch.rect.h) + ")", 900, 148, 16, th.ink);
+                addLbl("InCol", "Color " + colorToHex(ub->color), 900, 172, 16, th.ink);
+                addLbl("InText", "Text: " + ub->text, 900, 196, 16, th.ink);
+                addLbl("InAct", "Action: " + (ub->action.empty() ? std::string("(none)") : ub->action), 900, 220, 16, th.ink);
+                addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 244, 16, th.ink);
+                addLbl("InTex", "Texture: " + (ub->texture.empty() ? std::string("(none)") : ub->texture), 900, 268, 16, th.ink);
+                const char* nl[4] = { "X","Y","W","H" };
+                for (int k = 0; k < 4; ++k) {
+                    UiButton b; b.touch.id = std::string("numbtn")+std::to_string(k);
+                    b.touch.rect = Rect{900 + (float)k * 62, 300, 58, 28};
+                    b.text = nl[k]; b.action = std::string("num:") + (k==0?"bx":k==1?"by":k==2?"bw":"bh");
+                    b.color = th.button; editorScene_.ui.push_back(b);
+                }
             }
         } else {
             Node2D* s = (editor_ && !sel.empty()) ? editor_->find2d(sel) : nullptr;
             if (s) {
                 addLbl("InName", s->name, 900, 64, 22, GODOT_ORANGE); addLbl("InType", std::string(s->typeName()), 900, 92, 16, th.ink);
-                addLbl("InTrHdr", "Transform", 900, 124, 18, th.ink);
-                addLbl("InPos", "Position  (" + std::to_string((int)s->position.x) + ", " + std::to_string((int)s->position.y) + ")", 900, 150, 16, th.ink);
-                addLbl("InRot", "Rotation  " + std::to_string((int)(s->rotation * 57.2957795f)), 900, 174, 16, th.ink);
-                addLbl("InScl", "Scale  (" + std::to_string((int)(s->scale.x*100)) + "%, " + std::to_string((int)(s->scale.y*100)) + "%)", 900, 198, 16, th.ink);
-                addLbl("InShp", "Shape  " + s->shape, 900, 222, 16, th.ink);
-                addLbl("InCol", "Color  " + colorToHex(s->color), 900, 246, 16, th.ink);
-                if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 270, 16, th.ink);
-                if (scripted_.count(sel)) addLbl("InScript", "script: scripts/" + sel + ".lua", 900, 294, 16, GODOT_ORANGE);
+                addLbl("InPos", "Position  (" + std::to_string((int)s->position.x) + ", " + std::to_string((int)s->position.y) + ")", 900, 124, 16, th.ink);
+                addLbl("InRot", "Rotation  " + std::to_string((int)(s->rotation * 57.2957795f)), 900, 148, 16, th.ink);
+                addLbl("InScl", "Scale  (" + std::to_string((int)(s->scale.x*100)) + "%, " + std::to_string((int)(s->scale.y*100)) + "%)", 900, 172, 16, th.ink);
+                addLbl("InSiz", "Size  (" + std::to_string((int)s->w) + ", " + std::to_string((int)s->h) + ")", 900, 196, 16, th.ink);
+                addLbl("InShp", "Shape  " + s->shape, 900, 220, 16, th.ink);
+                addLbl("InCol", "Color  " + colorToHex(s->color), 900, 244, 16, th.ink);
+                addLbl("InTex", "Texture: " + (s->texture.empty() ? std::string("(none)") : s->texture), 900, 268, 16, th.ink);
+                addLbl("InAct", "Touch: " + (s->action.empty() ? std::string("(none)") : s->action), 900, 292, 16, th.ink);
+                if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 316, 16, th.ink);
+                // NUM-FIX: числовые поля инспектора
+                const char* nl[6] = { "X","Y","ROT","SCL","W","H" };
+                const char* na[6] = { "nx","ny","nrot","nscl","nw","nh" };
+                for (int k = 0; k < 6; ++k) {
+                    UiButton b; b.touch.id = std::string("numbtn")+std::to_string(k);
+                    b.touch.rect = Rect{900 + (float)k * 62, 344, 58, 28};
+                    b.text = nl[k]; b.action = std::string("num:") + na[k];
+                    b.color = th.button; editorScene_.ui.push_back(b);
+                }
             } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
         }
 
         std::string sb = (editor_ && editor_->scene() && editor_->scene()->bgSet()) ? editor_->scene()->bg : std::string("(theme)");
-        addLbl("InBg", "scene bg: " + sb, 900, 320, 16, th.ink);
-        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 344, 80, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{984, 344, 80, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "texbtn"; b.touch.rect = Rect{1068, 344, 80, 30}; b.text = "T-"; b.action = "clear_tex"; b.color = th.button; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "clnbtn"; b.touch.rect = Rect{1152, 344, 80, 30}; b.text = "DUP"; b.action = "ed_clone"; b.color = th.button; editorScene_.ui.push_back(b); }
+        addLbl("InBg", "scene bg: " + sb, 900, 380, 16, th.ink);
+        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 402, 62, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{966, 402, 62, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "texbtn"; b.touch.rect = Rect{1032, 402, 62, 30}; b.text = "T-"; b.action = "clear_tex"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "clnbtn"; b.touch.rect = Rect{1098, 402, 62, 30}; b.text = "DUP"; b.action = "ed_clone"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "parbtn"; b.touch.rect = Rect{1164, 402, 62, 30}; b.text = pickParent_ ? "PICK" : "PAR"; b.action = "ed_parent"; b.color = pickParent_ ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "unpbtn"; b.touch.rect = Rect{1164, 436, 62, 30}; b.text = "UNP"; b.action = "ed_unparent"; b.color = th.button; editorScene_.ui.push_back(b); }
 
-        // BIG-FIX: стрелки крупнее
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*58, 616, 54, 48}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
 
@@ -445,13 +525,14 @@ private:
         { UiButton b; b.touch.id="scr"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SCR"; b.action="ed_scr"; b.color=th.button; editorScene_.ui.push_back(b); }
 
         if (showCreate_) {
+            // BTN убран; добавлен GRP (пустой якорь для групп)
             const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
             const char* cs[6] = { "square","circle","diamond","triangle","","" };
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
             for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*66, 560, 62, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
             { UiButton b; b.touch.id="ctcam"; b.touch.rect=Rect{300+6*66,560,62,40}; b.text="CAM"; b.action="create_cam"; b.color=th.accent; editorScene_.ui.push_back(b); }
             { UiButton b; b.touch.id="ctlit"; b.touch.rect=Rect{300+7*66,560,62,40}; b.text="LIGHT"; b.action="create_light"; b.color=parseColor("#FFD700"); editorScene_.ui.push_back(b); }
-            { UiButton b; b.touch.id="ctbtn"; b.touch.rect=Rect{300+8*66,560,62,40}; b.text="BTN"; b.action="create_btn"; b.color=parseColor("#2EC4B6"); editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctgrp"; b.touch.rect=Rect{300+8*66,560,62,40}; b.text="GRP"; b.action="create_grp"; b.color=parseColor("#808080"); editorScene_.ui.push_back(b); }
         }
         if (showBg_) {
             const char* bgs[6] = { "#FFF3E0","#111111","#16213E","#2EC4B6","#D62828","#87CEEB" };
@@ -526,13 +607,38 @@ private:
                 if (ub) { pendingText_ = true; pendingTextCur_ = ub->text; }
                 else if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; }
             }
-            else if (b.action == "edit_action") { if (ub) { pendingAction_ = true; pendingActionCur_ = ub->action; } }
-            else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
-            else if (b.action == "ed_clone") {
-                if (!sel.empty()) { editor_->cloneSelected(sel + "_copy"); changed = true; }
+            else if (b.action == "edit_action") {
+                pendingAction_ = true;
+                pendingActionCur_ = ub ? ub->action : (sn ? static_cast<Node2D*>(sn)->action : std::string(""));
             }
+            else if (b.action.rfind("num:", 0) == 0) {
+                pendingNum_ = true; pendingNumKind_ = b.action.substr(4);
+                Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
+                if (pendingNumKind_ == "nx") pendingNumCur_ = s2 ? std::to_string((int)s2->position.x) : "0";
+                else if (pendingNumKind_ == "ny") pendingNumCur_ = s2 ? std::to_string((int)s2->position.y) : "0";
+                else if (pendingNumKind_ == "nrot") pendingNumCur_ = s2 ? std::to_string((int)(s2->rotation * 57.2957795f)) : "0";
+                else if (pendingNumKind_ == "nscl") pendingNumCur_ = s2 ? std::to_string((int)(s2->scale.x * 100)) : "100";
+                else if (pendingNumKind_ == "nw") pendingNumCur_ = s2 ? std::to_string((int)s2->w) : "32";
+                else if (pendingNumKind_ == "nh") pendingNumCur_ = s2 ? std::to_string((int)s2->h) : "32";
+                else if (pendingNumKind_ == "bx") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.x) : "0";
+                else if (pendingNumKind_ == "by") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.y) : "0";
+                else if (pendingNumKind_ == "bw") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.w) : "100";
+                else if (pendingNumKind_ == "bh") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.h) : "50";
+            }
+            else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
+            else if (b.action == "ed_clone") { if (!sel.empty()) { editor_->cloneSelected(sel + "_copy"); changed = true; } }
+            else if (b.action == "ed_parent") {
+                if (!sel.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? sel : std::string(""); }
+                changed = true;
+            }
+            else if (b.action == "ed_unparent") { if (!sel.empty()) { doDetach(sel); changed = true; } }
             else if (b.action.rfind("ed_selectui:", 0) == 0) { editor_->selectUi(b.action.substr(12)); changed = true; }
-            else if (b.action == "create_btn") { pendingName_ = true; pendingKind_ = 1; showCreate_ = false; changed = true; }
+            else if (b.action.rfind("ed_select:", 0) == 0) {
+                std::string nm = b.action.substr(10);
+                if (pickParent_ && !pickChild_.empty() && nm != pickChild_) { doAttach(pickChild_, nm); pickParent_ = false; pickChild_.clear(); }
+                else editor_->select(nm);
+                changed = true;
+            }
             else if (b.action == "create_cam") {
                 std::string name = "Cam" + std::to_string(createCounter_++);
                 editor_->addNode("Camera2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true;
@@ -541,13 +647,16 @@ private:
                 std::string name = "Light" + std::to_string(createCounter_++);
                 editor_->addNode("Light2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true;
             }
+            else if (b.action == "create_grp") {
+                pendingName_ = true; pendingKind_ = 0; pendingType_ = "Node2D"; pendingShape_ = "none";
+                showCreate_ = false; changed = true;
+            }
             else if (b.action.rfind("create:", 0) == 0) {
                 std::string rest = b.action.substr(7); size_t c = rest.find(':');
                 pendingName_ = true; pendingKind_ = 0;
                 pendingType_ = rest.substr(0, c); pendingShape_ = (c == std::string::npos) ? "" : rest.substr(c + 1);
                 showCreate_ = false; changed = true;
             }
-            else if (b.action.rfind("ed_select:", 0) == 0) { editor_->select(b.action.substr(10)); changed = true; }
             else if (b.action.rfind("ed_shape:", 0) == 0) { if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; } }
             else if (b.action.rfind("ed_color:", 0) == 0) {
                 if (ub) { ub->color = parseColor(b.action.substr(9)); changed = true; }
@@ -578,41 +687,53 @@ private:
         if (changed) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
     }
 
-    // CRASH-FIX: применяем результаты диалогов здесь, в рендер-потоке
     void consumeDialogResults() {
-        std::string txt, nm, act; bool ht = false, hn = false, ha = false;
+        std::string txt, nm, act, num; bool ht = false, hn = false, ha = false, hnum = false;
         {
             std::lock_guard<std::mutex> lk(dlgMtx_);
-            ht = hasText_; hn = hasName_; ha = hasAction_;
-            txt = textRes_; nm = nameRes_; act = actionRes_;
-            hasText_ = hasName_ = hasAction_ = false;
+            ht = hasText_; hn = hasName_; ha = hasAction_; hnum = hasNum_;
+            txt = textRes_; nm = nameRes_; act = actionRes_; num = numRes_;
+            hasText_ = hasName_ = hasAction_ = hasNum_ = false;
         }
-        if (hn && editor_) {
+        if (!editor_) return;
+        if (hn) {
             if (!nm.empty()) {
                 if (pendingKind_ == 0) {
                     editor_->addNode(pendingType_, nm, 640, 360);
                     if (!pendingShape_.empty()) editor_->setShape(nm, pendingShape_);
                     editor_->select(nm);
-                } else if (pendingKind_ == 1) {
-                    editor_->addUi(nm, nm, 580, 335, 120, 50, std::string(""), currentTheme().accent);
-                    editor_->selectUi(nm);
                 }
             }
             pendingName_ = false; showCreate_ = false;
-            buildEditorPanels(); input_.setUi(&editorScene_.ui);
         }
-        if (ht && editor_) {
+        if (ht) {
             std::string uid = editor_->selectedUi();
             if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->text = txt; }
             else { Node* s = editor_->selected(); if (s && std::string(s->typeName()) == "Label") static_cast<Label*>(s)->text = txt; }
-            buildEditorPanels(); input_.setUi(&editorScene_.ui);
         }
-        if (ha && editor_) {
+        if (ha) {
+            std::string uid = editor_->selectedUi();
+            if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->action = act; }
+            else { Node* s = editor_->selected(); Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr; if (n2) n2->action = act; }
+        }
+        if (hnum) {
+            float v = (float)atof(num.c_str());
             std::string uid = editor_->selectedUi();
             UiButton* b = uid.empty() ? nullptr : editor_->findUi(uid);
-            if (b) b->action = act;
-            buildEditorPanels(); input_.setUi(&editorScene_.ui);
+            Node* s = editor_->selected();
+            Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr;
+            if (pendingNumKind_ == "nx" && n2) n2->position.x = v;
+            else if (pendingNumKind_ == "ny" && n2) n2->position.y = v;
+            else if (pendingNumKind_ == "nrot" && n2) n2->rotation = v * 3.14159265f / 180.0f;
+            else if (pendingNumKind_ == "nscl" && n2) { float f = v / 100.0f; if (f > 0.01f) { n2->scale.x = f; n2->scale.y = f; } }
+            else if (pendingNumKind_ == "nw" && n2) n2->w = v;
+            else if (pendingNumKind_ == "nh" && n2) n2->h = v;
+            else if (pendingNumKind_ == "bx" && b) b->touch.rect.x = v;
+            else if (pendingNumKind_ == "by" && b) b->touch.rect.y = v;
+            else if (pendingNumKind_ == "bw" && b) b->touch.rect.w = v;
+            else if (pendingNumKind_ == "bh" && b) b->touch.rect.h = v;
         }
+        if (hn || ht || ha || hnum) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
     }
 
     void emitViewport(const Scene& sc, std::string& out) {
@@ -629,7 +750,6 @@ private:
             float bw = b.touch.rect.w*S, bh = b.touch.rect.h*S;
             out += "DRAW button|" + b.text + "|" + std::to_string((int)(bcx-bw/2)) + "|" + std::to_string((int)(bcy-bh/2)) + "|" + std::to_string((int)bw) + "|" + std::to_string((int)bh) + "|" + colorToHex(b.color) + "|" + std::to_string(b.angle) + "|" + resolveAssetPath(b.texture) + "\n";
         }
-        // GIZMO-FIX: ручки прямо на объекте
         Node* selN = editor_ ? editor_->selected() : nullptr;
         Node2D* g = (selN && (editor_->selectedUi().empty())) ? dynamic_cast<Node2D*>(selN) : nullptr;
         if (g) {
@@ -647,8 +767,12 @@ private:
                     out += "DRAW rect|" + std::to_string((int)(px-3)) + "|" + std::to_string((int)(py-3)) + "|6|6|#FF8800|0\n";
                 }
             } else {
+                // SCL-FIX: две ручки — справа (X) и снизу (Y)
                 float hw = (g->w * g->scale.x)*S/2, hh = (g->h * g->scale.y)*S/2;
-                out += "DRAW rect|" + std::to_string((int)(cx+hw-8)) + "|" + std::to_string((int)(cy+hh-8)) + "|16|16|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-1)) + "|" + std::to_string((int)(hw+24)) + "|2|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)(cx+hw+16)) + "|" + std::to_string((int)(cy-8)) + "|16|16|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24)) + "|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)(cx-8)) + "|" + std::to_string((int)(cy+hh+16)) + "|16|16|#4CC9F0|0\n";
             }
         }
     }
@@ -686,8 +810,9 @@ private:
         emitViewport(*editor_->scene(), out);
         processEditorActions();
         if (pendingText_ && appMode_ == AppMode::Editor) { out += "REQ_TEXT|" + pendingTextCur_ + "\n"; pendingText_ = false; }
-        if (pendingName_ && appMode_ == AppMode::Editor) { out += "REQ_NAME|" + std::string(pendingKind_==1?"Button":"Object") + "\n"; }
+        if (pendingName_ && appMode_ == AppMode::Editor) { out += "REQ_NAME|Object\n"; }
         if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
+        if (pendingNum_ && appMode_ == AppMode::Editor) { out += "REQ_NUM|" + pendingNumCur_ + "\n"; pendingNum_ = false; }
         input_.endFrame(); return out;
     }
 
@@ -696,17 +821,21 @@ private:
     ScriptSystem scripts_; std::set<std::string> scripted_;
     Manip manip_ = Manip::Move;
     bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false, pinching_ = false;
-    bool pendingName_ = false, pendingAction_ = false; int pendingKind_ = 0;
-    bool gizmoRot_ = false, gizmoScl_ = false; int lockAxis_ = 0;
+    bool pendingName_ = false, pendingAction_ = false, pendingNum_ = false;
+    int pendingKind_ = 0;
+    std::string pendingNumKind_, pendingNumCur_;
+    bool gizmoRot_ = false, gizmoSclX_ = false, gizmoSclY_ = false; int lockAxis_ = 0;
     float gizmoStartAngle_ = 0, gizmoStartRot_ = 0, gizmoStartDist_ = 1, gizmoStartSX_ = 1, gizmoStartSY_ = 1;
+    bool pickParent_ = false; std::string pickChild_;
     std::string pendingType_, pendingShape_, pendingActionCur_;
+    std::string pendingNodeAction_;
     float pinchMX_ = 0, pinchMY_ = 0;
     int hierScroll_ = 0;
     Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     std::mutex dlgMtx_;
-    bool hasText_ = false, hasName_ = false, hasAction_ = false;
-    std::string textRes_, nameRes_, actionRes_;
+    bool hasText_ = false, hasName_ = false, hasAction_ = false, hasNum_ = false;
+    std::string textRes_, nameRes_, actionRes_, numRes_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
 
