@@ -53,26 +53,21 @@ public:
         }
     }
 
-    // консольный трек (main.cpp) — со звуком, сигнатура не менялась
+    // консольный трек (main.cpp) — со звуком
     void update(Scene& scene, Context& ctx, double dt,
                 SceneManager& scenes, SoundManager& sound,
                 std::map<std::string, double>& vars) {
         updateImpl(scene, ctx, dt, scenes, &sound, vars);
     }
 
-    // APK-трек (GameApp) — без звука; play_sound станет безопасным no-op
+    // APK-трек (GameApp) — без звука; play_sound = безопасный no-op
     void update(Scene& scene, Context& ctx, double dt,
                 SceneManager& scenes,
                 std::map<std::string, double>& vars) {
         updateImpl(scene, ctx, dt, scenes, nullptr, vars);
     }
 
-    // CALL-FIX: дёргает Lua-функцию по имени из любой кнопки (action = call:имя).
-    // Выполняется БЕЗ привязанной ноды (h->node = nullptr), поэтому get_x/set_x
-    // внутри вернут 0 — но set_var/add_var/spawn/destroy/pair_destroy/distance/
-    // overlaps/set_text/get_text/change_scene/restart_scene/play_sound/print
-    // работают, т.к. они идут через h->scenes->current() и h->vars, а не через h->node.
-    // Это ровно модель "назвал функцию на английском -> вызываешь", как в Godot.
+    // CALL-FIX: дёргает Lua-функцию по имени из кнопки (action = call:имя).
     bool callGlobal(const std::string& fn, Context& ctx, SceneManager& scenes,
                     std::map<std::string, double>& vars) {
         host_.node = nullptr;
@@ -113,7 +108,6 @@ private:
         }
     }
 
-    // --- доступ к ЛЮБОЙ ноде сцены по имени (через h->scenes->current()) ---
     static Node* findAny(LuaVM& v, const std::string& name) {
         auto* h = static_cast<ScriptHost*>(v.host);
         if (!h || !h->scenes) return nullptr;
@@ -132,7 +126,7 @@ private:
     }
 
     void registerNatives(LuaVM& vm) {
-        // ===== существующие (свои нода/vars/ввод/сцена/звук) =====
+        // ===== свои нода / vars / ввод / сцена / звук =====
         vm.setNative("print", [](LuaVM& v, std::vector<LuaValue>& a) {
             std::string s; for (auto& x : a) s += x.toString();
             std::cout << "[Lua] " << s << "\n"; return LuaValue();
@@ -202,7 +196,7 @@ private:
             return LuaValue();
         });
 
-        // ===== приведение типов (без них текст+число = "nil") =====
+        // ===== приведение типов =====
         vm.setNative("tostring", [](LuaVM& v, std::vector<LuaValue>& a) {
             return LuaValue::strV(a.empty() ? std::string("nil") : a[0].toString());
         });
@@ -282,11 +276,11 @@ private:
         vm.setNative("set_shape", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.size() < 2) return LuaValue();
             Node2D* n = findAny2D(v, a[0].str);
-            if (n) n->shape = a[1].str;          // "none" = скрыть
+            if (n) n->shape = a[1].str;
             return LuaValue();
         });
 
-        // ===== тексты (только у Label) =====
+        // ===== тексты (Label) =====
         vm.setNative("set_text", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.size() < 2) return LuaValue();
             Node* n = findAny(v, a[0].str);
@@ -305,11 +299,11 @@ private:
         vm.setNative("destroy", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.empty()) return LuaValue();
             Node* n = findAny(v, a[0].str);
-            if (n) n->dead = true;               // вычистится prune() в update
+            if (n) n->dead = true;
             return LuaValue();
         });
         vm.setNative("pair_destroy", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue();  // ТВОЙ КЕЙС: оба исчезают
+            if (a.size() < 2) return LuaValue();
             Node* x = findAny(v, a[0].str); if (x) x->dead = true;
             Node* y = findAny(v, a[1].str); if (y) y->dead = true;
             return LuaValue();
@@ -351,6 +345,77 @@ private:
             bool o = (x->position.x - hx <= y->position.x + gx) && (x->position.x + hx >= y->position.x - gx) &&
                      (x->position.y - hy <= y->position.y + gy) && (x->position.y + hy >= y->position.y - gy);
             return LuaValue::boolV(o);
+        });
+
+        // ===== HIER-FIX: структура дерева (распаковано Nodes.hpp) =====
+        vm.setNative("attach", [](LuaVM& v, std::vector<LuaValue>& a) {
+            if (a.size() < 2) return LuaValue::boolV(false);
+            auto* h = static_cast<ScriptHost*>(v.host);
+            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
+            if (!sc || !sc->root) return LuaValue::boolV(false);
+            Node* root = sc->root.get();
+            const std::string& child = a[0].str;
+            const std::string& parent = a[1].str;
+            if (child == parent) return LuaValue::boolV(false);
+            Node* cn = root->findNode(child);
+            Node* pn = root->findNode(parent);
+            if (!cn || !pn) return LuaValue::boolV(false);
+            if (cn->containsName(parent)) return LuaValue::boolV(false);   // защита от цикла
+            Node* owner = root->findParentOf(child);
+            if (!owner) return LuaValue::boolV(false);                    // ребёнок = корень
+            std::unique_ptr<Node> up = owner->takeChild(child);
+            if (!up) return LuaValue::boolV(false);
+            pn->addChild(std::move(up));
+            return LuaValue::boolV(true);
+        });
+        vm.setNative("detach", [](LuaVM& v, std::vector<LuaValue>& a) {
+            if (a.empty()) return LuaValue::boolV(false);
+            auto* h = static_cast<ScriptHost*>(v.host);
+            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
+            if (!sc || !sc->root) return LuaValue::boolV(false);
+            Node* root = sc->root.get();
+            Node* owner = root->findParentOf(a[0].str);
+            if (!owner) return LuaValue::boolV(false);
+            std::unique_ptr<Node> up = owner->takeChild(a[0].str);
+            if (!up) return LuaValue::boolV(false);
+            root->addChild(std::move(up));
+            return LuaValue::boolV(true);
+        });
+        vm.setNative("parent_of", [](LuaVM& v, std::vector<LuaValue>& a) {
+            if (a.empty()) return LuaValue::strV("");
+            auto* h = static_cast<ScriptHost*>(v.host);
+            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
+            if (!sc || !sc->root) return LuaValue::strV("");
+            Node* p = sc->root->findParentOf(a[0].str);
+            return LuaValue::strV(p ? p->name : std::string(""));
+        });
+        vm.setNative("children_count", [](LuaVM& v, std::vector<LuaValue>& a) {
+            if (a.empty()) return LuaValue::numV(0);
+            auto* h = static_cast<ScriptHost*>(v.host);
+            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
+            if (!sc || !sc->root) return LuaValue::numV(0);
+            Node* n = sc->root->findNode(a[0].str);
+            return LuaValue::numV(n ? (double)n->childCount() : 0);
+        });
+        vm.setNative("child_at", [](LuaVM& v, std::vector<LuaValue>& a) {
+            if (a.size() < 2) return LuaValue::strV("");
+            auto* h = static_cast<ScriptHost*>(v.host);
+            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
+            if (!sc || !sc->root) return LuaValue::strV("");
+            Node* n = sc->root->findNode(a[0].str);
+            if (!n) return LuaValue::strV("");
+            int i = (int)a[1].num;
+            const auto& ch = n->getChildren();
+            if (i < 0 || i >= (int)ch.size()) return LuaValue::strV("");
+            return LuaValue::strV(ch[i]->name);
+        });
+        vm.setNative("is_child_of", [](LuaVM& v, std::vector<LuaValue>& a) {
+            if (a.size() < 2) return LuaValue::boolV(false);
+            auto* h = static_cast<ScriptHost*>(v.host);
+            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
+            if (!sc || !sc->root) return LuaValue::boolV(false);
+            Node* p = sc->root->findParentOf(a[0].str);
+            return LuaValue::boolV(p && p->name == a[1].str);
         });
     }
 
