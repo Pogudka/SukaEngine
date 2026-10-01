@@ -58,7 +58,6 @@ public:
             static_cast<Label*>(sn)->text = t;
     }
 
-    // PAN: двухпальцевый обзор превью. phase 1=down 2=move 3=up
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
         if (appMode_ != AppMode::Editor || showCreate_ || showBg_) return;
         Scene* es = editor_ ? editor_->scene() : nullptr;
@@ -68,7 +67,7 @@ public:
         if (phase == 1) { pinching_ = true; pinchMX_ = mx; pinchMY_ = my; return; }
         if (phase == 3) { pinching_ = false; return; }
         if (!pinching_) return;
-        es->camX += (mx - pinchMX_) / S;            // тянем карту за середину двух пальцев
+        es->camX += (mx - pinchMX_) / S;
         es->camY += (my - pinchMY_) / S;
         pinchMX_ = mx; pinchMY_ = my;
     }
@@ -87,7 +86,7 @@ public:
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
             Scene* es = editor_ ? editor_->scene() : nullptr;
             if (t.action == RawTouch::Action::Down && inVP && es && es->root) {
-                float wx = 640 + es->camX + (x - CX) / S;   // PAN: учёт смещения обзора
+                float wx = 640 + es->camX + (x - CX) / S;
                 float wy = 360 + es->camY + (y - CY) / S;
                 std::string hit = hitTest(es->root.get(), wx, wy);
                 if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); }
@@ -235,8 +234,8 @@ private:
         std::string tn = std::string(n->typeName());
         if (tn != "Node" && tn != "Camera2D" && n->name.rfind("__", 0) != 0) {
             const Node2D* d = static_cast<const Node2D*>(n);
-            float hw = d->w > 0 ? d->w / 2 : 24; if (hw < 28) hw = 28;
-            float hh = d->h > 0 ? d->h / 2 : 24; if (hh < 28) hh = 28;
+            float hw = (d->w * d->scale.x) > 0 ? (d->w * d->scale.x) / 2 : 24; if (hw < 28) hw = 28;   // SCL-FIX: хват по масштабу
+            float hh = (d->h * d->scale.y) > 0 ? (d->h * d->scale.y) / 2 : 24; if (hh < 28) hh = 28;
             if (wx >= d->position.x - hw && wx <= d->position.x + hw &&
                 wy >= d->position.y - hh && wy <= d->position.y + hh) {
                 if (bestBox.empty()) bestBox = d->name;
@@ -331,7 +330,6 @@ private:
         { UiButton b; b.touch.id="scr"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SCR"; b.action="ed_scr"; b.color=th.button; editorScene_.ui.push_back(b); }
 
         if (showCreate_) {
-            // CAM/LIGHT: 8 кнопок в полосе 300..892
             const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
             const char* cs[6] = { "square","circle","diamond","triangle","","" };
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
@@ -400,11 +398,11 @@ private:
             else if (b.action == "bg_clear") { if (editor_->scene()) editor_->scene()->bg.clear(); showBg_ = false; changed = true; }
             else if (b.action == "edit_text") { if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } }
             else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
-            else if (b.action == "create_cam") {                       // CAM: реальная нода Camera2D
+            else if (b.action == "create_cam") {
                 std::string name = "Cam" + std::to_string(createCounter_++);
                 editor_->addNode("Camera2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true;
             }
-            else if (b.action == "create_light") {                     // LIGHT: жёлтый круг-маркер (см. оговорку)
+            else if (b.action == "create_light") {
                 std::string name = "Light" + std::to_string(createCounter_++);
                 editor_->addNode("Node2D", name, 640, 360); editor_->setShape(name, "circle"); editor_->setColor(name, "#FFD700"); editor_->select(name); showCreate_ = false; changed = true;
             }
@@ -442,32 +440,42 @@ private:
 
     void emitViewport(const Scene& sc, std::string& out) {
         const float VX0 = 300, VY0 = 64, VW = 592, VH = 492; const float CX = VX0 + VW/2, CY = VY0 + VH/2, S = 0.46875f;
-        if (sc.bgSet()) out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|" + sc.bg + "\n";
-        out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B\n";
-        for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640 - sc.camX)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D\n"; }   // PAN: сетка едет с камерой
-        for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360 - sc.camY)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D\n"; }
+        if (sc.bgSet()) out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|" + sc.bg + "|0\n";
+        out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B|0\n";
+        for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640 - sc.camX)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D|0\n"; }
+        for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360 - sc.camY)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D|0\n"; }
         emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, sc.camX, sc.camY, out);
+        // UI-FIX: все кнопки сцены видны в превью (спроецированы как мир)
+        for (auto& b : sc.ui) {
+            float bcx = CX + (b.touch.rect.x + b.touch.rect.w/2 - sc.camX - 640)*S;
+            float bcy = CY + (b.touch.rect.y + b.touch.rect.h/2 - sc.camY - 360)*S;
+            if (bcx < VX0 || bcx > VX0+VW || bcy < VY0 || bcy > VY0+VH) continue;
+            float bw = b.touch.rect.w*S, bh = b.touch.rect.h*S;
+            out += "DRAW button|" + b.text + "|" + std::to_string((int)(bcx-bw/2)) + "|" + std::to_string((int)(bcy-bh/2)) + "|" + std::to_string((int)bw) + "|" + std::to_string((int)bh) + "|" + colorToHex(b.color) + "\n";
+        }
     }
     void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH, float camX, float camY, std::string& out) {
         if (!n) return;
         std::string tn = std::string(n->typeName());
-        if (tn == "Camera2D") {                                          // CAM: маркер камеры в превью
+        if (tn == "Camera2D") {
             const Node2D* d = static_cast<const Node2D*>(n);
             float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;
             if (cx >= VX0 && cx <= VX0+VW && cy >= VY0 && cy <= VY0+VH) {
-                out += "DRAW rect|" + std::to_string((int)(cx-14)) + "|" + std::to_string((int)(cy-10)) + "|28|20|#FFD700\n";
-                out += "DRAW text|CAM|" + std::to_string((int)(cx-12)) + "|" + std::to_string((int)(cy+12)) + "|12|#FFD700\n";
+                out += "DRAW rect|" + std::to_string((int)(cx-14)) + "|" + std::to_string((int)(cy-10)) + "|28|20|#FFD700|0\n";
+                out += "DRAW text|CAM|" + std::to_string((int)(cx-12)) + "|" + std::to_string((int)(cy+12)) + "|12|#FFD700|0\n";
             }
         }
         else if (tn != "Node") {
             const Node2D* d = static_cast<const Node2D*>(n);
-            float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;   // PAN: смещение обзора
-            float w = d->w*S, h = d->h*S, rx = cx - w/2, ry = cy - h/2;
+            float ang = d->rotation * 57.2957795f;                       // ROT-FIX
+            float sw = d->w * d->scale.x, sh = d->h * d->scale.y;        // SCL-FIX
+            float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;
+            float w = sw*S, h = sh*S, rx = cx - w/2, ry = cy - h/2;
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
-                if (tn == "Label") out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|14|" + colorToHex(d->color) + "\n";
-                else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555\n";
-                else if (d->hasAppearance()) out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(d->color) + "\n";
+                if (tn == "Label") out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|14|" + colorToHex(d->color) + "|" + ang + "\n";
+                else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555|" + ang + "\n";
+                else if (d->hasAppearance()) out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(d->color) + "|" + ang + "\n";
             }
         }
         for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, out);
@@ -486,8 +494,8 @@ private:
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
     Manip manip_ = Manip::Move;
-    bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false, pinching_ = false;   // PAN
-    float pinchMX_ = 0, pinchMY_ = 0;                                                                          // PAN
+    bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false, pinching_ = false;
+    float pinchMX_ = 0, pinchMY_ = 0;
     Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
