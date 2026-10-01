@@ -280,7 +280,8 @@ public class MainActivity extends Activity {
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     paint.setColor(Color.parseColor(p[6]));
-                    c.drawRoundRect(new RectF(x, y, x + w, y + h), 18, 18, paint);
+                    float r = Math.min(w, h) / 2f;
+                    c.drawRoundRect(new RectF(x, y, x + w, y + h), r, r, paint);
                     int fill = Color.parseColor(p[6]);
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
                     paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
