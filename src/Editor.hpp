@@ -69,6 +69,9 @@ private:
         if (n2) {
             s += ", \"x\": " + std::to_string((int)n2->position.x);
             s += ", \"y\": " + std::to_string((int)n2->position.y);
+            s += ", \"rotation\": " + std::to_string(n2->rotation * 57.2957795f);   // ROT/SCL-FIX
+            s += ", \"scale_x\": " + std::to_string(n2->scale.x);
+            s += ", \"scale_y\": " + std::to_string(n2->scale.y);
 
             if (n2->hasAppearance()) {
                 s += ", \"shape\": \"" + n2->shape + "\"";
