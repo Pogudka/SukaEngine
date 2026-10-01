@@ -48,25 +48,18 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-
         copyAssets("");
         restructure();
-
         File root = getFilesDir();
         g_fileCount = countEntries(root);
         g_hasProject = new File(root, "projects/" + GAME_DIR + "/project.json").exists();
         g_hasFont = new File(root, "assets/fonts/Ubuntu-Regular.ttf").exists();
-
         g_initOk = nativeInit(root.getAbsolutePath(), GAME_DIR);
-
         setContentView(new GameView(this, root.getAbsolutePath()));
         hideSystemBars();
     }
 
-    private int countEntries(File d) {
-        File[] ch = d.listFiles();
-        return ch == null ? -1 : ch.length;
-    }
+    private int countEntries(File d) { File[] ch = d.listFiles(); return ch == null ? -1 : ch.length; }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
@@ -76,18 +69,14 @@ public class MainActivity extends Activity {
 
     private void hideSystemBars() {
         getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-          | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-          | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-          | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-          | View.SYSTEM_UI_FLAG_FULLSCREEN
-          | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+          | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+          | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     }
 
     private void restructure() {
         File root = getFilesDir();
-        File[] top = root.listFiles();
-        if (top == null) return;
+        File[] top = root.listFiles(); if (top == null) return;
         File proj = new File(root, "projects"); proj.mkdirs();
         File ass  = new File(root, "assets");   ass.mkdirs();
         for (File f : top) {
@@ -96,59 +85,30 @@ public class MainActivity extends Activity {
             if (n.equals("projects") || n.equals("assets")) continue;
             boolean isProject = new File(f, "project.json").exists();
             File dst = new File(isProject ? proj : ass, n);
-            if (dst.exists()) {
-                deleteRecursive(f);
-            } else if (!f.renameTo(dst)) {
-                copyRecursive(f, dst);
-                deleteRecursive(f);
-            }
+            if (dst.exists()) deleteRecursive(f);
+            else if (!f.renameTo(dst)) { copyRecursive(f, dst); deleteRecursive(f); }
         }
     }
-
     private void deleteRecursive(File f) {
-        if (f.isDirectory()) {
-            File[] ch = f.listFiles();
-            if (ch != null) for (File c : ch) deleteRecursive(c);
-        }
+        if (f.isDirectory()) { File[] ch = f.listFiles(); if (ch != null) for (File c : ch) deleteRecursive(c); }
         f.delete();
     }
-
     private void copyRecursive(File src, File dst) {
-        if (src.isDirectory()) {
-            dst.mkdirs();
-            File[] ch = src.listFiles();
-            if (ch != null) for (File c : ch) copyRecursive(c, new File(dst, c.getName()));
-            return;
-        }
-        try {
-            InputStream in = new FileInputStream(src);
-            OutputStream out = new FileOutputStream(dst);
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            out.close(); in.close();
-        } catch (Exception e) { }
+        if (src.isDirectory()) { dst.mkdirs(); File[] ch = src.listFiles();
+            if (ch != null) for (File c : ch) copyRecursive(c, new File(dst, c.getName())); return; }
+        try { InputStream in = new FileInputStream(src); OutputStream out = new FileOutputStream(dst);
+            byte[] buf = new byte[8192]; int n; while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.close(); in.close(); } catch (Exception e) { }
     }
-
     private void copyAssets(String path) {
-        try {
-            AssetManager am = getAssets();
-            String[] list = am.list(path);
-            if ((list == null || list.length == 0) && path.isEmpty()) {
-                list = FALLBACK_ROOT;
-            }
+        try { AssetManager am = getAssets(); String[] list = am.list(path);
+            if ((list == null || list.length == 0) && path.isEmpty()) list = FALLBACK_ROOT;
             if (list == null) return;
-            if (list.length == 0) {
-                File out = new File(getFilesDir(), path);
+            if (list.length == 0) { File out = new File(getFilesDir(), path);
                 if (out.getParentFile() != null) out.getParentFile().mkdirs();
-                InputStream in = am.open(path);
-                OutputStream os = new FileOutputStream(out);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
-                os.close(); in.close();
-                return;
-            }
+                InputStream in = am.open(path); OutputStream os = new FileOutputStream(out);
+                byte[] buf = new byte[8192]; int n; while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+                os.close(); in.close(); return; }
             for (String s : list) copyAssets(path.isEmpty() ? s : path + "/" + s);
         } catch (Exception e) { }
     }
@@ -165,74 +125,67 @@ public class MainActivity extends Activity {
         private final String root;
 
         GameView(Context c, String r) {
-            super(c);
-            root = r;
-            paint.setAntiAlias(true);
-            getHolder().addCallback(this);
+            super(c); root = r; paint.setAntiAlias(true); getHolder().addCallback(this);
             File f = new File(root + "/assets/fonts/Ubuntu-Regular.ttf");
             if (f.exists()) typeface = Typeface.createFromFile(f);
         }
-
-        @Override public void surfaceCreated(SurfaceHolder h) {
-            thread = new Thread(this); thread.start();
-        }
+        @Override public void surfaceCreated(SurfaceHolder h) { thread = new Thread(this); thread.start(); }
         @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) { }
         @Override public void surfaceDestroyed(SurfaceHolder h) {
-            try { if (thread != null) thread.join(); } catch (Exception e) { }
-        }
+            try { if (thread != null) thread.join(); } catch (Exception e) { } }
 
         @Override public void run() {
             while (true) {
-                String frame = nativeStep();
-                if (frame == null) frame = "";
+                String frame = nativeStep(); if (frame == null) frame = "";
                 g_stepLen = frame.length();
                 g_stepHead = frame.replace("\n", "|");
                 if (g_stepHead.length() > 70) g_stepHead = g_stepHead.substring(0, 70);
 
                 Canvas c = getHolder().lockCanvas();
                 if (c == null) { try { Thread.sleep(8); continue; } catch (Exception e) { return; } }
-
                 int rw = getWidth(), rh = getHeight();
                 c.drawColor(Color.rgb(18, 18, 24));
+                if (rw > 0 && rh > 0) { c.save(); c.scale(rw / LOGIC_W, rh / LOGIC_H);
+                    for (String line : frame.split("\n")) drawLine(c, line); c.restore(); }
+                else { for (String line : frame.split("\n")) drawLine(c, line); }
 
-                if (rw > 0 && rh > 0) {
-                    c.save();
-                    c.scale(rw / LOGIC_W, rh / LOGIC_H);
-                    for (String line : frame.split("\n")) drawLine(c, line);
-                    c.restore();
-                } else {
-                    for (String line : frame.split("\n")) drawLine(c, line);
-                }
-
-                boolean title = frame.contains("START") || frame.contains("Play")
-                             || frame.contains("Edit") || frame.contains("NEW")
-                             || frame.contains("Theme") || frame.contains("MENU");
-                if (title) drawTitle(c, rw, rh);
-                boolean diag = frame.contains("PROJECTS");
-                if (diag) drawDiag(c, rw, rh);
+                boolean editor = frame.contains("Inspector") || frame.contains("FileSystem");
+                boolean hubOrMenu = frame.contains("PROJECTS") || frame.contains("START")
+                    || frame.contains("Play") || frame.contains("NEW") || frame.contains("Theme") || frame.contains("MENU");
+                if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
+                if (frame.contains("PROJECTS")) drawDiag(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
                 try { Thread.sleep(16); } catch (Exception e) { return; }
             }
         }
 
-        private void drawTitle(Canvas c, int rw, int rh) {
-            float size = Math.max(40f, rh * 0.055f);
-            paint.setTextSize(size);
-            paint.setTextAlign(Paint.Align.CENTER);
+        private void drawTitle(Canvas c, int rw, int rh, boolean editor) {
             if (typeface != null) paint.setTypeface(typeface);
             else paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
-            float cx = rw / 2f, cy = size + rh * 0.03f;
-            paint.setColor(Color.argb(160, 0, 0, 0));
-            c.drawText("SukaEngine", cx + 3, cy + 3, paint);
-            paint.setColor(Color.WHITE);
-            c.drawText("SukaEngine", cx, cy, paint);
+            if (editor) {                                   // п.1: справа-вверху, мельче
+                float size = Math.max(26f, rh * 0.035f);
+                paint.setTextSize(size);
+                paint.setTextAlign(Paint.Align.RIGHT);
+                paint.setColor(Color.argb(150, 0, 0, 0));
+                c.drawText("SukaEngine", rw - 18 + 2, size + 4, paint);
+                paint.setColor(Color.rgb(234, 242, 255));
+                c.drawText("SukaEngine", rw - 18, size + 2, paint);
+            } else {
+                float size = Math.max(40f, rh * 0.055f);
+                paint.setTextSize(size);
+                paint.setTextAlign(Paint.Align.CENTER);
+                float cx = rw / 2f, cy = size + rh * 0.03f;
+                paint.setColor(Color.argb(160, 0, 0, 0));
+                c.drawText("SukaEngine", cx + 3, cy + 3, paint);
+                paint.setColor(Color.WHITE);
+                c.drawText("SukaEngine", cx, cy, paint);
+            }
             paint.setTextAlign(Paint.Align.LEFT);
         }
 
         private void drawDiag(Canvas c, int rw, int rh) {
             float sz = Math.max(20f, rh * 0.028f);
-            paint.setTextSize(sz);
-            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setTextSize(sz); paint.setTextAlign(Paint.Align.LEFT);
             if (typeface != null) paint.setTypeface(typeface);
             paint.setColor(Color.rgb(255, 224, 102));
             float x = 20f, y = rh - 50f;
@@ -251,8 +204,7 @@ public class MainActivity extends Activity {
                     paint.setTextSize(Float.parseFloat(p[4]));
                     paint.setTextAlign(Paint.Align.LEFT);
                     if (typeface != null) paint.setTypeface(typeface);
-                    c.drawText(p[1], Float.parseFloat(p[2]),
-                        Float.parseFloat(p[3]) + Float.parseFloat(p[4]), paint);
+                    c.drawText(p[1], Float.parseFloat(p[2]), Float.parseFloat(p[3]) + Float.parseFloat(p[4]), paint);
                 } else if (p[0].equals("rect")) {
                     paint.setColor(Color.parseColor(p[5]));
                     float x = Float.parseFloat(p[1]), y = Float.parseFloat(p[2]);
@@ -262,25 +214,18 @@ public class MainActivity extends Activity {
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     paint.setColor(Color.parseColor(p[6]));
-                    if (shape.equals("circle")) {
-                        c.drawOval(new RectF(x, y, x + w, y + h), paint);
-                    } else if (shape.equals("diamond")) {
-                        Path pa = new Path();
+                    if (shape.equals("circle")) c.drawOval(new RectF(x, y, x + w, y + h), paint);
+                    else if (shape.equals("diamond")) { Path pa = new Path();
                         pa.moveTo(x + w / 2, y); pa.lineTo(x + w, y + h / 2);
-                        pa.lineTo(x + w / 2, y + h); pa.lineTo(x, y + h / 2); pa.close();
-                        c.drawPath(pa, paint);
-                    } else if (shape.equals("triangle")) {
-                        Path pa = new Path();
-                        pa.moveTo(x + w / 2, y); pa.lineTo(x + w, y + h);
-                        pa.lineTo(x, y + h); pa.close(); c.drawPath(pa, paint);
-                    } else {
-                        c.drawRect(new RectF(x, y, x + w, y + h), paint);
-                    }
+                        pa.lineTo(x + w / 2, y + h); pa.lineTo(x, y + h / 2); pa.close(); c.drawPath(pa, paint); }
+                    else if (shape.equals("triangle")) { Path pa = new Path();
+                        pa.moveTo(x + w / 2, y); pa.lineTo(x + w, y + h); pa.lineTo(x, y + h); pa.close(); c.drawPath(pa, paint); }
+                    else c.drawRect(new RectF(x, y, x + w, y + h), paint);
                 } else if (p[0].equals("button")) {
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     paint.setColor(Color.parseColor(p[6]));
-                    float r = 12f;                                   // ← прямоугольные, чуть скруглённые
+                    float r = 12f;
                     c.drawRoundRect(new RectF(x, y, x + w, y + h), r, r, paint);
                     int fill = Color.parseColor(p[6]);
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
@@ -292,15 +237,10 @@ public class MainActivity extends Activity {
                     paint.setTextAlign(Paint.Align.LEFT);
                 } else if (p[0].equals("tex")) {
                     Bitmap bm = bitmaps.get(p[1]);
-                    if (bm == null) {
-                        bm = BitmapFactory.decodeFile(root + "/projects/" + GAME_DIR + "/" + p[1]);
-                        if (bm != null) bitmaps.put(p[1], bm);
-                    }
-                    if (bm != null) {
-                        float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
-                        c.drawBitmap(bm, null, new RectF(x, y,
-                            x + Float.parseFloat(p[4]), y + Float.parseFloat(p[5])), paint);
-                    }
+                    if (bm == null) { bm = BitmapFactory.decodeFile(root + "/projects/" + GAME_DIR + "/" + p[1]);
+                        if (bm != null) bitmaps.put(p[1], bm); }
+                    if (bm != null) { float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
+                        c.drawBitmap(bm, null, new RectF(x, y, x + Float.parseFloat(p[4]), y + Float.parseFloat(p[5])), paint); }
                 }
             } catch (Exception e) { }
         }
@@ -316,4 +256,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                     }
+                        }
