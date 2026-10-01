@@ -11,11 +11,9 @@ Java_com_sukaengine_app_MainActivity_nativeInit(JNIEnv* env, jobject, jstring ro
     const char* r = env->GetStringUTFChars(root, nullptr);
     suka::setProjectRoot(r);
     env->ReleaseStringUTFChars(root, r);
-
     const char* g = env->GetStringUTFChars(gameDir, nullptr);
     std::string game = g;
     env->ReleaseStringUTFChars(gameDir, g);
-
     delete g_app;
     g_app = new suka::GameApp();
     return g_app->init(suka::GameApp::Mode::String, game) ? JNI_TRUE : JNI_FALSE;
@@ -30,4 +28,12 @@ Java_com_sukaengine_app_MainActivity_nativeStep(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_sukaengine_app_MainActivity_nativeTouch(JNIEnv* env, jobject, jint action, jfloat x, jfloat y) {
     if (g_app) g_app->feedTouch(action, x, y);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeSetText(JNIEnv* env, jobject, jstring text) {
+    if (!g_app || !text) return;
+    const char* t = env->GetStringUTFChars(text, nullptr);
+    g_app->setNodeText(std::string(t));
+    env->ReleaseStringUTFChars(text, t);
 }
