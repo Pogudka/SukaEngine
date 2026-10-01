@@ -31,6 +31,11 @@ Java_com_sukaengine_app_MainActivity_nativeTouch(JNIEnv* env, jobject, jint acti
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeMultiTouch(JNIEnv* env, jobject, jint phase, jfloat x0, jfloat y0, jfloat x1, jfloat y1) {
+    if (g_app) g_app->feedMultiTouch(phase, x0, y0, x1, y1);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_sukaengine_app_MainActivity_nativeSetText(JNIEnv* env, jobject, jstring text) {
     if (!g_app || !text) return;
     const char* t = env->GetStringUTFChars(text, nullptr);
