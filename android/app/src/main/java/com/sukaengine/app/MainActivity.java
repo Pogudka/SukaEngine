@@ -106,6 +106,7 @@ public class MainActivity extends Activity {
     native boolean nativeInit(String root, String gameDir);
     native String nativeStep();
     native void nativeTouch(int action, float x, float y);
+    native void nativeMultiTouch(int phase, float x0, float y0, float x1, float y1);
     native void nativeSetText(String text);
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
