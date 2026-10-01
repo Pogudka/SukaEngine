@@ -58,3 +58,11 @@ Java_com_sukaengine_app_MainActivity_nativeSetAction(JNIEnv* env, jobject, jstri
     g_app->submitAction(std::string(t));
     env->ReleaseStringUTFChars(text, t);
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeSetNumber(JNIEnv* env, jobject, jstring text) {
+    if (!g_app || !text) return;
+    const char* t = env->GetStringUTFChars(text, nullptr);
+    g_app->submitNumber(std::string(t));
+    env->ReleaseStringUTFChars(text, t);
+}
