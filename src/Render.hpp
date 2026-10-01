@@ -133,7 +133,7 @@ public:
 
         DrawCmd bg;
         bg.kind = DrawCmd::Kind::Bg;
-        bg.color = currentTheme().bg;
+        bg.color = scene.bgSet() ? parseColor(scene.bg) : currentTheme().bg;   // BG-FIX
         backend_.draw(bg);
 
         if (scene.root) collectNode(*scene.root);
