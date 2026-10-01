@@ -19,6 +19,7 @@ import android.view.SurfaceView;
 import android.view.View;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -37,6 +38,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         copyAssets("");
+        restructure();
         String root = getFilesDir().getAbsolutePath();
         nativeInit(root, GAME_DIR);
         setContentView(new GameView(this, root));
@@ -57,6 +59,59 @@ public class MainActivity extends Activity {
           | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
           | View.SYSTEM_UI_FLAG_FULLSCREEN
           | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    // ---- раскладка APK-assets в структуру, которую ждёт движок ----
+    // В APK проекты лежат в корне (DemoGame/, Game1/...), а шрифты/звуки
+    // тоже в корне (fonts/, sounds/). Движок же ищет projects/<dir>/...
+    // и assets/fonts|sounds/... Поэтому после copyAssets перекладываем:
+    // папку с project.json -> в projects/, остальное -> в assets/.
+    // Если цель уже существует (локальная версия ценнее) — дубль из APK
+    // выбрасываем, чтобы не терять правки редактора между запусками.
+    private void restructure() {
+        File root = getFilesDir();
+        File[] top = root.listFiles();
+        if (top == null) return;
+        File proj = new File(root, "projects"); proj.mkdirs();
+        File ass  = new File(root, "assets");   ass.mkdirs();
+        for (File f : top) {
+            if (!f.isDirectory()) continue;
+            String n = f.getName();
+            if (n.equals("projects") || n.equals("assets")) continue;
+            boolean isProject = new File(f, "project.json").exists();
+            File dst = new File(isProject ? proj : ass, n);
+            if (dst.exists()) {
+                deleteRecursive(f);                 // дубль из APK, локал цел
+            } else if (!f.renameTo(dst)) {
+                copyRecursive(f, dst);              // fallback через copy
+                deleteRecursive(f);
+            }
+        }
+    }
+
+    private void deleteRecursive(File f) {
+        if (f.isDirectory()) {
+            File[] ch = f.listFiles();
+            if (ch != null) for (File c : ch) deleteRecursive(c);
+        }
+        f.delete();
+    }
+
+    private void copyRecursive(File src, File dst) {
+        if (src.isDirectory()) {
+            dst.mkdirs();
+            File[] ch = src.listFiles();
+            if (ch != null) for (File c : ch) copyRecursive(c, new File(dst, c.getName()));
+            return;
+        }
+        try {
+            InputStream in = new FileInputStream(src);
+            OutputStream out = new FileOutputStream(dst);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.close(); in.close();
+        } catch (Exception e) { }
     }
 
     private void copyAssets(String path) {
@@ -138,9 +193,9 @@ public class MainActivity extends Activity {
             if (typeface != null) paint.setTypeface(typeface);
             else paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
             float cx = rw / 2f, cy = size + rh * 0.03f;
-            paint.setColor(Color.argb(160, 0, 0, 0));      // тень-подложка
+            paint.setColor(Color.argb(160, 0, 0, 0));
             c.drawText("SukaEngine", cx + 3, cy + 3, paint);
-            paint.setColor(Color.WHITE);                    // сам заголовок
+            paint.setColor(Color.WHITE);
             c.drawText("SukaEngine", cx, cy, paint);
             paint.setTextAlign(Paint.Align.LEFT);
         }
