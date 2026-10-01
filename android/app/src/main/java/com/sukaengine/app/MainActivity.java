@@ -10,7 +10,9 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RadialGradient;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.InputType;
@@ -93,7 +95,6 @@ public class MainActivity extends Activity {
         } catch (Exception e) { }
     }
 
-    // mode: 0=text, 1=name, 2=action
     private void openDialog(final String title, final String current, final int mode) {
         g_dialog = true;
         runOnUiThread(() -> {
@@ -207,11 +208,25 @@ public class MainActivity extends Activity {
             c.drawText("step=" + g_stepLen + "  head=[" + g_stepHead + "]", x, y + sz + 6, paint);
         }
 
+        private Bitmap loadBitmap(String path) {
+            if (path == null || path.isEmpty()) return null;
+            Bitmap bm = bitmaps.get(path);
+            if (bm != null) return bm;
+            if (path.startsWith("/")) bm = BitmapFactory.decodeFile(path);
+            else {
+                bm = BitmapFactory.decodeFile(root + "/projects/" + GAME_DIR + "/" + path);
+                if (bm == null) bm = BitmapFactory.decodeFile(root + "/" + path);
+            }
+            if (bm != null) bitmaps.put(path, bm);
+            return bm;
+        }
+
         private void drawLine(Canvas c, String line) {
             if (!line.startsWith("DRAW ")) return;
-            String[] p = line.substring(5).split("\\|");
+            String[] p = line.substring(5).split("\\|", -1);
             try {
                 if (p[0].equals("bg")) { c.drawColor(Color.parseColor(p[1])); return; }
+
                 if (p[0].equals("text")) {
                     paint.setColor(Color.parseColor(p[5]));
                     float fs = Float.parseFloat(p[4]);
@@ -221,46 +236,70 @@ public class MainActivity extends Activity {
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     if (ang != 0f) { c.save(); c.translate(x, y); c.rotate(ang); c.drawText(p[1], 0, fs, paint); c.restore(); }
                     else c.drawText(p[1], x, y + fs, paint);
-                } else if (p[0].equals("rect")) {
+                }
+                else if (p[0].equals("rect")) {
                     paint.setColor(Color.parseColor(p[5]));
                     float x = Float.parseFloat(p[1]), y = Float.parseFloat(p[2]);
                     float w = Float.parseFloat(p[3]), h = Float.parseFloat(p[4]);
                     float ang = p.length > 6 ? Float.parseFloat(p[6]) : 0f;
                     if (ang != 0f) { c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang); c.drawRect(-w/2, -h/2, w/2, h/2, paint); c.restore(); }
                     else c.drawRect(new RectF(x, y, x + w, y + h), paint);
-                } else if (p[0].equals("shape")) {
+                }
+                else if (p[0].equals("shape")) {
                     String shape = p[1];
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     paint.setColor(Color.parseColor(p[6]));
                     float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
+
+                    if (shape.equals("glow")) {   // LIGHT: радиальное свечение
+                        int col = Color.parseColor(p[6]);
+                        int r = (col >> 16) & 255, g2 = (col >> 8) & 255, b2 = col & 255;
+                        RadialGradient rg = new RadialGradient(x + w/2, y + h/2, Math.max(w, h)/2,
+                            Color.argb(200, r, g2, b2), Color.argb(0, r, g2, b2), Shader.TileMode.CLAMP);
+                        paint.setShader(rg);
+                        c.drawOval(new RectF(x, y, x + w, y + h), paint);
+                        paint.setShader(null);
+                        return;
+                    }
+
                     c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang);
                     if (shape.equals("circle")) c.drawOval(new RectF(-w/2, -h/2, w/2, h/2), paint);
                     else if (shape.equals("diamond")) { Path pa = new Path(); pa.moveTo(0, -h/2); pa.lineTo(w/2, 0); pa.lineTo(0, h/2); pa.lineTo(-w/2, 0); pa.close(); c.drawPath(pa, paint); }
                     else if (shape.equals("triangle")) { Path pa = new Path(); pa.moveTo(0, -h/2); pa.lineTo(w/2, h/2); pa.lineTo(-w/2, h/2); pa.close(); c.drawPath(pa, paint); }
                     else c.drawRect(new RectF(-w/2, -h/2, w/2, h/2), paint);
                     c.restore();
-                } else if (p[0].equals("button")) {
+                }
+                else if (p[0].equals("button")) {
+                    if (p.length < 7) return;
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
-                    paint.setColor(Color.parseColor(p[6]));
-                    float r = 12f;
-                    c.drawRoundRect(new RectF(x, y, x + w, y + h), r, r, paint);
                     int fill = Color.parseColor(p[6]);
+                    float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
+                    String tex = p.length > 8 ? p[8] : "";
+
+                    c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang);
+                    paint.setColor(fill);
+                    c.drawRoundRect(new RectF(-w/2, -h/2, w/2, h/2), 12f, 12f, paint);
+                    if (!tex.isEmpty()) {
+                        Bitmap bm = loadBitmap(tex);
+                        if (bm != null) c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint);
+                    }
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
                     paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
                     paint.setTextSize(Math.min(30f, h * 0.45f));
                     paint.setTextAlign(Paint.Align.CENTER);
                     if (typeface != null) paint.setTypeface(typeface);
-                    c.drawText(p[1], x + w / 2, y + h / 2 + paint.getTextSize() * 0.35f, paint);
+                    c.drawText(p[1], 0, paint.getTextSize() * 0.35f, paint);
                     paint.setTextAlign(Paint.Align.LEFT);
-                } else if (p[0].equals("tex")) {
-                    Bitmap bm = bitmaps.get(p[1]);
-                    if (bm == null) { bm = BitmapFactory.decodeFile(root + "/projects/" + GAME_DIR + "/" + p[1]); if (bm != null) bitmaps.put(p[1], bm); }
+                    c.restore();
+                }
+                else if (p[0].equals("tex")) {
+                    Bitmap bm = loadBitmap(p[1]);
                     if (bm != null) {
                         float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                         float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
-                        float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
+                        float ang = p.length > 6 ? Float.parseFloat(p[6]) : 0f;
                         if (ang != 0f) { c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang); c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint); c.restore(); }
                         else c.drawBitmap(bm, null, new RectF(x, y, x + w, y + h), paint);
                     }
@@ -290,4 +329,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                            }
+                }
