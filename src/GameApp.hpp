@@ -5,6 +5,7 @@
 #include <vector>
 #include <utility>
 #include <set>
+#include <algorithm>
 
 #include "Core.hpp"
 #include "Project.hpp"
@@ -219,11 +220,10 @@ private:
         project_ = pi; fontPath_ = pi.rootPath + "/" + pi.defaultFont;
         if (!fileExists(fontPath_)) fontPath_ = PROJECT_ROOT + "/assets/fonts/Ubuntu-Regular.ttf";
         sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
-        // FIX-2: редактор грузит ИГРОВУЮ сцену (main.json), а не mainScene (у DemoGame это menu.json)
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; pendingText_ = false;
+        showCreate_ = false; pendingText_ = false; fsPath_ = "";   // сброс браузера
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -233,18 +233,20 @@ private:
         auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
             auto l = std::make_unique<Label>(); l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y}; editorScene_.root->addChild(std::move(l));
         };
-        // FIX-1: фон файлового менеджера в RGBA (было 0xFF0E0E16 = красный из-за ARGB)
-        auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = 0x0E0E16FFu; fsBg->w = 280; fsBg->h = 130; fsBg->position = Vec2{150, 623}; editorScene_.root->addChild(std::move(fsBg));
+        auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = 0x0E0E16FFu; fsBg->w = 284; fsBg->h = 320; fsBg->position = Vec2{150, 536}; editorScene_.root->addChild(std::move(fsBg));
         addLbl("TabScene", "Scene", 20, 8, 20, GODOT_ORANGE); addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink); addLbl("TabScr", "Script", 210, 8, 20, th.ink); addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
         addLbl("DHdr", "Scene", 10, 40, 18, th.ink); addLbl("IHdr", "Inspector", 900, 40, 18, th.ink);
+
         std::vector<HierRow> hier;
         if (editor_ && editor_->scene() && editor_->scene()->root) collectHier(*editor_->scene()->root, 0, hier);
         Node* selNode = editor_ ? editor_->selected() : nullptr; std::string sel = selNode ? selNode->name : std::string{};
         for (size_t i = 0; i < hier.size(); ++i) {
+            if (i >= 10) { addLbl("HierMore", "  ...", 8, 64 + (float)i * 30, 16, th.ink); break; }   // обрезка древа
             std::string pad(hier[i].depth * 2, ' '); UiButton b; b.touch.id = "h" + std::to_string(i);
             b.touch.rect = Rect{8, 64 + (float)i * 30, 284, 28}; b.text = pad + hier[i].name + "   " + hier[i].type; b.action = "ed_select:" + hier[i].name;
             b.color = (sel == hier[i].name) ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b);
         }
+
         Node2D* s = (editor_ && !sel.empty()) ? editor_->find2d(sel) : nullptr;
         if (s) {
             addLbl("InName", s->name, 900, 64, 22, GODOT_ORANGE); addLbl("InType", std::string(s->typeName()), 900, 92, 16, th.ink);
@@ -261,7 +263,6 @@ private:
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*48, 320, 44, 32}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
 
-        // FIX-3: тулбар единым курсором tx, шаг 46, ширина 44 -> конец 898 < 900, Inspector чист, наложений нет
         float tx = 300;
         const char* shapes[4] = { "square","circle","diamond","triangle" }; const char* shTxt[4] = { "SQ","CI","DI","TR" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("sh")+std::to_string(k); b.touch.rect = Rect{tx,34,44,26}; tx+=46; b.text = shTxt[k]; b.action = std::string("ed_shape:")+shapes[k]; b.color = th.button; editorScene_.ui.push_back(b); }
@@ -274,14 +275,37 @@ private:
         { UiButton b; b.touch.id="txt"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="TXT"; b.action="edit_text"; b.color=th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="scr"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SCR"; b.action="ed_scr"; b.color=th.button; editorScene_.ui.push_back(b); }
 
-        // FIX-4: панель создания в СВОБОДНУЮ нижнюю полосу (y560..600, x300..892), а не под вьюпорт
         if (showCreate_) {
             const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
             const char* cs[6] = { "square","circle","diamond","triangle","","" };
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
             for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*98, 560, 92, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
         }
-        addLbl("FsHdr", "FileSystem", 10, 566, 18, th.ink); addLbl("Fs1", "res/", 10, 592, 16, th.ink); addLbl("Fs2", "  scenes/", 10, 614, 16, th.ink); addLbl("Fs3", "  assets/", 10, 636, 16, th.ink); addLbl("Fs4", "  scripts/", 10, 658, 16, th.ink);
+
+        // ---- живой FileSystem (левая нижняя колонка) ----
+        addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
+        std::string shown = fsPath_.empty() ? std::string("res/") : ("res/" + fsPath_);
+        addLbl("FsPath", shown, 10, 406, 15, GODOT_ORANGE);
+        float fy = 428; const float STEP = 28; int rows = 0; const int MAXROWS = 8;
+        if (!fsPath_.empty()) {
+            UiButton up; up.touch.id = "fsup"; up.touch.rect = Rect{8, fy, 284, STEP-2}; up.text = ".."; up.action = "fs_up"; up.color = th.button; editorScene_.ui.push_back(up); fy += STEP; ++rows;
+        }
+        std::string abs = project_.rootPath + "/" + fsPath_;
+        std::vector<FileEntry> items = FileBrowser::list(abs);
+        for (const auto& it : items) {
+            if (rows >= MAXROWS) { addLbl("FsMore", "  ...", 10, fy, 15, th.ink); break; }
+            std::string rel = fsPath_ + it.name;
+            if (it.isDir) {
+                UiButton b; b.touch.id = "fsd" + std::to_string(rows); b.touch.rect = Rect{8, fy, 284, STEP-2};
+                b.text = "/ " + it.name; b.action = "fs_enter:" + it.name; b.color = th.button; editorScene_.ui.push_back(b);
+            } else if (it.name.size() > 5 && it.name.compare(it.name.size()-5, 5, ".json") == 0) {
+                UiButton b; b.touch.id = "fsf" + std::to_string(rows); b.touch.rect = Rect{8, fy, 284, STEP-2};
+                b.text = "  " + it.name; b.action = "fs_open:" + rel; b.color = th.accent; editorScene_.ui.push_back(b);
+            } else {
+                addLbl(("fsx"+std::to_string(rows)).c_str(), "  " + it.name, 10, fy+4, 15, th.ink);
+            }
+            fy += STEP; ++rows;
+        }
     }
 
     void processEditorActions() {
@@ -289,7 +313,21 @@ private:
         Node* sn = editor_->selected(); std::string sel = sn ? sn->name : std::string{}; bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
-            if (b.action == "create_open") { showCreate_ = !showCreate_; changed = true; }
+            if (b.action == "fs_up") {
+                size_t sl = fsPath_.find_last_of('/');
+                fsPath_ = (sl == std::string::npos) ? "" : fsPath_.substr(0, sl + 1);
+                changed = true;
+            }
+            else if (b.action.rfind("fs_enter:", 0) == 0) { fsPath_ += b.action.substr(9) + "/"; changed = true; }
+            else if (b.action.rfind("fs_open:", 0) == 0) {
+                std::string rel = b.action.substr(8);
+                if (sceneMgr_->restartScene(rel, resources_)) {
+                    editor_->attach(sceneMgr_->current());
+                    scripted_.clear(); showCreate_ = false; dragging_ = false; dragNode_ = nullptr;
+                    changed = true;
+                }
+            }
+            else if (b.action == "create_open") { showCreate_ = !showCreate_; changed = true; }
             else if (b.action == "edit_text") { if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } }
             else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
             else if (b.action.rfind("create:", 0) == 0) {
@@ -345,6 +383,7 @@ private:
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
     bool showCreate_ = false, dragging_ = false, pendingText_ = false; Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
+    std::string fsPath_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
 
