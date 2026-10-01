@@ -80,13 +80,13 @@ public:
         Scene* cur = uiScene();
         if (!cur) return;
 
-        // TOUCH-FIX: в игре тап по объекту с action = нажатие кнопки
         if (appMode_ == AppMode::Game && t.action == RawTouch::Action::Down && sceneMgr_ && sceneMgr_->current()) {
             Scene* gs = sceneMgr_->current();
             float wx, wy; unprojGame(*gs, x, y, wx, wy);
             std::string hit = hitTest(gs->root.get(), wx, wy);
             if (!hit.empty()) {
-                Node2D* n = gs->root->findNode(hit) ? dynamic_cast<Node2D*>(gs->root->findNode(hit)) : nullptr;
+                Node* fn = gs->root->findNode(hit);
+                Node2D* n = fn ? dynamic_cast<Node2D*>(fn) : nullptr;
                 if (n && !n->action.empty()) { pendingNodeAction_ = n->action; return; }
             }
         }
@@ -100,11 +100,10 @@ public:
                 float scx, scy; proj(*es, g->position.x, g->position.y, scx, scy);
 
                 if (t.action == RawTouch::Action::Down) {
-                    // PAR-FIX: режим выбора родителя — тап по объекту цепляет к нему
                     if (pickParent_ && !pickChild_.empty()) {
                         float wx, wy; unproj(*es, x, y, wx, wy);
                         std::string hit = hitTest(es->root.get(), wx, wy);
-                        if (!hit.empty() && hit != pickChild_) { doAttach(pickChild_, hit); }
+                        if (!hit.empty() && hit != pickChild_) doAttach(pickChild_, hit);
                         pickParent_ = false; pickChild_.clear();
                         buildEditorPanels(); input_.setUi(&editorScene_.ui);
                         return;
@@ -122,11 +121,18 @@ public:
                     } else if (manip_ == Manip::Scale) {
                         float hw = (g->w * g->scale.x) * 0.46875f / 2;
                         float hh = (g->h * g->scale.y) * 0.46875f / 2;
-                        if (std::fabs((x - (scx + hw + 24))) < 26 && std::fabs(dy) < 26) {   // ручка X
-                            gizmoSclX_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSX_ = g->scale.x; return;
+                        // SCL-FIX: хватаем ручки и считаем от стартовой дистанции (без убегания)
+                        if (std::fabs(x - (scx + hw + 24)) < 28 && std::fabs(dy) < 28) {
+                            gizmoSclX_ = true;
+                            gizmoStartDist_ = dist > 1 ? dist : 1;
+                            gizmoStartSX_ = g->scale.x;
+                            return;
                         }
-                        if (std::fabs((y - (scy + hh + 24))) < 26 && std::fabs(dx) < 26) {   // ручка Y
-                            gizmoSclY_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSY_ = g->scale.y; return;
+                        if (std::fabs(y - (scy + hh + 24)) < 28 && std::fabs(dx) < 28) {
+                            gizmoSclY_ = true;
+                            gizmoStartDist_ = dist > 1 ? dist : 1;
+                            gizmoStartSY_ = g->scale.y;
+                            return;
                         }
                     } else {
                         if (std::fabs(dy) < 16 && dx > 8 && dx < 64) { lockAxis_ = 1; dragging_ = true; dragNode_ = g; editor_->select(g->name); return; }
@@ -139,14 +145,12 @@ public:
                         g->rotation = gizmoStartRot_ + (std::atan2(dy, dx) - gizmoStartAngle_);
                         return;
                     }
-                    if (gizmoSclX_) {
-                        float f = (x - scx) / ((g->w * 0.46875f / 2) + 24);
-                        if (f > 0.05f) g->scale.x = gizmoStartSX_ * f;
-                        return;
-                    }
-                    if (gizmoSclY_) {
-                        float f = (y - scy) / ((g->h * 0.46875f / 2) + 24);
-                        if (f > 0.05f) g->scale.y = gizmoStartSY_ * f;
+                    if (gizmoSclX_ || gizmoSclY_) {
+                        float dist = std::sqrt((x-scx)*(x-scx) + (y-scy)*(y-scy));
+                        float f = dist / gizmoStartDist_;
+                        if (f < 0.05f) f = 0.05f;
+                        if (gizmoSclX_) g->scale.x = gizmoStartSX_ * f;
+                        if (gizmoSclY_) g->scale.y = gizmoStartSY_ * f;
                         return;
                     }
                 }
@@ -220,7 +224,6 @@ private:
         return "";
     }
 
-    // PAR-FIX: прицепить/отцепить узел (группы)
     void doAttach(const std::string& child, const std::string& parent) {
         if (!editor_ || !editor_->scene() || !editor_->scene()->root) return;
         Node* root = editor_->scene()->root.get();
@@ -468,10 +471,11 @@ private:
                 addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 244, 16, th.ink);
                 addLbl("InTex", "Texture: " + (ub->texture.empty() ? std::string("(none)") : ub->texture), 900, 268, 16, th.ink);
                 const char* nl[4] = { "X","Y","W","H" };
+                const char* nk[4] = { "bx","by","bw","bh" };
                 for (int k = 0; k < 4; ++k) {
                     UiButton b; b.touch.id = std::string("numbtn")+std::to_string(k);
                     b.touch.rect = Rect{900 + (float)k * 62, 300, 58, 28};
-                    b.text = nl[k]; b.action = std::string("num:") + (k==0?"bx":k==1?"by":k==2?"bw":"bh");
+                    b.text = nl[k]; b.action = std::string("num:") + nk[k];
                     b.color = th.button; editorScene_.ui.push_back(b);
                 }
             }
@@ -488,7 +492,6 @@ private:
                 addLbl("InTex", "Texture: " + (s->texture.empty() ? std::string("(none)") : s->texture), 900, 268, 16, th.ink);
                 addLbl("InAct", "Touch: " + (s->action.empty() ? std::string("(none)") : s->action), 900, 292, 16, th.ink);
                 if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 316, 16, th.ink);
-                // NUM-FIX: числовые поля инспектора
                 const char* nl[6] = { "X","Y","ROT","SCL","W","H" };
                 const char* na[6] = { "nx","ny","nrot","nscl","nw","nh" };
                 for (int k = 0; k < 6; ++k) {
@@ -525,7 +528,6 @@ private:
         { UiButton b; b.touch.id="scr"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SCR"; b.action="ed_scr"; b.color=th.button; editorScene_.ui.push_back(b); }
 
         if (showCreate_) {
-            // BTN убран; добавлен GRP (пустой якорь для групп)
             const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
             const char* cs[6] = { "square","circle","diamond","triangle","","" };
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
@@ -767,13 +769,17 @@ private:
                     out += "DRAW rect|" + std::to_string((int)(px-3)) + "|" + std::to_string((int)(py-3)) + "|6|6|#FF8800|0\n";
                 }
             } else {
-                // SCL-FIX: две ручки — справа (X) и снизу (Y)
                 float hw = (g->w * g->scale.x)*S/2, hh = (g->h * g->scale.y)*S/2;
                 out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-1)) + "|" + std::to_string((int)(hw+24)) + "|2|#4CC9F0|0\n";
                 out += "DRAW rect|" + std::to_string((int)(cx+hw+16)) + "|" + std::to_string((int)(cy-8)) + "|16|16|#4CC9F0|0\n";
                 out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24)) + "|#4CC9F0|0\n";
                 out += "DRAW rect|" + std::to_string((int)(cx-8)) + "|" + std::to_string((int)(cy+hh+16)) + "|16|16|#4CC9F0|0\n";
             }
+        }
+        // GROUP-CLARITY: баннер состояния выбора родителя
+        if (pickParent_ && !pickChild_.empty()) {
+            out += "DRAW rect|300|64|592|26|#FF8800|0\n";
+            out += "DRAW text|PARENT FOR: " + pickChild_ + "  ->  tap object or row|306|68|16|#1A1A2E|0\n";
         }
     }
     void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH, float camX, float camY, std::string& out) {
@@ -793,6 +799,14 @@ private:
             float sw = d->w * d->scale.x, sh = d->h * d->scale.y;
             float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;
             float w = sw*S, h = sh*S, rx = cx - w/2, ry = cy - h/2;
+            // GROUP-CLARITY: невидимые якоря (GRP) видны в редакторе серым контуром
+            if (!d->hasAppearance() && tn == "Node2D") {
+                if (cx >= VX0 && cx <= VX0+VW && cy >= VY0 && cy <= VY0+VH) {
+                    out += "DRAW rect|" + std::to_string((int)(cx-10)) + "|" + std::to_string((int)(cy-2)) + "|20|4|#808080|0\n";
+                    out += "DRAW rect|" + std::to_string((int)(cx-2)) + "|" + std::to_string((int)(cy-10)) + "|4|20|#808080|0\n";
+                    out += "DRAW text|" + d->name + "|" + std::to_string((int)(cx+12)) + "|" + std::to_string((int)(cy+4)) + "|12|#808080|0\n";
+                }
+            }
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
                 if (tn == "Label") out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|14|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
