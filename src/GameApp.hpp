@@ -22,10 +22,21 @@
 
 namespace suka {
 
+// NEW: затемнение цвета темы (формат RGBA, R в старшем байте — подтверждено прошлым крестом)
+inline unsigned dimColor(unsigned c, float k) {
+    unsigned r = (unsigned)(((c >> 24) & 255) * k);
+    unsigned g = (unsigned)(((c >> 16) & 255) * k);
+    unsigned b = (unsigned)(((c >> 8)  & 255) * k);
+    unsigned a = (c & 255);
+    if (r > 255) r = 255; if (g > 255) g = 255; if (b > 255) b = 255;
+    return (r << 24) | (g << 16) | (b << 8) | a;
+}
+
 class GameApp {
 public:
     enum class Mode { Console, String };
     enum class AppMode { Hub, Game, Editor };
+    enum class Manip { Move, Rotate, Scale };          // NEW: режим стрелок
 
     bool init(Mode mode, const std::string& gameDir) {
         (void)mode;
@@ -60,13 +71,13 @@ public:
             const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
             const float CX = VX0 + VW / 2, CY = VY0 + VH / 2, S = 0.46875f;
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
-            Scene* es = editor_ ? editor_->scene() : nullptr;        // DRAG-FIX: сцена, не панели
+            Scene* es = editor_ ? editor_->scene() : nullptr;
             if (t.action == RawTouch::Action::Down && inVP && es && es->root) {
                 float wx = 640 + (x - CX) / S, wy = 360 + (y - CY) / S;
                 std::string hit = hitTest(es->root.get(), wx, wy);
                 if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); }
             } else if (t.action == RawTouch::Action::Move && dragging_ && dragNode_) {
-                dragNode_->position.x = 640 + (x - CX) / S;
+                dragNode_->position.x = 640 + (x - CX) / S;   // drag = позиция всегда
                 dragNode_->position.y = 360 + (y - CY) / S;
             } else if (t.action == RawTouch::Action::Up) { dragging_ = false; dragNode_ = nullptr; }
         }
@@ -238,7 +249,7 @@ private:
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; showBg_ = false; pendingText_ = false; fsPath_ = "";
+        showCreate_ = false; showBg_ = false; pendingText_ = false; fsPath_ = ""; manip_ = Manip::Move;   // NEW: сброс режима
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -248,9 +259,21 @@ private:
         auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
             auto l = std::make_unique<Label>(); l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y}; editorScene_.root->addChild(std::move(l));
         };
-        auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = 0x0E0E16FFu; fsBg->w = 284; fsBg->h = 320; fsBg->position = Vec2{150, 536}; editorScene_.root->addChild(std::move(fsBg));
+        // NEW: фон файлового менеджера по теме (затемнение bg), не хардкод
+        auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = dimColor(th.bg, 0.6f); fsBg->w = 284; fsBg->h = 320; fsBg->position = Vec2{150, 536}; editorScene_.root->addChild(std::move(fsBg));
         addLbl("TabScene", "Scene", 20, 8, 20, GODOT_ORANGE); addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink); addLbl("TabScr", "Script", 210, 8, 20, th.ink); addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
         addLbl("DHdr", "Scene", 10, 40, 18, th.ink); addLbl("IHdr", "Inspector", 900, 40, 18, th.ink);
+
+        // NEW: три кнопки режима под SukaEngine справа-вверху
+        const char* mlab[3] = { "POS","ROT","SCL" };
+        Manip mval[3] = { Manip::Move, Manip::Rotate, Manip::Scale };
+        for (int k = 0; k < 3; ++k) {
+            UiButton b; b.touch.id = std::string("manipbtn")+std::to_string(k);
+            b.touch.rect = Rect{1090 + (float)k * 60, 34, 56, 28};
+            b.text = mlab[k]; b.action = std::string("manip:") + (k==0?"move":k==1?"rotate":"scale");
+            b.color = (manip_ == mval[k]) ? GODOT_ORANGE : th.button;
+            editorScene_.ui.push_back(b);
+        }
 
         std::vector<HierRow> hier;
         if (editor_ && editor_->scene() && editor_->scene()->root) collectHier(*editor_->scene()->root, 0, hier);
@@ -275,7 +298,6 @@ private:
             if (scripted_.count(sel)) addLbl("InScript", "script: scripts/" + sel + ".lua", 900, 294, 16, GODOT_ORANGE);
         } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
 
-        // BG-FIX: строка фона сцены + кнопка BG в инспекторе
         std::string sb = (editor_ && editor_->scene() && editor_->scene()->bgSet()) ? editor_->scene()->bg : std::string("(theme)");
         addLbl("InBg", "scene bg: " + sb, 900, 320, 16, th.ink);
         { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 344, 120, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
@@ -301,7 +323,6 @@ private:
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
             for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*98, 560, 92, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
         }
-        // BG-FIX: палитра фона сцены (взаимоисключающая с +)
         if (showBg_) {
             const char* bgs[6] = { "#FFF3E0","#111111","#16213E","#2EC4B6","#D62828","#87CEEB" };
             for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("bgsw")+std::to_string(k); b.touch.rect = Rect{300+(float)k*84, 560, 80, 40}; b.text = ""; b.action = std::string("bg_set:")+bgs[k]; b.color = parseColor(bgs[k]); editorScene_.ui.push_back(b); }
@@ -354,6 +375,10 @@ private:
                     changed = true;
                 }
             }
+            // NEW: переключение режима
+            else if (b.action == "manip:move")   { manip_ = Manip::Move;   changed = true; }
+            else if (b.action == "manip:rotate") { manip_ = Manip::Rotate; changed = true; }
+            else if (b.action == "manip:scale")  { manip_ = Manip::Scale;  changed = true; }
             else if (b.action == "create_open") { showCreate_ = !showCreate_; showBg_ = false; changed = true; }
             else if (b.action == "bg_open") { showBg_ = !showBg_; showCreate_ = false; changed = true; }
             else if (b.action.rfind("bg_set:", 0) == 0) { if (editor_->scene()) editor_->scene()->bg = b.action.substr(7); showBg_ = false; changed = true; }
@@ -369,7 +394,23 @@ private:
             else if (b.action.rfind("ed_select:", 0) == 0) { editor_->select(b.action.substr(10)); changed = true; }
             else if (b.action.rfind("ed_shape:", 0) == 0) { if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; } }
             else if (b.action.rfind("ed_color:", 0) == 0) { if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; } }
-            else if (b.action.rfind("ed_move:", 0) == 0) { std::string d = b.action.substr(8); float dx = (d=="l")?-16:(d=="r")?16:0; float dy = (d=="u")?-16:(d=="d")?16:0; editor_->moveSelected(dx, dy); changed = true; }
+            // NEW: стрелки зависят от режима
+            else if (b.action.rfind("ed_move:", 0) == 0) {
+                std::string d = b.action.substr(8);
+                Node2D* n = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
+                if (manip_ == Manip::Move) {
+                    float dx = (d=="l")?-16:(d=="r")?16:0;
+                    float dy = (d=="u")?-16:(d=="d")?16:0;
+                    editor_->moveSelected(dx, dy);
+                } else if (manip_ == Manip::Rotate && n) {
+                    float dr = (d=="l")?-15.0f:(d=="r")?15.0f:0.0f;
+                    n->rotation += dr * 3.14159265f / 180.0f;
+                } else if (manip_ == Manip::Scale && n) {
+                    float f = (d=="u")?1.1f:(d=="d")?(1.0f/1.1f):1.0f;
+                    n->scale.x *= f; n->scale.y *= f;
+                }
+                changed = true;
+            }
             else if (b.action == "ed_del") { if (!sel.empty()) { editor_->deleteNode(sel); changed = true; } }
             else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/scenes/main.json"); }
             else if (b.action == "ed_back") { appMode_ = AppMode::Hub; rebuildHub(); return; }
@@ -379,7 +420,7 @@ private:
 
     void emitViewport(const Scene& sc, std::string& out) {
         const float VX0 = 300, VY0 = 64, VW = 592, VH = 492; const float CX = VX0 + VW/2, CY = VY0 + VH/2, S = 0.46875f;
-        if (sc.bgSet()) out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|" + sc.bg + "\n";  // BG-FIX: фон сцены в окне
+        if (sc.bgSet()) out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|" + sc.bg + "\n";
         out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B\n";
         for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D\n"; }
         for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D\n"; }
@@ -391,7 +432,8 @@ private:
         if (tn != "Node" && tn != "Camera2D") {
             const Node2D* d = static_cast<const Node2D*>(n);
             float cx = CX + (d->position.x - 640)*S, cy = CY + (d->position.y - 360)*S, w = d->w*S, h = d->h*S, rx = cx - w/2, ry = cy - h/2;
-            bool vis = !(rx+w < VX0 || rx > VX0+VW || ry+h < VY0 || ry > VY0+VH);
+            // NEW: строгая отсечка — объект рисуется ТОЛЬКО если целиком внутри вьюпорта (чинит наезжающий красный)
+            bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
                 if (tn == "Label") out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|14|" + colorToHex(d->color) + "\n";
                 else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555\n";
@@ -413,6 +455,7 @@ private:
     AppMode appMode_ = AppMode::Hub;
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
+    Manip manip_ = Manip::Move;                                    // NEW
     bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false; Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
