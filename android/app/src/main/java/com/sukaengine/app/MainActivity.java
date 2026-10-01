@@ -33,12 +33,10 @@ public class MainActivity extends Activity {
     private static final float LOGIC_W = 1280f;
     private static final float LOGIC_H = 720f;
 
-    // фолбэк на случай, если AssetManager.list("") вернёт пусто (баг части устройств)
     private static final String[] FALLBACK_ROOT = {
         "DemoGame", "Game1", "Game2", "Game3", "Game4", "fonts", "sounds"
     };
 
-    // ---- диагностические поля (видны на экране под заголовком) ----
     private static volatile boolean g_initOk = false;
     private static volatile int g_fileCount = -1;
     private static volatile boolean g_hasProject = false;
@@ -86,7 +84,6 @@ public class MainActivity extends Activity {
           | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     }
 
-    // ---- раскладка APK-assets в структуру, которую ждёт движок ----
     private void restructure() {
         File root = getFilesDir();
         File[] top = root.listFiles();
@@ -138,7 +135,7 @@ public class MainActivity extends Activity {
             AssetManager am = getAssets();
             String[] list = am.list(path);
             if ((list == null || list.length == 0) && path.isEmpty()) {
-                list = FALLBACK_ROOT;            // обход бага list("")==пусто
+                list = FALLBACK_ROOT;
             }
             if (list == null) return;
             if (list.length == 0) {
@@ -207,11 +204,12 @@ public class MainActivity extends Activity {
                     for (String line : frame.split("\n")) drawLine(c, line);
                 }
 
-                boolean showTitle = frame.contains("START") || frame.contains("Play")
-                                 || frame.contains("Edit") || frame.contains("NEW")
-                                 || frame.contains("Theme") || frame.contains("MENU");
-                if (showTitle) drawTitle(c, rw, rh);
-                drawDiag(c, rw, rh);
+                boolean title = frame.contains("START") || frame.contains("Play")
+                             || frame.contains("Edit") || frame.contains("NEW")
+                             || frame.contains("Theme") || frame.contains("MENU");
+                if (title) drawTitle(c, rw, rh);
+                boolean diag = frame.contains("PROJECTS");
+                if (diag) drawDiag(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
                 try { Thread.sleep(16); } catch (Exception e) { return; }
             }
@@ -231,17 +229,16 @@ public class MainActivity extends Activity {
             paint.setTextAlign(Paint.Align.LEFT);
         }
 
-        // ---- диагностика: две строки слева под заголовком ----
         private void drawDiag(Canvas c, int rw, int rh) {
-            float sz = Math.max(22f, rh * 0.03f);
+            float sz = Math.max(20f, rh * 0.028f);
             paint.setTextSize(sz);
             paint.setTextAlign(Paint.Align.LEFT);
             if (typeface != null) paint.setTypeface(typeface);
             paint.setColor(Color.rgb(255, 224, 102));
-            float x = 20f, y = rh * 0.16f;
+            float x = 20f, y = rh - 50f;
             c.drawText("init=" + g_initOk + "  files=" + g_fileCount
                      + "  proj=" + g_hasProject + "  font=" + g_hasFont, x, y, paint);
-            c.drawText("step=" + g_stepLen + "  head=[" + g_stepHead + "]", x, y + sz + 8, paint);
+            c.drawText("step=" + g_stepLen + "  head=[" + g_stepHead + "]", x, y + sz + 6, paint);
         }
 
         private void drawLine(Canvas c, String line) {
@@ -283,15 +280,15 @@ public class MainActivity extends Activity {
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     paint.setColor(Color.parseColor(p[6]));
-                    float r = Math.min(w, h) / 2f;
+                    float r = 12f;                                   // ← прямоугольные, чуть скруглённые
                     c.drawRoundRect(new RectF(x, y, x + w, y + h), r, r, paint);
                     int fill = Color.parseColor(p[6]);
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
                     paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
-                    paint.setTextSize(30);
+                    paint.setTextSize(Math.min(30f, h * 0.45f));
                     paint.setTextAlign(Paint.Align.CENTER);
                     if (typeface != null) paint.setTypeface(typeface);
-                    c.drawText(p[1], x + w / 2, y + h / 2 + 10, paint);
+                    c.drawText(p[1], x + w / 2, y + h / 2 + paint.getTextSize() * 0.35f, paint);
                     paint.setTextAlign(Paint.Align.LEFT);
                 } else if (p[0].equals("tex")) {
                     Bitmap bm = bitmaps.get(p[1]);
@@ -319,4 +316,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                    }
+                                     }
