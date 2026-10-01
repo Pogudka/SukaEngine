@@ -231,6 +231,11 @@ public:
                 if (jsonGetNumber(obj, "w", aw)) node2d->w = aw;
                 if (jsonGetNumber(obj, "h", ah)) node2d->h = ah;
 
+                float rotDeg = 0, scx = 1, scy = 1;                 // ROT/SCL-FIX
+                if (jsonGetNumber(obj, "rotation", rotDeg)) node2d->rotation = rotDeg * 3.14159265f / 180.0f;
+                if (jsonGetNumber(obj, "scale_x", scx)) node2d->scale.x = scx;
+                if (jsonGetNumber(obj, "scale_y", scy)) node2d->scale.y = scy;
+
                 scene.root->addChild(std::move(node2d));
             }
         }
