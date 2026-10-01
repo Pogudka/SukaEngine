@@ -33,16 +33,41 @@ public class MainActivity extends Activity {
     private static final float LOGIC_W = 1280f;
     private static final float LOGIC_H = 720f;
 
+    // фолбэк на случай, если AssetManager.list("") вернёт пусто (баг части устройств)
+    private static final String[] FALLBACK_ROOT = {
+        "DemoGame", "Game1", "Game2", "Game3", "Game4", "fonts", "sounds"
+    };
+
+    // ---- диагностические поля (видны на экране под заголовком) ----
+    private static volatile boolean g_initOk = false;
+    private static volatile int g_fileCount = -1;
+    private static volatile boolean g_hasProject = false;
+    private static volatile boolean g_hasFont = false;
+    private static volatile int g_stepLen = -1;
+    private static volatile String g_stepHead = "";
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+
         copyAssets("");
         restructure();
-        String root = getFilesDir().getAbsolutePath();
-        nativeInit(root, GAME_DIR);
-        setContentView(new GameView(this, root));
+
+        File root = getFilesDir();
+        g_fileCount = countEntries(root);
+        g_hasProject = new File(root, "projects/" + GAME_DIR + "/project.json").exists();
+        g_hasFont = new File(root, "assets/fonts/Ubuntu-Regular.ttf").exists();
+
+        g_initOk = nativeInit(root.getAbsolutePath(), GAME_DIR);
+
+        setContentView(new GameView(this, root.getAbsolutePath()));
         hideSystemBars();
+    }
+
+    private int countEntries(File d) {
+        File[] ch = d.listFiles();
+        return ch == null ? -1 : ch.length;
     }
 
     @Override
@@ -62,12 +87,6 @@ public class MainActivity extends Activity {
     }
 
     // ---- раскладка APK-assets в структуру, которую ждёт движок ----
-    // В APK проекты лежат в корне (DemoGame/, Game1/...), а шрифты/звуки
-    // тоже в корне (fonts/, sounds/). Движок же ищет projects/<dir>/...
-    // и assets/fonts|sounds/... Поэтому после copyAssets перекладываем:
-    // папку с project.json -> в projects/, остальное -> в assets/.
-    // Если цель уже существует (локальная версия ценнее) — дубль из APK
-    // выбрасываем, чтобы не терять правки редактора между запусками.
     private void restructure() {
         File root = getFilesDir();
         File[] top = root.listFiles();
@@ -81,9 +100,9 @@ public class MainActivity extends Activity {
             boolean isProject = new File(f, "project.json").exists();
             File dst = new File(isProject ? proj : ass, n);
             if (dst.exists()) {
-                deleteRecursive(f);                 // дубль из APK, локал цел
+                deleteRecursive(f);
             } else if (!f.renameTo(dst)) {
-                copyRecursive(f, dst);              // fallback через copy
+                copyRecursive(f, dst);
                 deleteRecursive(f);
             }
         }
@@ -118,6 +137,9 @@ public class MainActivity extends Activity {
         try {
             AssetManager am = getAssets();
             String[] list = am.list(path);
+            if ((list == null || list.length == 0) && path.isEmpty()) {
+                list = FALLBACK_ROOT;            // обход бага list("")==пусто
+            }
             if (list == null) return;
             if (list.length == 0) {
                 File out = new File(getFilesDir(), path);
@@ -165,6 +187,11 @@ public class MainActivity extends Activity {
         @Override public void run() {
             while (true) {
                 String frame = nativeStep();
+                if (frame == null) frame = "";
+                g_stepLen = frame.length();
+                g_stepHead = frame.replace("\n", "|");
+                if (g_stepHead.length() > 70) g_stepHead = g_stepHead.substring(0, 70);
+
                 Canvas c = getHolder().lockCanvas();
                 if (c == null) { try { Thread.sleep(8); continue; } catch (Exception e) { return; } }
 
@@ -181,6 +208,7 @@ public class MainActivity extends Activity {
                 }
 
                 drawTitle(c, rw, rh);
+                drawDiag(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
                 try { Thread.sleep(16); } catch (Exception e) { return; }
             }
@@ -198,6 +226,19 @@ public class MainActivity extends Activity {
             paint.setColor(Color.WHITE);
             c.drawText("SukaEngine", cx, cy, paint);
             paint.setTextAlign(Paint.Align.LEFT);
+        }
+
+        // ---- диагностика: две строки слева под заголовком ----
+        private void drawDiag(Canvas c, int rw, int rh) {
+            float sz = Math.max(22f, rh * 0.03f);
+            paint.setTextSize(sz);
+            paint.setTextAlign(Paint.Align.LEFT);
+            if (typeface != null) paint.setTypeface(typeface);
+            paint.setColor(Color.rgb(255, 224, 102));
+            float x = 20f, y = rh * 0.16f;
+            c.drawText("init=" + g_initOk + "  files=" + g_fileCount
+                     + "  proj=" + g_hasProject + "  font=" + g_hasFont, x, y, paint);
+            c.drawText("step=" + g_stepLen + "  head=[" + g_stepHead + "]", x, y + sz + 8, paint);
         }
 
         private void drawLine(Canvas c, String line) {
@@ -274,4 +315,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                }
+                    }
