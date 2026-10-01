@@ -207,7 +207,10 @@ public class MainActivity extends Activity {
                     for (String line : frame.split("\n")) drawLine(c, line);
                 }
 
-                drawTitle(c, rw, rh);
+                boolean showTitle = frame.contains("START") || frame.contains("Play")
+                                 || frame.contains("Edit") || frame.contains("NEW")
+                                 || frame.contains("Theme") || frame.contains("MENU");
+                if (showTitle) drawTitle(c, rw, rh);
                 drawDiag(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
                 try { Thread.sleep(16); } catch (Exception e) { return; }
