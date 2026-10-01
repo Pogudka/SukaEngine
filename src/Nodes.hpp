@@ -31,7 +31,6 @@ public:
         for (auto& child : children) child->loadResources(rm, projectRoot);
     }
 
-    // CLONE-FIX: глубокое копирование узла вместе с поддеревом
     virtual std::unique_ptr<Node> cloneNode() const {
         auto c = std::make_unique<Node>();
         copyBase(*c);
@@ -129,6 +128,9 @@ public:
     std::string texture;
     float w = 32.0f, h = 32.0f;
 
+    // TOUCH-FIX: объект-как-кнопка (действие по касанию в игре)
+    std::string action;
+
     bool hasAppearance() const { return shape != "none" || !texture.empty(); }
 
     const char* typeName() const override { return "Node2D"; }
@@ -148,7 +150,7 @@ protected:
     void copyNode2D(Node2D& dst) const {
         dst.position = position; dst.scale = scale; dst.rotation = rotation;
         dst.shape = shape; dst.color = color; dst.texture = texture;
-        dst.w = w; dst.h = h;
+        dst.w = w; dst.h = h; dst.action = action;
     }
 };
 
@@ -315,7 +317,6 @@ public:
     }
 };
 
-// LIGHT-FIX: настоящий источник света (радиальное свечение в Render/Java)
 class Light2D : public Node2D {
 public:
     float radius = 140.0f;
