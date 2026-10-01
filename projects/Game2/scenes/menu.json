@@ -1,9 +1,0 @@
-{
-  "name": "Menu",
-  "nodes": [
-    { "type": "Label", "name": "Title", "text": "Game2 Game", "x": 200, "y": 300, "font_size": 48 }
-  ],
-  "ui": [
-    { "id": "start", "x": 240, "y": 700, "w": 240, "h": 120, "text": "START", "action": "restart_scene:scenes/main.json" }
-  ]
-}
