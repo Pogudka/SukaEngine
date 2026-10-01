@@ -117,6 +117,7 @@ public:
         scene.name = "Scene";
         jsonGetString(json, "name", scene.name);
         jsonGetNumber(json, "gravity", scene.gravity);
+        jsonGetString(json, "bg", scene.bg);         // BG-FIX
 
         scene.root = std::make_unique<Node>();
         scene.root->name = scene.name;
