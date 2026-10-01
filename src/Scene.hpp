@@ -18,8 +18,8 @@ public:
     std::unique_ptr<Node> root;
     std::vector<UiButton> ui;
     float gravity = 0.0f;
-    std::string bg;                                  // BG-FIX: фон сцены, "#RRGGBB" или пусто=тема
-    float camX = 0.0f, camY = 0.0f;                  // PAN-FIX: смещение обзора превью (pinch)
+    std::string bg;
+    float camX = 0.0f, camY = 0.0f;
     bool bgSet() const { return !bg.empty(); }
 
     void update(Context& ctx, double dt) {
@@ -32,13 +32,10 @@ public:
 
     void resolveLinks() {
         if (!root) return;
-
         Node* camNode = root->findByType("Camera2D");
         if (!camNode) return;
-
         Camera2D* cam = static_cast<Camera2D*>(camNode);
         if (cam->followName.empty()) return;
-
         Node* t = root->findNode(cam->followName);
         if (t && std::string(t->typeName()) != "Node") {
             cam->target = static_cast<Node2D*>(t);
@@ -59,7 +56,6 @@ private:
 
     void physicsStep(Context& ctx, double dt) {
         if (!root) return;
-
         std::vector<Node2D*> players, solids;
         collectByType(*root, "Player", players);
         collectByType(*root, "Solid2D", solids);
@@ -81,7 +77,6 @@ private:
             if (ctx.input.jumpPressed && pl->grounded) {
                 pl->vy = -pl->jumpSpeed;
                 pl->grounded = false;
-                std::cout << "  Player: platform jump!\n";
             }
             pl->position.y += pl->vy * float(dt);
             pl->grounded = false;
@@ -89,14 +84,8 @@ private:
             for (auto* sn : solids) {
                 Solid2D* s = static_cast<Solid2D*>(sn);
                 if (aabb(pl, s)) {
-                    if (pl->vy > 0) {
-                        pl->position.y = s->position.y - s->h / 2.0f - 16.0f;
-                        pl->vy = 0;
-                        pl->grounded = true;
-                    } else if (pl->vy < 0) {
-                        pl->position.y = s->position.y + s->h / 2.0f + 16.0f;
-                        pl->vy = 0;
-                    }
+                    if (pl->vy > 0) { pl->position.y = s->position.y - s->h / 2.0f - 16.0f; pl->vy = 0; pl->grounded = true; }
+                    else if (pl->vy < 0) { pl->position.y = s->position.y + s->h / 2.0f + 16.0f; pl->vy = 0; }
                 }
             }
 
@@ -111,14 +100,13 @@ public:
     static bool load(const std::string& path, Scene& scene,
                      const std::string& fontPath, const std::string& projectRoot) {
         if (!fileExists(path)) return false;
-
         std::string json = readFile(path);
         if (json.empty()) return false;
 
         scene.name = "Scene";
         jsonGetString(json, "name", scene.name);
         jsonGetNumber(json, "gravity", scene.gravity);
-        jsonGetString(json, "bg", scene.bg);         // BG-FIX
+        jsonGetString(json, "bg", scene.bg);
 
         scene.root = std::make_unique<Node>();
         scene.root->name = scene.name;
@@ -137,12 +125,8 @@ public:
                 if (type == "Label") {
                     auto label = std::make_unique<Label>();
                     jsonGetString(obj, "text", label->text);
-
                     float fontSize = 0;
-                    if (jsonGetNumber(obj, "font_size", fontSize)) {
-                        label->fontSize = (int)fontSize;
-                    }
-
+                    if (jsonGetNumber(obj, "font_size", fontSize)) label->fontSize = (int)fontSize;
                     label->fontName = DEFAULT_FONT_NAME;
                     label->fontPath = fontPath;
                     label->color = currentTheme().ink;
@@ -151,58 +135,53 @@ public:
                 else if (type == "Sprite2D") {
                     auto sprite = std::make_unique<Sprite2D>();
                     jsonGetString(obj, "texture", sprite->texturePath);
-
                     float w = 0, h = 0;
                     if (jsonGetNumber(obj, "w", w)) sprite->size.x = w;
                     if (jsonGetNumber(obj, "h", h)) sprite->size.y = h;
-
                     node2d = std::move(sprite);
                 }
                 else if (type == "Player") {
                     auto player = std::make_unique<Player>();
-
                     float speed = 0;
                     if (jsonGetNumber(obj, "speed", speed)) player->speed = speed;
                     jsonGetString(obj, "mode", player->mode);
-
                     float js = 0;
                     if (jsonGetNumber(obj, "jump_speed", js)) player->jumpSpeed = js;
-
                     node2d = std::move(player);
                 }
                 else if (type == "Enemy") {
                     auto enemy = std::make_unique<Enemy>();
-
                     float speed = 0;
                     if (jsonGetNumber(obj, "speed", speed)) enemy->speed = speed;
-
                     node2d = std::move(enemy);
                 }
                 else if (type == "Coin") {
                     auto coin = std::make_unique<Coin>();
-
                     float radius = 0;
                     if (jsonGetNumber(obj, "radius", radius)) coin->radius = radius;
-
                     node2d = std::move(coin);
                 }
                 else if (type == "Solid2D") {
                     auto solid = std::make_unique<Solid2D>();
-
                     float w = 0, h = 0;
                     if (jsonGetNumber(obj, "w", w)) solid->w = w;
                     if (jsonGetNumber(obj, "h", h)) solid->h = h;
-
                     node2d = std::move(solid);
                 }
                 else if (type == "Camera2D") {
                     auto cam = std::make_unique<Camera2D>();
                     jsonGetString(obj, "follow", cam->followName);
-
                     float zoom = 0;
                     if (jsonGetNumber(obj, "zoom", zoom)) cam->zoom = zoom;
-
                     node2d = std::move(cam);
+                }
+                else if (type == "Light2D") {
+                    auto li = std::make_unique<Light2D>();
+                    float radius = 0;
+                    if (jsonGetNumber(obj, "radius", radius)) li->radius = radius;
+                    float inten = 0;
+                    if (jsonGetNumber(obj, "intensity", inten)) li->intensity = inten;
+                    node2d = std::move(li);
                 }
                 else {
                     node2d = std::make_unique<Node2D>();
@@ -210,12 +189,10 @@ public:
 
                 jsonGetString(obj, "name", node2d->name);
 
-                // ПОЗИЦИИ (важно, не удалять)
                 float x = 0, y = 0;
                 if (jsonGetNumber(obj, "x", x)) node2d->position.x = x;
                 if (jsonGetNumber(obj, "y", y)) node2d->position.y = y;
 
-                // внешний вид (v0.15.0) — идёт ПОСЛЕ позиций
                 std::string shapeStr, colorStr, texStr;
                 jsonGetString(obj, "shape", shapeStr);
                 if (!shapeStr.empty()) node2d->shape = shapeStr;
@@ -229,7 +206,7 @@ public:
                 if (jsonGetNumber(obj, "w", aw)) node2d->w = aw;
                 if (jsonGetNumber(obj, "h", ah)) node2d->h = ah;
 
-                float rotDeg = 0, scx = 1, scy = 1;                 // ROT/SCL-FIX
+                float rotDeg = 0, scx = 1, scy = 1;
                 if (jsonGetNumber(obj, "rotation", rotDeg)) node2d->rotation = rotDeg * 3.14159265f / 180.0f;
                 if (jsonGetNumber(obj, "scale_x", scx)) node2d->scale.x = scx;
                 if (jsonGetNumber(obj, "scale_y", scy)) node2d->scale.y = scy;
@@ -253,6 +230,10 @@ public:
                 jsonGetString(obj, "color", btnColor);
                 if (!btnColor.empty()) button.color = parseColor(btnColor);
 
+                float btnAngle = 0.0f;
+                if (jsonGetNumber(obj, "angle", btnAngle)) button.angle = btnAngle;
+                jsonGetString(obj, "texture", button.texture);
+
                 float x = 0, y = 0, w = 0, h = 0;
                 jsonGetNumber(obj, "x", x);
                 jsonGetNumber(obj, "y", y);
@@ -273,18 +254,11 @@ public:
     SceneManager(std::string projectRoot, std::string fontPath)
         : projectRoot_(std::move(projectRoot)), fontPath_(std::move(fontPath)) {}
 
-    bool changeScene(const std::string& rel, ResourceManager& rm) {
-        return switchTo(rel, rm, false);
-    }
-
-    bool restartScene(const std::string& rel, ResourceManager& rm) {
-        return switchTo(rel, rm, true);
-    }
+    bool changeScene(const std::string& rel, ResourceManager& rm) { return switchTo(rel, rm, false); }
+    bool restartScene(const std::string& rel, ResourceManager& rm) { return switchTo(rel, rm, true); }
 
     void requestChange(const std::string& rel, bool force) {
-        pending_ = rel;
-        pendingForce_ = force;
-        hasPending_ = true;
+        pending_ = rel; pendingForce_ = force; hasPending_ = true;
     }
 
     Scene* current() { return scene_; }
@@ -295,17 +269,11 @@ public:
             hasPending_ = false;
             const std::string target = pending_;
             const bool force = pendingForce_;
-
             input.joystick.reset();
             input.setUi(nullptr);
-
-            if (switchTo(target, rm, force)) {
-                input.setUi(&scene_->ui);
-            } else {
-                std::cout << "[SceneManager] failed to load: " << target << "\n";
-            }
+            if (switchTo(target, rm, force)) input.setUi(&scene_->ui);
+            else std::cout << "[SceneManager] failed to load: " << target << "\n";
         }
-
         if (scene_) scene_->update(ctx, dt);
     }
 
@@ -316,31 +284,19 @@ private:
             if (it != cache_.end() && it->second) {
                 scene_ = it->second.get();
                 currentPath_ = rel;
-                std::cout << "[SceneManager] resume: " << scene_->name
-                          << " (" << rel << ")\n";
                 return true;
             }
         }
-
         Scene next;
         const std::string full = projectRoot_ + "/" + rel;
-        if (!SceneLoader::load(full, next, fontPath_, projectRoot_)) {
-            return false;
-        }
-
+        if (!SceneLoader::load(full, next, fontPath_, projectRoot_)) return false;
         auto up = std::make_unique<Scene>(std::move(next));
         Scene* ptr = up.get();
-
         cache_[rel] = std::move(up);
-
         ptr->resolveLinks();
         ptr->root->loadResources(rm, projectRoot_);
-
         scene_ = ptr;
         currentPath_ = rel;
-
-        std::cout << "[SceneManager] loaded: " << scene_->name
-                  << " (" << rel << ")\n";
         return true;
     }
 
