@@ -37,6 +37,34 @@ public:
         return ptr;
     }
 
+    // HIER-FIX: перестроение дерева (нужно для attach/detach из Lua)
+    Node* findParentOf(const std::string& childName) {
+        for (auto& child : children) {
+            if (child->name == childName) return this;
+            Node* p = child->findParentOf(childName);
+            if (p) return p;
+        }
+        return nullptr;
+    }
+
+    bool containsName(const std::string& nodeName) const {
+        if (name == nodeName) return true;
+        for (const auto& child : children)
+            if (child->containsName(nodeName)) return true;
+        return false;
+    }
+
+    std::unique_ptr<Node> takeChild(const std::string& childName) {
+        for (auto it = children.begin(); it != children.end(); ++it) {
+            if ((*it)->name == childName) {
+                std::unique_ptr<Node> taken = std::move(*it);
+                children.erase(it);
+                return taken;
+            }
+        }
+        return nullptr;
+    }
+
     size_t childCount() const { return children.size(); }
 
     Node* findNode(const std::string& nodeName) {
