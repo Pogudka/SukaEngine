@@ -22,7 +22,6 @@
 
 namespace suka {
 
-// NEW: затемнение цвета темы (формат RGBA, R в старшем байте — подтверждено прошлым крестом)
 inline unsigned dimColor(unsigned c, float k) {
     unsigned r = (unsigned)(((c >> 24) & 255) * k);
     unsigned g = (unsigned)(((c >> 16) & 255) * k);
@@ -36,7 +35,7 @@ class GameApp {
 public:
     enum class Mode { Console, String };
     enum class AppMode { Hub, Game, Editor };
-    enum class Manip { Move, Rotate, Scale };          // NEW: режим стрелок
+    enum class Manip { Move, Rotate, Scale };
 
     bool init(Mode mode, const std::string& gameDir) {
         (void)mode;
@@ -59,6 +58,21 @@ public:
             static_cast<Label*>(sn)->text = t;
     }
 
+    // PAN: двухпальцевый обзор превью. phase 1=down 2=move 3=up
+    void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
+        if (appMode_ != AppMode::Editor || showCreate_ || showBg_) return;
+        Scene* es = editor_ ? editor_->scene() : nullptr;
+        if (!es) return;
+        const float S = 0.46875f;
+        float mx = (x0 + x1) / 2.0f, my = (y0 + y1) / 2.0f;
+        if (phase == 1) { pinching_ = true; pinchMX_ = mx; pinchMY_ = my; return; }
+        if (phase == 3) { pinching_ = false; return; }
+        if (!pinching_) return;
+        es->camX += (mx - pinchMX_) / S;            // тянем карту за середину двух пальцев
+        es->camY += (my - pinchMY_) / S;
+        pinchMX_ = mx; pinchMY_ = my;
+    }
+
     void feedTouch(int action, float x, float y) {
         RawTouch t;
         if (action == 0) t.action = RawTouch::Action::Down;
@@ -73,12 +87,13 @@ public:
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
             Scene* es = editor_ ? editor_->scene() : nullptr;
             if (t.action == RawTouch::Action::Down && inVP && es && es->root) {
-                float wx = 640 + (x - CX) / S, wy = 360 + (y - CY) / S;
+                float wx = 640 + es->camX + (x - CX) / S;   // PAN: учёт смещения обзора
+                float wy = 360 + es->camY + (y - CY) / S;
                 std::string hit = hitTest(es->root.get(), wx, wy);
                 if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); }
-            } else if (t.action == RawTouch::Action::Move && dragging_ && dragNode_) {
-                dragNode_->position.x = 640 + (x - CX) / S;   // drag = позиция всегда
-                dragNode_->position.y = 360 + (y - CY) / S;
+            } else if (t.action == RawTouch::Action::Move && dragging_ && dragNode_ && es) {
+                dragNode_->position.x = 640 + es->camX + (x - CX) / S;
+                dragNode_->position.y = 360 + es->camY + (y - CY) / S;
             } else if (t.action == RawTouch::Action::Up) { dragging_ = false; dragNode_ = nullptr; }
         }
         touch_.onTouch(t, *cur, input_);
@@ -249,7 +264,7 @@ private:
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; showBg_ = false; pendingText_ = false; fsPath_ = ""; manip_ = Manip::Move;   // NEW: сброс режима
+        showCreate_ = false; showBg_ = false; pendingText_ = false; fsPath_ = ""; manip_ = Manip::Move; pinching_ = false;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -259,12 +274,10 @@ private:
         auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
             auto l = std::make_unique<Label>(); l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y}; editorScene_.root->addChild(std::move(l));
         };
-        // NEW: фон файлового менеджера по теме (затемнение bg), не хардкод
         auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = dimColor(th.bg, 0.6f); fsBg->w = 284; fsBg->h = 320; fsBg->position = Vec2{150, 536}; editorScene_.root->addChild(std::move(fsBg));
         addLbl("TabScene", "Scene", 20, 8, 20, GODOT_ORANGE); addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink); addLbl("TabScr", "Script", 210, 8, 20, th.ink); addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
         addLbl("DHdr", "Scene", 10, 40, 18, th.ink); addLbl("IHdr", "Inspector", 900, 40, 18, th.ink);
 
-        // NEW: три кнопки режима под SukaEngine справа-вверху
         const char* mlab[3] = { "POS","ROT","SCL" };
         Manip mval[3] = { Manip::Move, Manip::Rotate, Manip::Scale };
         for (int k = 0; k < 3; ++k) {
@@ -318,10 +331,13 @@ private:
         { UiButton b; b.touch.id="scr"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SCR"; b.action="ed_scr"; b.color=th.button; editorScene_.ui.push_back(b); }
 
         if (showCreate_) {
+            // CAM/LIGHT: 8 кнопок в полосе 300..892
             const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
             const char* cs[6] = { "square","circle","diamond","triangle","","" };
             const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
-            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*98, 560, 92, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*74, 560, 70, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctcam"; b.touch.rect=Rect{300+6*74,560,70,40}; b.text="CAM"; b.action="create_cam"; b.color=th.accent; editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctlit"; b.touch.rect=Rect{300+7*74,560,70,40}; b.text="LIGHT"; b.action="create_light"; b.color=parseColor("#FFD700"); editorScene_.ui.push_back(b); }
         }
         if (showBg_) {
             const char* bgs[6] = { "#FFF3E0","#111111","#16213E","#2EC4B6","#D62828","#87CEEB" };
@@ -371,11 +387,10 @@ private:
                 std::string rel = b.action.substr(8);
                 if (sceneMgr_->restartScene(rel, resources_)) {
                     editor_->attach(sceneMgr_->current());
-                    scripted_.clear(); showCreate_ = false; showBg_ = false; dragging_ = false; dragNode_ = nullptr;
+                    scripted_.clear(); showCreate_ = false; showBg_ = false; dragging_ = false; dragNode_ = nullptr; pinching_ = false;
                     changed = true;
                 }
             }
-            // NEW: переключение режима
             else if (b.action == "manip:move")   { manip_ = Manip::Move;   changed = true; }
             else if (b.action == "manip:rotate") { manip_ = Manip::Rotate; changed = true; }
             else if (b.action == "manip:scale")  { manip_ = Manip::Scale;  changed = true; }
@@ -385,6 +400,14 @@ private:
             else if (b.action == "bg_clear") { if (editor_->scene()) editor_->scene()->bg.clear(); showBg_ = false; changed = true; }
             else if (b.action == "edit_text") { if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } }
             else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
+            else if (b.action == "create_cam") {                       // CAM: реальная нода Camera2D
+                std::string name = "Cam" + std::to_string(createCounter_++);
+                editor_->addNode("Camera2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true;
+            }
+            else if (b.action == "create_light") {                     // LIGHT: жёлтый круг-маркер (см. оговорку)
+                std::string name = "Light" + std::to_string(createCounter_++);
+                editor_->addNode("Node2D", name, 640, 360); editor_->setShape(name, "circle"); editor_->setColor(name, "#FFD700"); editor_->select(name); showCreate_ = false; changed = true;
+            }
             else if (b.action.rfind("create:", 0) == 0) {
                 std::string rest = b.action.substr(7); size_t c = rest.find(':');
                 std::string type = rest.substr(0, c); std::string shape = (c == std::string::npos) ? "" : rest.substr(c + 1);
@@ -394,7 +417,6 @@ private:
             else if (b.action.rfind("ed_select:", 0) == 0) { editor_->select(b.action.substr(10)); changed = true; }
             else if (b.action.rfind("ed_shape:", 0) == 0) { if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; } }
             else if (b.action.rfind("ed_color:", 0) == 0) { if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; } }
-            // NEW: стрелки зависят от режима
             else if (b.action.rfind("ed_move:", 0) == 0) {
                 std::string d = b.action.substr(8);
                 Node2D* n = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
@@ -422,17 +444,25 @@ private:
         const float VX0 = 300, VY0 = 64, VW = 592, VH = 492; const float CX = VX0 + VW/2, CY = VY0 + VH/2, S = 0.46875f;
         if (sc.bgSet()) out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|" + sc.bg + "\n";
         out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B\n";
-        for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D\n"; }
-        for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D\n"; }
-        emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, out);
+        for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640 - sc.camX)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D\n"; }   // PAN: сетка едет с камерой
+        for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360 - sc.camY)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D\n"; }
+        emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, sc.camX, sc.camY, out);
     }
-    void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH, std::string& out) {
+    void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH, float camX, float camY, std::string& out) {
         if (!n) return;
         std::string tn = std::string(n->typeName());
-        if (tn != "Node" && tn != "Camera2D") {
+        if (tn == "Camera2D") {                                          // CAM: маркер камеры в превью
             const Node2D* d = static_cast<const Node2D*>(n);
-            float cx = CX + (d->position.x - 640)*S, cy = CY + (d->position.y - 360)*S, w = d->w*S, h = d->h*S, rx = cx - w/2, ry = cy - h/2;
-            // NEW: строгая отсечка — объект рисуется ТОЛЬКО если целиком внутри вьюпорта (чинит наезжающий красный)
+            float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;
+            if (cx >= VX0 && cx <= VX0+VW && cy >= VY0 && cy <= VY0+VH) {
+                out += "DRAW rect|" + std::to_string((int)(cx-14)) + "|" + std::to_string((int)(cy-10)) + "|28|20|#FFD700\n";
+                out += "DRAW text|CAM|" + std::to_string((int)(cx-12)) + "|" + std::to_string((int)(cy+12)) + "|12|#FFD700\n";
+            }
+        }
+        else if (tn != "Node") {
+            const Node2D* d = static_cast<const Node2D*>(n);
+            float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;   // PAN: смещение обзора
+            float w = d->w*S, h = d->h*S, rx = cx - w/2, ry = cy - h/2;
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
                 if (tn == "Label") out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|14|" + colorToHex(d->color) + "\n";
@@ -440,7 +470,7 @@ private:
                 else if (d->hasAppearance()) out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(d->color) + "\n";
             }
         }
-        for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, out);
+        for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, out);
     }
 
     std::string stepEditor() {
@@ -455,8 +485,10 @@ private:
     AppMode appMode_ = AppMode::Hub;
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
-    Manip manip_ = Manip::Move;                                    // NEW
-    bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false; Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
+    Manip manip_ = Manip::Move;
+    bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false, pinching_ = false;   // PAN
+    float pinchMX_ = 0, pinchMY_ = 0;                                                                          // PAN
+    Node2D* dragNode_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
