@@ -31,13 +31,19 @@ public:
         for (auto& child : children) child->loadResources(rm, projectRoot);
     }
 
+    // CLONE-FIX: глубокое копирование узла вместе с поддеревом
+    virtual std::unique_ptr<Node> cloneNode() const {
+        auto c = std::make_unique<Node>();
+        copyBase(*c);
+        return c;
+    }
+
     Node* addChild(std::unique_ptr<Node> child) {
         Node* ptr = child.get();
         children.push_back(std::move(child));
         return ptr;
     }
 
-    // HIER-FIX: перестроение дерева (нужно для attach/detach из Lua)
     Node* findParentOf(const std::string& childName) {
         for (auto& child : children) {
             if (child->name == childName) return this;
@@ -90,7 +96,6 @@ public:
             std::remove_if(children.begin(), children.end(),
                 [](const std::unique_ptr<Node>& n) { return n->dead; }),
             children.end());
-
         for (auto& child : children) child->prune();
     }
 
@@ -100,8 +105,13 @@ public:
         for (auto& child : children) child->printTree(depth + 1);
     }
 
-    const std::vector<std::unique_ptr<Node>>& getChildren() const {
-        return children;
+    const std::vector<std::unique_ptr<Node>>& getChildren() const { return children; }
+
+protected:
+    void copyBase(Node& dst) const {
+        dst.name = name;
+        dst.dead = dead;
+        for (const auto& ch : children) dst.addChild(ch->cloneNode());
     }
 
 private:
@@ -114,21 +124,31 @@ public:
     Vec2 scale{1.0f, 1.0f};
     float rotation = 0.0f;
 
-    // внешний вид (v0.15.0)
-    std::string shape = "none";   // none square circle diamond triangle
+    std::string shape = "none";
     unsigned int color = 0xFFFFFFFF;
-    std::string texture;          // если задана — рисуем текстуру вместо формы
+    std::string texture;
     float w = 32.0f, h = 32.0f;
 
-    bool hasAppearance() const {
-        return shape != "none" || !texture.empty();
-    }
+    bool hasAppearance() const { return shape != "none" || !texture.empty(); }
 
     const char* typeName() const override { return "Node2D"; }
 
     std::string extra() const override {
         return " pos=(" + std::to_string((int)position.x) + "," +
                std::to_string((int)position.y) + ")";
+    }
+
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Node2D>();
+        copyBase(*c); copyNode2D(*c);
+        return c;
+    }
+
+protected:
+    void copyNode2D(Node2D& dst) const {
+        dst.position = position; dst.scale = scale; dst.rotation = rotation;
+        dst.shape = shape; dst.color = color; dst.texture = texture;
+        dst.w = w; dst.h = h;
     }
 };
 
@@ -140,10 +160,14 @@ public:
     int fontSize = 24;
 
     const char* typeName() const override { return "Label"; }
-
     std::string extra() const override {
-        return Node2D::extra() + " text='" + text +
-               "' font=" + fontName + ":" + std::to_string(fontSize);
+        return Node2D::extra() + " text='" + text + "' font=" + fontName + ":" + std::to_string(fontSize);
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Label>();
+        copyBase(*c); copyNode2D(*c);
+        c->text = text; c->fontName = fontName; c->fontPath = fontPath; c->fontSize = fontSize;
+        return c;
     }
 };
 
@@ -155,37 +179,35 @@ public:
     bool textureLoaded = false;
 
     const char* typeName() const override { return "Sprite2D"; }
-
     std::string extra() const override {
-        return Node2D::extra() + " texture='" + texturePath + "' " +
-               (textureLoaded ? "[loaded]" : "[missing]");
+        return Node2D::extra() + " texture='" + texturePath + "' " + (textureLoaded ? "[loaded]" : "[missing]");
     }
-
     void loadResources(ResourceManager& rm, const std::string& projectRoot) override {
-        if (!texturePath.empty() && texturePath[0] == '/') {
-            resolvedPath = texturePath;
-        } else {
-            resolvedPath = projectRoot + "/" + texturePath;
-        }
+        if (!texturePath.empty() && texturePath[0] == '/') resolvedPath = texturePath;
+        else resolvedPath = projectRoot + "/" + texturePath;
         textureLoaded = rm.loadTexture(resolvedPath);
         Node2D::loadResources(rm, projectRoot);
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Sprite2D>();
+        copyBase(*c); copyNode2D(*c);
+        c->texturePath = texturePath; c->resolvedPath = resolvedPath;
+        c->size = size; c->textureLoaded = textureLoaded;
+        return c;
     }
 };
 
 class Solid2D : public Node2D {
 public:
-    Solid2D() {
-        w = 64.0f;
-        h = 64.0f;
-        shape = "square";
-        color = 0x808080FF;
-    }
-
+    Solid2D() { w = 64.0f; h = 64.0f; shape = "square"; color = 0x808080FF; }
     const char* typeName() const override { return "Solid2D"; }
-
     std::string extra() const override {
-        return Node2D::extra() + " size=(" + std::to_string((int)w) + "," +
-               std::to_string((int)h) + ")";
+        return Node2D::extra() + " size=(" + std::to_string((int)w) + "," + std::to_string((int)h) + ")";
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Solid2D>();
+        copyBase(*c); copyNode2D(*c);
+        return c;
     }
 };
 
@@ -194,103 +216,71 @@ public:
     float speed = 220.0f;
     float vy = 0.0f;
     bool jumpHeld = false;
-
     std::string mode = "topdown";
     float jumpSpeed = 300.0f;
     bool grounded = false;
 
-    Player() {
-        shape = "square";
-        color = 0x40C040FF;
-    }
-
+    Player() { shape = "square"; color = 0x40C040FF; }
     const char* typeName() const override { return "Player"; }
-
-    std::string extra() const override {
-        return Node2D::extra() + " mode=" + mode;
-    }
-
+    std::string extra() const override { return Node2D::extra() + " mode=" + mode; }
     void update(Context& ctx, double dt) override {
-        if (mode == "platformer") {
-            ctx.playerPos = position;
-            ctx.hasPlayer = true;
-            Node2D::update(ctx, dt);
-            return;
-        }
-
+        if (mode == "platformer") { ctx.playerPos = position; ctx.hasPlayer = true; Node2D::update(ctx, dt); return; }
         position.x += ctx.input.joystickX * speed * float(dt);
         position.y += ctx.input.joystickY * speed * float(dt);
-
-        if (ctx.input.jumpPressed && !jumpHeld) {
-            vy = -300.0f;
-            jumpHeld = true;
-            ctx.jumpPressedThisFrame = true;
-            std::cout << "  Player: jump!\n";
-        }
+        if (ctx.input.jumpPressed && !jumpHeld) { vy = -300.0f; jumpHeld = true; ctx.jumpPressedThisFrame = true; }
         if (!ctx.input.jumpPressed) jumpHeld = false;
-
         position.y += vy * float(dt);
         vy *= 0.9f;
-
-        ctx.playerPos = position;
-        ctx.hasPlayer = true;
-
+        ctx.playerPos = position; ctx.hasPlayer = true;
         Node2D::update(ctx, dt);
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Player>();
+        copyBase(*c); copyNode2D(*c);
+        c->speed = speed; c->vy = vy; c->jumpHeld = jumpHeld;
+        c->mode = mode; c->jumpSpeed = jumpSpeed; c->grounded = grounded;
+        return c;
     }
 };
 
 class Enemy : public Node2D {
 public:
     float speed = 80.0f;
-
-    Enemy() {
-        shape = "square";
-        color = 0xC04040FF;
-    }
-
+    Enemy() { shape = "square"; color = 0xC04040FF; }
     const char* typeName() const override { return "Enemy"; }
-
     void update(Context& ctx, double dt) override {
         if (ctx.hasPlayer) {
-            float dx = ctx.playerPos.x - position.x;
-            float dy = ctx.playerPos.y - position.y;
-            float len = std::sqrt(dx * dx + dy * dy);
-
-            if (len > 1.0f) {
-                position.x += dx / len * speed * float(dt);
-                position.y += dy / len * speed * float(dt);
-            }
+            float dx = ctx.playerPos.x - position.x, dy = ctx.playerPos.y - position.y;
+            float len = std::sqrt(dx*dx + dy*dy);
+            if (len > 1.0f) { position.x += dx/len*speed*float(dt); position.y += dy/len*speed*float(dt); }
         }
         Node2D::update(ctx, dt);
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Enemy>();
+        copyBase(*c); copyNode2D(*c);
+        c->speed = speed;
+        return c;
     }
 };
 
 class Coin : public Node2D {
 public:
     float radius = 24.0f;
-
-    Coin() {
-        shape = "circle";
-        color = 0xE0C040FF;
-        w = 32.0f;
-        h = 32.0f;
-    }
-
+    Coin() { shape = "circle"; color = 0xE0C040FF; w = 32.0f; h = 32.0f; }
     const char* typeName() const override { return "Coin"; }
-
     void update(Context& ctx, double dt) override {
         if (ctx.hasPlayer && !dead) {
-            float dx = ctx.playerPos.x - position.x;
-            float dy = ctx.playerPos.y - position.y;
-
-            if (std::sqrt(dx * dx + dy * dy) < radius) {
-                dead = true;
-                ctx.score += 1;
-                ctx.coinCollectedThisFrame = true;
-                std::cout << "  Coin '" << name << "' collected! score=" << ctx.score << "\n";
-            }
+            float dx = ctx.playerPos.x - position.x, dy = ctx.playerPos.y - position.y;
+            if (std::sqrt(dx*dx + dy*dy) < radius) { dead = true; ctx.score += 1; ctx.coinCollectedThisFrame = true; }
         }
         Node2D::update(ctx, dt);
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Coin>();
+        copyBase(*c); copyNode2D(*c);
+        c->radius = radius;
+        return c;
     }
 };
 
@@ -302,11 +292,7 @@ public:
     float followSpeed = 5.0f;
 
     const char* typeName() const override { return "Camera2D"; }
-
-    std::string extra() const override {
-        return Node2D::extra() + " follow='" + followName + "'";
-    }
-
+    std::string extra() const override { return Node2D::extra() + " follow='" + followName + "'"; }
     void update(Context& ctx, double dt) override {
         if (target) {
             float k = 1.0f - std::exp(-followSpeed * float(dt));
@@ -315,12 +301,36 @@ public:
         }
         Node2D::update(ctx, dt);
     }
-
     Vec2 worldToScreen(const Vec2& world, float screenW, float screenH) const {
         Vec2 s;
         s.x = (world.x - position.x) * zoom + screenW * 0.5f;
         s.y = (world.y - position.y) * zoom + screenH * 0.5f;
         return s;
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Camera2D>();
+        copyBase(*c); copyNode2D(*c);
+        c->followName = followName; c->target = nullptr; c->zoom = zoom; c->followSpeed = followSpeed;
+        return c;
+    }
+};
+
+// LIGHT-FIX: настоящий источник света (радиальное свечение в Render/Java)
+class Light2D : public Node2D {
+public:
+    float radius = 140.0f;
+    float intensity = 1.0f;
+
+    Light2D() { shape = "none"; color = 0xFFD700FF; w = 0; h = 0; }
+    const char* typeName() const override { return "Light2D"; }
+    std::string extra() const override {
+        return Node2D::extra() + " radius=" + std::to_string((int)radius);
+    }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Light2D>();
+        copyBase(*c); copyNode2D(*c);
+        c->radius = radius; c->intensity = intensity;
+        return c;
     }
 };
 
