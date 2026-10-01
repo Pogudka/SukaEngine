@@ -83,14 +83,14 @@ private:
 
         auto hdr = std::make_unique<Label>();
         hdr->name = "ProjHdr"; hdr->text = "PROJECTS";
-        hdr->fontSize = 26; hdr->color = th.ink; hdr->position = Vec2{14, 40};
+        hdr->fontSize = 22; hdr->color = th.ink; hdr->position = Vec2{14, 34};
         s.root->addChild(std::move(hdr));
 
         for (size_t i = 0; i < hubState_.games.size(); ++i) {
             const auto& g = hubState_.games[i];
             UiButton row;
             row.touch.id = "sel_" + g.dir;
-            row.touch.rect = Rect{10, 90 + (float)i * 80, 300, 70};
+            row.touch.rect = Rect{10, 70 + (float)i * 56, 240, 48};
             row.text = (hubState_.selectedDir == g.dir ? "* " : "  ") + g.dir;
             row.action = "sel:" + g.dir;
             row.color = (hubState_.selectedDir == g.dir) ? th.accent : th.button;
@@ -103,36 +103,36 @@ private:
 
             auto nm = std::make_unique<Label>();
             nm->name = "SelName"; nm->text = info.name;
-            nm->fontSize = 40; nm->color = th.ink; nm->position = Vec2{760, 120};
+            nm->fontSize = 34; nm->color = th.ink; nm->position = Vec2{740, 120};
             s.root->addChild(std::move(nm));
 
             auto sc = std::make_unique<Label>();
             sc->name = "SelScene"; sc->text = "scene: " + info.mainScene;
-            sc->fontSize = 22; sc->color = th.ink; sc->position = Vec2{760, 180};
+            sc->fontSize = 20; sc->color = th.ink; sc->position = Vec2{740, 170};
             s.root->addChild(std::move(sc));
 
             UiButton play; play.touch.id = "play";
-            play.touch.rect = Rect{820, 300, 200, 110}; play.text = "Play";
+            play.touch.rect = Rect{740, 280, 150, 60}; play.text = "Play";
             play.action = "play:" + hubState_.selectedDir; play.color = th.accent;
             s.ui.push_back(play);
 
             UiButton edit; edit.touch.id = "edit";
-            edit.touch.rect = Rect{1040, 300, 200, 110}; edit.text = "Edit";
+            edit.touch.rect = Rect{910, 280, 150, 60}; edit.text = "Edit";
             edit.action = "edit:" + hubState_.selectedDir; edit.color = th.button;
             s.ui.push_back(edit);
         } else {
             auto hint = std::make_unique<Label>();
             hint->name = "Hint"; hint->text = "(select a project)";
-            hint->fontSize = 28; hint->color = th.ink; hint->position = Vec2{760, 320};
+            hint->fontSize = 24; hint->color = th.ink; hint->position = Vec2{740, 300};
             s.root->addChild(std::move(hint));
         }
 
         UiButton nb; nb.touch.id = "new_project";
-        nb.touch.rect = Rect{820, 560, 200, 100}; nb.text = "+ NEW";
+        nb.touch.rect = Rect{740, 560, 150, 60}; nb.text = "+ NEW";
         nb.action = "new"; nb.color = th.button; s.ui.push_back(nb);
 
         UiButton tb; tb.touch.id = "theme";
-        tb.touch.rect = Rect{1040, 560, 200, 100}; tb.text = "Theme";
+        tb.touch.rect = Rect{910, 560, 150, 60}; tb.text = "Theme";
         tb.action = "theme"; tb.color = th.accent; s.ui.push_back(tb);
 
         return s;
@@ -247,10 +247,12 @@ private:
         }
     }
 
-    // ---------------- EDITOR ----------------
-    void collectHier(const Node& n, std::vector<std::pair<std::string,std::string>>& out) {
-        out.push_back({ n.name, std::string(n.typeName()) });
-        for (const auto& ch : n.getChildren()) collectHier(*ch, out);
+    // ---------------- EDITOR (Godot-style 2D) ----------------
+    struct HierRow { int depth; std::string name; std::string type; };
+
+    void collectHier(const Node& n, int depth, std::vector<HierRow>& out) {
+        out.push_back({ depth, n.name, std::string(n.typeName()) });
+        for (const auto& ch : n.getChildren()) collectHier(*ch, depth + 1, out);
     }
 
     bool enterEditor(const std::string& dir) {
@@ -279,90 +281,111 @@ private:
 
     void buildEditorPanels() {
         Theme& th = currentTheme();
+        const unsigned GODOT_ORANGE = 0xFF8800FFu;   // RGBA
         editorScene_ = Scene();
         editorScene_.name = "Editor";
         editorScene_.root = std::make_unique<Node>();
         editorScene_.root->name = "EdRoot";
 
-        auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs) {
+        auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
             auto l = std::make_unique<Label>();
-            l->name = nm; l->text = txt; l->fontSize = fs; l->color = th.ink;
+            l->name = nm; l->text = txt; l->fontSize = fs; l->color = col;
             l->position = Vec2{x, y};
             editorScene_.root->addChild(std::move(l));
         };
 
-        addLbl("EHdr", "HIERARCHY", 14, 40, 24);
-        addLbl("SHdr", "SCENE", 360, 40, 24);
-        addLbl("IHdr", "INSPECTOR", 720, 40, 24);
+        // вкладки сверху
+        addLbl("TabScene", "Scene",    20,  8, 20, GODOT_ORANGE);
+        addLbl("Tab2D",    "2D",      110,  8, 20, th.ink);
+        addLbl("Tab3D",    "3D",      160,  8, 20, th.ink);
+        addLbl("TabScr",   "Script",  210,  8, 20, th.ink);
+        addLbl("TabAss",   "AssetLib",300,  8, 20, th.ink);
 
-        std::vector<std::pair<std::string,std::string>> hier;
+        // заголовки колонок
+        addLbl("DHdr", "Scene",     10, 40, 18, th.ink);
+        addLbl("VHdr", "",         300, 40, 18, th.ink);
+        addLbl("IHdr", "Inspector",900, 40, 18, th.ink);
+
+        std::vector<HierRow> hier;
         if (editor_ && editor_->scene() && editor_->scene()->root)
-            collectHier(*editor_->scene()->root, hier);
+            collectHier(*editor_->scene()->root, 0, hier);
 
-        Node* selNode = editor_ ? editor_->selected() : nullptr;          // FIX: selected() -> Node*
+        Node* selNode = editor_ ? editor_->selected() : nullptr;
         std::string sel = selNode ? selNode->name : std::string{};
 
+        // древо слева (строки-кнопки, отступ пробелами по глубине)
         for (size_t i = 0; i < hier.size(); ++i) {
+            std::string pad(hier[i].depth * 2, ' ');
             UiButton b;
             b.touch.id = "h" + std::to_string(i);
-            b.touch.rect = Rect{10, 80 + (float)i * 64, 300, 56};
-            b.text = (sel == hier[i].first ? "* " : "  ") + hier[i].first + "  " + hier[i].second;
-            b.action = "ed_select:" + hier[i].first;
-            b.color = (sel == hier[i].first) ? th.accent : th.button;
+            b.touch.rect = Rect{8, 64 + (float)i * 30, 284, 28};
+            b.text = pad + hier[i].name + "   " + hier[i].type;
+            b.action = "ed_select:" + hier[i].name;
+            b.color = (sel == hier[i].name) ? GODOT_ORANGE : th.button;
             editorScene_.ui.push_back(b);
         }
 
+        // инспектор справа: имя/тип/Transform
         Node2D* s = (editor_ && !sel.empty()) ? editor_->find2d(sel) : nullptr;
         if (s) {
-            addLbl("InName", "name: " + s->name, 720, 80, 22);
-            addLbl("InType", "type: " + std::string(s->typeName()), 720, 116, 22);
-            addLbl("InPos", "pos: (" + std::to_string((int)s->position.x) + ", " + std::to_string((int)s->position.y) + ")", 720, 152, 22);
-            addLbl("InShape", "shape: " + s->shape, 720, 188, 22);
-            addLbl("InColor", "color: " + colorToHex(s->color), 720, 224, 22);
+            addLbl("InName",  s->name, 900, 64, 22, GODOT_ORANGE);
+            addLbl("InType",  std::string(s->typeName()), 900, 92, 16, th.ink);
+            addLbl("InTrHdr", "Transform", 900, 124, 18, th.ink);
+            addLbl("InPos",   "Position  (" + std::to_string((int)s->position.x) + ", " + std::to_string((int)s->position.y) + ")", 900, 150, 16, th.ink);
+            addLbl("InRot",   "Rotation  " + std::to_string((int)(s->rotation * 57.2957795f)), 900, 174, 16, th.ink);
+            addLbl("InScl",   "Scale  (" + std::to_string((int)(s->scale.x*100)) + "%, " + std::to_string((int)(s->scale.y*100)) + "%)", 900, 198, 16, th.ink);
+            addLbl("InShp",   "Shape  " + s->shape, 900, 222, 16, th.ink);
+            addLbl("InCol",   "Color  " + colorToHex(s->color), 900, 246, 16, th.ink);
+        } else {
+            addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
         }
 
-        const char* shapes[4] = { "square", "circle", "diamond", "triangle" };
-        const char* shTxt[4]  = { "SQ", "CI", "DI", "TR" };
-        for (int k = 0; k < 4; ++k) {
-            UiButton b; b.touch.id = std::string("sh") + std::to_string(k);   // FIX: to_string
-            b.touch.rect = Rect{720 + (float)k * 130, 300, 120, 64};          // FIX: (float)k
-            b.text = shTxt[k]; b.action = std::string("ed_shape:") + shapes[k]; b.color = th.button;
-            editorScene_.ui.push_back(b);
-        }
-
-        const char* cols[3] = { "#D62828", "#2EC4B6", "#F4EDE4" };
-        for (int k = 0; k < 3; ++k) {
-            UiButton b; b.touch.id = std::string("col") + std::to_string(k);  // FIX
-            b.touch.rect = Rect{720 + (float)k * 130, 380, 120, 64};          // FIX
-            b.text = ""; b.action = std::string("ed_color:") + cols[k]; b.color = parseColor(cols[k]);
-            editorScene_.ui.push_back(b);
-        }
-
-        const char* mv[4] = { "l", "u", "d", "r" };
+        // стрелки движения в инспекторе (позиция выбранного)
+        const char* mv[4]    = { "l", "u", "d", "r" };
         const char* mvTxt[4] = { "<", "^", "v", ">" };
         for (int k = 0; k < 4; ++k) {
-            UiButton b; b.touch.id = std::string("mv") + std::to_string(k);   // FIX
-            b.touch.rect = Rect{720 + (float)k * 130, 460, 120, 64};          // FIX
+            UiButton b; b.touch.id = std::string("mv") + std::to_string(k);
+            b.touch.rect = Rect{900 + (float)k * 48, 276, 44, 32};
             b.text = mvTxt[k]; b.action = std::string("ed_move:") + mv[k]; b.color = th.button;
             editorScene_.ui.push_back(b);
         }
 
-        UiButton del; del.touch.id = "del"; del.touch.rect = Rect{720, 540, 120, 64};
+        // тулбар над вьюпортом: формы / цвета / DEL / SAVE / назад
+        const char* shapes[4] = { "square", "circle", "diamond", "triangle" };
+        const char* shTxt[4]  = { "SQ", "CI", "DI", "TR" };
+        for (int k = 0; k < 4; ++k) {
+            UiButton b; b.touch.id = std::string("sh") + std::to_string(k);
+            b.touch.rect = Rect{300 + (float)k * 56, 34, 52, 26};
+            b.text = shTxt[k]; b.action = std::string("ed_shape:") + shapes[k]; b.color = th.button;
+            editorScene_.ui.push_back(b);
+        }
+        const char* cols[3] = { "#D62828", "#2EC4B6", "#F4EDE4" };
+        for (int k = 0; k < 3; ++k) {
+            UiButton b; b.touch.id = std::string("col") + std::to_string(k);
+            b.touch.rect = Rect{524 + (float)k * 56, 34, 52, 26};
+            b.text = ""; b.action = std::string("ed_color:") + cols[k]; b.color = parseColor(cols[k]);
+            editorScene_.ui.push_back(b);
+        }
+        UiButton del; del.touch.id = "del"; del.touch.rect = Rect{692, 34, 52, 26};
         del.text = "DEL"; del.action = "ed_del"; del.color = parseColor("#D62828"); editorScene_.ui.push_back(del);
 
-        UiButton addC; addC.touch.id = "addc"; addC.touch.rect = Rect{850, 540, 160, 64};
-        addC.text = "+COIN"; addC.action = "ed_add_coin"; addC.color = th.button; editorScene_.ui.push_back(addC);
-
-        UiButton save; save.touch.id = "save"; save.touch.rect = Rect{1030, 540, 120, 64};
+        UiButton save; save.touch.id = "save"; save.touch.rect = Rect{748, 34, 60, 26};
         save.text = "SAVE"; save.action = "ed_save"; save.color = parseColor("#2E7D32"); editorScene_.ui.push_back(save);
 
-        UiButton back; back.touch.id = "eback"; back.touch.rect = Rect{1170, 540, 100, 64};
-        back.text = "<"; back.action = "ed_back"; back.color = th.accent; editorScene_.ui.push_back(back);
+        UiButton back; back.touch.id = "eback"; back.touch.rect = Rect{812, 34, 44, 26};
+        back.text = "<"; back.action = "ed_back"; back.color = GODOT_ORANGE; editorScene_.ui.push_back(back);
+
+        // FileSystem снизу
+        addLbl("FsHdr", "FileSystem", 10, 566, 18, th.ink);
+        addLbl("Fs1", "res/",        10, 592, 16, th.ink);
+        addLbl("Fs2", "  scenes/",   10, 614, 16, th.ink);
+        addLbl("Fs3", "  assets/",   10, 636, 16, th.ink);
+        addLbl("Fs4", "  scripts/",  10, 658, 16, th.ink);
     }
 
     void processEditorActions() {
         if (!editor_) return;
-        Node* sn = editor_->selected();                                       // FIX: Node*
+        Node* sn = editor_->selected();
         std::string sel = sn ? sn->name : std::string{};
         bool changed = false;
 
@@ -376,7 +399,7 @@ private:
                 if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; }
             }
             else if (b.action.rfind("ed_color:", 0) == 0) {
-                if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; }  // FIX: строка, не parseColor
+                if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; }
             }
             else if (b.action.rfind("ed_move:", 0) == 0) {
                 std::string d = b.action.substr(8);
@@ -386,10 +409,6 @@ private:
             }
             else if (b.action == "ed_del") {
                 if (!sel.empty()) { editor_->deleteNode(sel); changed = true; }
-            }
-            else if (b.action == "ed_add_coin") {
-                static int cn = 100;
-                editor_->addNode("Coin", "Coin" + std::to_string(cn++), 640, 360); changed = true;
             }
             else if (b.action == "ed_save") {
                 editor_->save(project_.rootPath + "/scenes/main_edited.json");
@@ -402,18 +421,69 @@ private:
         if (changed) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
     }
 
+    // превью-объекты + сетка, спроецированные в окно вьюпорта (300..892 x 64..556)
+    void emitViewport(const Scene& sc, std::string& out) {
+        const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
+        const float CX = VX0 + VW / 2, CY = VY0 + VH / 2;
+        const float S = 0.46875f;          // 592/1280
+
+        out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" +
+               std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B\n";
+
+        for (int gx = 0; gx <= 1280; gx += 64) {
+            float px = CX + ((float)gx - 640) * S;
+            if (px < VX0 || px > VX0 + VW) continue;
+            out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" +
+                   std::to_string((int)VH) + "|#33333D\n";
+        }
+        for (int gy = 0; gy <= 720; gy += 64) {
+            float py = CY + ((float)gy - 360) * S;
+            if (py < VY0 || py > VY0 + VH) continue;
+            out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" +
+                   std::to_string((int)VW) + "|1|#33333D\n";
+        }
+
+        emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, out);
+    }
+
+    void emitNodePreview(const Node* n, float CX, float CY, float S,
+                         float VX0, float VY0, float VW, float VH, std::string& out) {
+        if (!n) return;
+        std::string tn = std::string(n->typeName());
+        if (tn != "Node" && tn != "Camera2D") {
+            const Node2D* d = static_cast<const Node2D*>(n);   // безопасно: tn гарантирует Node2D-наследник
+            float cx = CX + (d->position.x - 640) * S;
+            float cy = CY + (d->position.y - 360) * S;
+            float w = d->w * S, h = d->h * S;
+            float rx = cx - w / 2, ry = cy - h / 2;
+            bool vis = !(rx + w < VX0 || rx > VX0 + VW || ry + h < VY0 || ry > VY0 + VH);
+            if (vis) {
+                if (tn == "Label") {
+                    out += "DRAW text|" + d->name + "|" + std::to_string((int)rx) + "|" +
+                           std::to_string((int)ry) + "|" + std::to_string((int)(14)) + "|" +
+                           colorToHex(d->color) + "\n";
+                } else if (tn == "Sprite2D") {
+                    out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" +
+                           std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555\n";
+                } else if (d->hasAppearance()) {
+                    out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" +
+                           std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" +
+                           std::to_string((int)h) + "|" + colorToHex(d->color) + "\n";
+                }
+            }
+        }
+        for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, out);
+    }
+
     std::string stepEditor() {
         if (!editor_ || !editor_->scene()) { appMode_ = AppMode::Hub; rebuildHub(); return ""; }
-
-        previewBackend_.begin();
-        Renderer pr(previewBackend_);
-        pr.render(*editor_->scene(), nullptr);
 
         gameBackend_.begin();
         Renderer gr(gameBackend_);
         gr.render(editorScene_, &ctx_);
+        std::string out = gameBackend_.str();   // панели + фон темы
+        emitViewport(*editor_->scene(), out);   // вьюпорт поверх центра (панелей не трогает)
 
-        std::string out = previewBackend_.str() + gameBackend_.str();
         processEditorActions();
         input_.endFrame();
         return out;
@@ -433,7 +503,6 @@ private:
     InputManager input_;
     TouchProcessor touch_;
     StringRenderBackend gameBackend_;
-    StringRenderBackend previewBackend_;
     Context ctx_;
 };
 
