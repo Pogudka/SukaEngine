@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
+#include <chrono>
 
 #include "Core.hpp"
 #include "Project.hpp"
@@ -58,12 +59,21 @@ public:
         if (appMode_ != AppMode::Editor || showCreate_ || showBg_) return;
         Scene* es = editor_ ? editor_->scene() : nullptr;
         if (!es) return;
-        const float S = 0.46875f;
         float mx = (x0 + x1) / 2.0f, my = (y0 + y1) / 2.0f;
-        if (phase == 1) { pinching_ = true; pinchMX_ = mx; pinchMY_ = my; return; }
+        float dist = std::sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
+        if (phase == 1) { pinching_ = true; pinchMX_ = mx; pinchMY_ = my; pinchDist0_ = dist; return; }
         if (phase == 3) { pinching_ = false; return; }
         if (!pinching_) return;
-        es->camX += (mx - pinchMX_) / S; es->camY += (my - pinchMY_) / S;
+        // ZOOM-FIX: расхождение пальцев = зум, чистый сдвиг = панорама
+        if (pinchDist0_ > 4 && dist > 4 && std::fabs(dist - pinchDist0_) > 1.5f) {
+            float z = edZoom_ * (dist / pinchDist0_);
+            if (z < 0.4f) z = 0.4f; if (z > 3.0f) z = 3.0f;
+            edZoom_ = z; pinchDist0_ = dist;
+        } else {
+            float S = 0.46875f * edZoom_;
+            es->camX += (mx - pinchMX_) / S;
+            es->camY += (my - pinchMY_) / S;
+        }
         pinchMX_ = mx; pinchMY_ = my;
     }
 
@@ -89,12 +99,13 @@ public:
 
         if (appMode_ == AppMode::Editor && !showCreate_ && !showBg_) {
             Scene* es = editor_ ? editor_->scene() : nullptr;
+            float Z = edZoom_;
 
             if (t.action == RawTouch::Action::Down && pickParent_ && !pickChild_.empty() && es && es->root) {
                 float wx, wy; unproj(*es, x, y, wx, wy);
                 std::string hit = hitTest(es->root.get(), wx, wy);
                 if (!hit.empty() && hit != pickChild_) {
-                    attachChildTo(pickChild_, hit);
+                    pushUndo(); attachChildTo(pickChild_, hit);
                     lastMsg_ = "attached " + pickChild_ + " -> " + hit;
                     if (pickChild_.rfind("UI:", 0) == 0) editor_->selectUi(pickChild_.substr(3));
                     else editor_->select(pickChild_);
@@ -117,14 +128,15 @@ public:
                         float dx = x - scx, dy = y - scy;
                         float dist = std::sqrt(dx*dx + dy*dy);
                         if (manip_ == Manip::Rotate) {
-                            if (std::fabs(dist - 70.0f) < 26.0f) { gizmoRot_ = true; gizmoStartAngle_ = std::atan2(dy, dx); gizmoStartRot_ = g->rotation; return; }
+                            float R = 70.0f * Z;
+                            if (std::fabs(dist - R) < 26.0f * Z) { gizmoRot_ = true; gizmoStartAngle_ = std::atan2(dy, dx); gizmoStartRot_ = g->rotation; return; }
                         } else if (manip_ == Manip::Scale) {
-                            float hw = (g->w * gsx) * 0.46875f / 2, hh = (g->h * gsy) * 0.46875f / 2;
-                            if (std::fabs(x - (scx + hw + 24)) < 28 && std::fabs(dy) < 28) { gizmoSclX_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSX_ = g->scale.x; return; }
-                            if (std::fabs(y - (scy + hh + 24)) < 28 && std::fabs(dx) < 28) { gizmoSclY_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSY_ = g->scale.y; return; }
+                            float hw = (g->w * gsx) * 0.46875f * Z / 2, hh = (g->h * gsy) * 0.46875f * Z / 2;
+                            if (std::fabs(x - (scx + hw + 24*Z)) < 28*Z && std::fabs(dy) < 28*Z) { gizmoSclX_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSX_ = g->scale.x; return; }
+                            if (std::fabs(y - (scy + hh + 24*Z)) < 28*Z && std::fabs(dx) < 28*Z) { gizmoSclY_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSY_ = g->scale.y; return; }
                         } else {
-                            if (std::fabs(dy) < 16 && dx > 8 && dx < 64) { lockAxis_ = 1; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
-                            if (std::fabs(dx) < 16 && dy > 8 && dy < 64) { lockAxis_ = 2; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
+                            if (std::fabs(dy) < 16*Z && dx > 8*Z && dx < 64*Z) { lockAxis_ = 1; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
+                            if (std::fabs(dx) < 16*Z && dy > 8*Z && dy < 64*Z) { lockAxis_ = 2; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
                         }
                     }
                 }
@@ -176,6 +188,9 @@ public:
     }
 
     std::string stepFrame() {
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (lastMs_ > 0) { float dt = (ms - lastMs_) / 1000.0f; if (dt > 0.0001f) fps_ = fps_ * 0.9f + (1.0f / dt) * 0.1f; }
+        lastMs_ = ms;
         if (appMode_ == AppMode::Hub)    return stepHub();
         if (appMode_ == AppMode::Editor) return stepEditor();
         return stepGame();
@@ -190,12 +205,14 @@ private:
         return (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
     }
     void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) {
-        sx = 596 + (wx - sc.camX - 640) * 0.46875f;
-        sy = 310 + (wy - sc.camY - 360) * 0.46875f;
+        float S = 0.46875f * edZoom_;
+        sx = 596 + (wx - sc.camX - 640) * S;
+        sy = 310 + (wy - sc.camY - 360) * S;
     }
     void unproj(const Scene& sc, float sx, float sy, float& wx, float& wy) {
-        wx = 640 + sc.camX + (sx - 596) / 0.46875f;
-        wy = 360 + sc.camY + (sy - 310) / 0.46875f;
+        float S = 0.46875f * edZoom_;
+        wx = 640 + sc.camX + (sx - 596) / S;
+        wy = 360 + sc.camY + (sy - 310) / S;
     }
     void unprojGame(const Scene& sc, float sx, float sy, float& wx, float& wy) {
         Node* cn = sc.root ? sc.root->findByType("Camera2D") : nullptr;
@@ -209,6 +226,7 @@ private:
                 wy >= b.touch.rect.y && wy <= b.touch.rect.y + b.touch.rect.h) return b.touch.id;
         return "";
     }
+    static int countNodes(const Node* n) { if (!n) return 0; int c = 1; for (auto& ch : n->getChildren()) c += countNodes(ch.get()); return c; }
 
     static bool nodeWorldRec(Node* n, const std::string& name, float ox, float oy, float orot, float osx, float osy,
                              float& wx, float& wy, float& wr, float& wsx, float& wsy) {
@@ -227,14 +245,6 @@ private:
         if (!sc || !sc->root) return false;
         return nodeWorldRec(sc->root.get(), name, 0, 0, 0, 1, 1, wx, wy, wr, wsx, wsy);
     }
-    void startDragParent(Scene* es, const std::string& name) {
-        dragOX_ = 0; dragOY_ = 0; dragPSX_ = 1; dragPSY_ = 1;
-        if (es->root) { bool f = false; parentXf(es->root.get(), name, 0, 0, 1, 1, dragOX_, dragOY_, dragPSX_, dragPSY_, f); }
-        if (dragPSX_ < 0.01f) dragPSX_ = 1; if (dragPSY_ < 0.01f) dragPSY_ = 1;
-    }
-    void moveGroupButtons(Scene* es, const std::string& group, float dx, float dy) {
-        for (auto& b : es->ui) if (b.group == group) { b.touch.rect.x += dx; b.touch.rect.y += dy; }
-    }
     void parentXf(Node* n, const std::string& name, float cx, float cy, float sx, float sy, float& ox, float& oy, float& psx, float& psy, bool& found) {
         if (found) return;
         if (n->name == name) { ox = cx; oy = cy; psx = sx; psy = sy; found = true; return; }
@@ -248,8 +258,14 @@ private:
         }
         for (auto& ch : n->getChildren()) parentXf(ch.get(), name, ncx, ncy, nsx, nsy, ox, oy, psx, psy, found);
     }
-
-
+    void startDragParent(Scene* es, const std::string& name) {
+        dragOX_ = 0; dragOY_ = 0; dragPSX_ = 1; dragPSY_ = 1;
+        if (es->root) { bool f = false; parentXf(es->root.get(), name, 0, 0, 1, 1, dragOX_, dragOY_, dragPSX_, dragPSY_, f); }
+        if (dragPSX_ < 0.01f) dragPSX_ = 1; if (dragPSY_ < 0.01f) dragPSY_ = 1;
+    }
+    void moveGroupButtons(Scene* es, const std::string& group, float dx, float dy) {
+        for (auto& b : es->ui) if (b.group == group) { b.touch.rect.x += dx; b.touch.rect.y += dy; }
+    }
     void attachChildTo(const std::string& child, const std::string& parent) {
         if (!editor_ || !editor_->scene()) return;
         Scene* sc = editor_->scene();
@@ -275,6 +291,39 @@ private:
         if (!owner || owner == root) return;
         std::unique_ptr<Node> up = owner->takeChild(child);
         if (up) root->addChild(std::move(up));
+    }
+
+    // UNDO-FIX: снапшоты сцены во временные json
+    void pushUndo() {
+        if (!editor_ || !editor_->scene()) return;
+        std::string rel = "snap_" + std::to_string(snapCounter_++) + ".json";
+        editor_->save(project_.rootPath + "/" + rel);
+        undoStack_.push_back(rel);
+        if (undoStack_.size() > 12) undoStack_.erase(undoStack_.begin());
+        redoStack_.clear();
+    }
+    void loadSnap(const std::string& rel) {
+        if (sceneMgr_->restartScene(rel, resources_)) {
+            editor_->attach(sceneMgr_->current());
+            scripted_.clear(); dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pickParent_ = false;
+            buildEditorPanels(); input_.setUi(&editorScene_.ui);
+        }
+    }
+    void doUndo() {
+        if (!editor_ || undoStack_.empty()) { lastMsg_ = "nothing to undo"; return; }
+        std::string cur = "snap_" + std::to_string(snapCounter_++) + ".json";
+        editor_->save(project_.rootPath + "/" + cur);
+        redoStack_.push_back(cur);
+        std::string rel = undoStack_.back(); undoStack_.pop_back();
+        loadSnap(rel); lastMsg_ = "undo";
+    }
+    void doRedo() {
+        if (!editor_ || redoStack_.empty()) { lastMsg_ = "nothing to redo"; return; }
+        std::string cur = "snap_" + std::to_string(snapCounter_++) + ".json";
+        editor_->save(project_.rootPath + "/" + cur);
+        undoStack_.push_back(cur);
+        std::string rel = redoStack_.back(); redoStack_.pop_back();
+        loadSnap(rel); lastMsg_ = "redo";
     }
 
     // ---------------- HUB ----------------
@@ -337,6 +386,7 @@ private:
         scripts_.load(pi.rootPath);
         Scene* sc = sceneMgr_->current();
         UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
+        UiButton dbg; dbg.touch.id = "dbg"; dbg.touch.rect = Rect{1080, 10, 90, 70}; dbg.text = "DBG"; dbg.action = "dbg:"; dbg.color = parseColor("#808080"); sc->ui.push_back(dbg);
         input_.setUi(&sc->ui); touch_.resetJoystick(); appMode_ = AppMode::Game; return true;
     }
     std::string stepGame() {
@@ -351,10 +401,17 @@ private:
         if (ctx_.coinCollectedThisFrame) out += "SOUND coin\n";
         if (ctx_.jumpPressedThisFrame)   out += "SOUND jump\n";
         gameBackend_.begin(); Renderer renderer(gameBackend_); renderer.render(*sceneMgr_->current(), &ctx_); out += gameBackend_.str();
+        if (dbg_) {
+            nodeCount_ = countNodes(sceneMgr_->current()->root.get());
+            lastDraws_ = 0; for (size_t i = 0; i + 4 < out.size(); ++i) if (out[i]=='D' && out[i+1]=='R' && out[i+2]=='A' && out[i+3]=='W') ++lastDraws_;
+            out += "DRAW text|fps " + std::to_string((int)fps_) + "  nodes " + std::to_string(nodeCount_) + "  draws " + std::to_string(lastDraws_) + "|20|100|18|#FFD700|0\n";
+            out += "DRAW text|vars " + std::to_string((int)ctx_.vars.size()) + "  score " + std::to_string(ctx_.score) + "|20|124|18|#FFD700|0\n";
+        }
         input_.endFrame(); return out;
     }
     void runAction(const std::string& act) {
         Scene* sc = sceneMgr_->current(); if (!sc) return;
+        if (act == "dbg:") { dbg_ = !dbg_; return; }
         const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:";
         if (act.rfind(pHub, 0) == 0) { appMode_ = AppMode::Hub; rebuildHub(); }
         else if (act.rfind(pRestart, 0) == 0) sceneMgr_->requestChange(act.substr(pRestart.size()), true);
@@ -420,6 +477,7 @@ private:
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
         showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; pickParent_ = false; lastMsg_.clear();
+        edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -467,6 +525,7 @@ private:
         auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = dimColor(th.bg, 0.6f); fsBg->w = 284; fsBg->h = 320; fsBg->position = Vec2{150, 536}; editorScene_.root->addChild(std::move(fsBg));
         addLbl("TabScene", "Scene", 20, 8, 20, GODOT_ORANGE); addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink); addLbl("TabScr", "Script", 210, 8, 20, th.ink); addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
         addLbl("DHdr", "Scene", 10, 40, 18, th.ink); addLbl("IHdr", "Inspector", 900, 40, 18, th.ink);
+        addLbl("ZoomLbl", "zoom " + std::to_string((int)(edZoom_ * 100)) + "%", 300, 8, 16, th.ink);
 
         const char* mlab[3] = { "POS","ROT","SCL" };
         Manip mval[3] = { Manip::Move, Manip::Rotate, Manip::Scale };
@@ -572,6 +631,10 @@ private:
         { UiButton b; b.touch.id = "clnbtn"; b.touch.rect = Rect{1092, 448, 44, 30}; b.text = "DUP"; b.action = "ed_clone"; b.color = th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id = "parbtn"; b.touch.rect = Rect{1140, 448, 44, 30}; b.text = pickParent_ ? "PICK" : "PAR"; b.action = "ed_parent"; b.color = pickParent_ ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id = "unpbtn"; b.touch.rect = Rect{900, 482, 44, 30}; b.text = "UNP"; b.action = "ed_unparent"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "cpybtn"; b.touch.rect = Rect{948, 482, 44, 30}; b.text = "CPY"; b.action = "ed_copy"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "pstbtn"; b.touch.rect = Rect{996, 482, 44, 30}; b.text = "PST"; b.action = "ed_paste"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "undbtn"; b.touch.rect = Rect{1044, 482, 44, 30}; b.text = "UND"; b.action = "ed_undo"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "redbtn"; b.touch.rect = Rect{1092, 482, 44, 30}; b.text = "RED"; b.action = "ed_redo"; b.color = th.button; editorScene_.ui.push_back(b); }
 
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*58, 616, 54, 48}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
@@ -589,13 +652,14 @@ private:
         { UiButton b; b.touch.id="scr"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SCR"; b.action="ed_scr"; b.color=th.button; editorScene_.ui.push_back(b); }
 
         if (showCreate_) {
-            const char* ct[6] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D" };
-            const char* cs[6] = { "square","circle","diamond","triangle","","" };
-            const char* cl[6] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE" };
-            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*66, 560, 62, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
-            { UiButton b; b.touch.id="ctcam"; b.touch.rect=Rect{300+6*66,560,62,40}; b.text="CAM"; b.action="create_cam"; b.color=th.accent; editorScene_.ui.push_back(b); }
-            { UiButton b; b.touch.id="ctlit"; b.touch.rect=Rect{300+7*66,560,62,40}; b.text="LIGHT"; b.action="create_light"; b.color=parseColor("#FFD700"); editorScene_.ui.push_back(b); }
-            { UiButton b; b.touch.id="ctgrp"; b.touch.rect=Rect{300+8*66,560,62,40}; b.text="GRP"; b.action="create_grp"; b.color=parseColor("#808080"); editorScene_.ui.push_back(b); }
+            const char* ct[10] = { "Node2D","Node2D","Node2D","Node2D","Label","Sprite2D","","","","" };
+            const char* cs[10] = { "square","circle","diamond","triangle","","","","","","" };
+            const char* cl[10] = { "CUBE","CIRCLE","DIAMOND","TRIANGLE","TEXT","SPRITE","CAM","LIGHT","GRP","BTN" };
+            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("ct")+std::to_string(k); b.touch.rect = Rect{300+(float)k*58, 560, 54, 40}; b.text = cl[k]; b.action = std::string("create:")+ct[k]+":"+cs[k]; b.color = th.button; editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctcam"; b.touch.rect=Rect{300+6*58,560,54,40}; b.text="CAM"; b.action="create_cam"; b.color=th.accent; editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctlit"; b.touch.rect=Rect{300+7*58,560,54,40}; b.text="LIGHT"; b.action="create_light"; b.color=parseColor("#FFD700"); editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctgrp"; b.touch.rect=Rect{300+8*58,560,54,40}; b.text="GRP"; b.action="create_grp"; b.color=parseColor("#808080"); editorScene_.ui.push_back(b); }
+            { UiButton b; b.touch.id="ctbtn"; b.touch.rect=Rect{300+9*58,560,54,40}; b.text="BTN"; b.action="create_btn"; b.color=parseColor("#2EC4B6"); editorScene_.ui.push_back(b); }
         }
         if (showBg_) {
             const char* bgs[6] = { "#FFF3E0","#111111","#16213E","#2EC4B6","#D62828","#87CEEB" };
@@ -634,7 +698,23 @@ private:
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
             if (b.action == "ed_lock") {
-                if (s2) { s2->locked = !s2->locked; lastMsg_ = s2->locked ? "locked " + sel : "unlocked " + sel; changed = true; }
+                if (s2) { pushUndo(); s2->locked = !s2->locked; lastMsg_ = s2->locked ? "locked " + sel : "unlocked " + sel; changed = true; }
+            }
+            else if (b.action == "ed_undo") { doUndo(); }
+            else if (b.action == "ed_redo") { doRedo(); }
+            else if (b.action == "ed_copy") { if (s2) { clipboard_ = s2->cloneNode(); lastMsg_ = "copied " + sel; } }
+            else if (b.action == "ed_paste") {
+                if (clipboard_ && editor_->scene() && editor_->scene()->root) {
+                    pushUndo();
+                    auto cp = clipboard_->cloneNode();
+                    std::string nm = cp->name + "_c" + std::to_string(clipCounter_++);
+                    cp->name = nm;
+                    Node2D* raw = dynamic_cast<Node2D*>(cp.get());
+                    if (raw) raw->position.x += 40;
+                    editor_->scene()->root->addChild(std::move(cp));
+                    editor_->select(nm);
+                    lastMsg_ = "pasted " + nm; changed = true;
+                } else lastMsg_ = "clipboard empty";
             }
             else if (b.action.rfind("fold:", 0) == 0) { std::string nm = b.action.substr(5); if (collapsed_.count(nm)) collapsed_.erase(nm); else collapsed_.insert(nm); changed = true; }
             else if (b.action == "hier_up") { hierScroll_ -= 3; changed = true; }
@@ -654,14 +734,17 @@ private:
                         editor_->attach(sceneMgr_->current());
                         scripted_.clear(); showCreate_ = false; showBg_ = false; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                         ub = nullptr; sel.clear(); s2 = nullptr; lk = false; hierScroll_ = 0;
+                        undoStack_.clear(); redoStack_.clear();
                         changed = true;
                     }
                 } else if (!lk) {
+                    pushUndo();
                     if (ub) { ub->texture = rel; changed = true; }
                     else if (!sel.empty()) { editor_->setTexture(sel, rel); changed = true; }
                 }
             }
             else if (b.action == "clear_tex" && !lk) {
+                pushUndo();
                 if (ub) { ub->texture.clear(); changed = true; }
                 else if (!sel.empty()) { editor_->setTexture(sel, std::string("")); changed = true; }
             }
@@ -670,8 +753,8 @@ private:
             else if (b.action == "manip:scale")  { manip_ = Manip::Scale;  changed = true; }
             else if (b.action == "create_open") { showCreate_ = !showCreate_; showBg_ = false; changed = true; }
             else if (b.action == "bg_open") { showBg_ = !showBg_; showCreate_ = false; changed = true; }
-            else if (b.action.rfind("bg_set:", 0) == 0) { if (editor_->scene()) editor_->scene()->bg = b.action.substr(7); showBg_ = false; changed = true; }
-            else if (b.action == "bg_clear") { if (editor_->scene()) editor_->scene()->bg.clear(); showBg_ = false; changed = true; }
+            else if (b.action.rfind("bg_set:", 0) == 0) { pushUndo(); if (editor_->scene()) editor_->scene()->bg = b.action.substr(7); showBg_ = false; changed = true; }
+            else if (b.action == "bg_clear") { pushUndo(); if (editor_->scene()) editor_->scene()->bg.clear(); showBg_ = false; changed = true; }
             else if (b.action == "edit_text" && !lk) {
                 if (ub) { pendingText_ = true; pendingTextCur_ = ub->text; }
                 else if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; }
@@ -695,43 +778,43 @@ private:
                 else if (pendingNumKind_ == "bh") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.h) : "50";
             }
             else if (b.action == "ed_scr" && !lk) { if (!sel.empty()) { attachScript(sel); changed = true; } }
-            else if (b.action == "ed_clone" && !lk) { if (!sel.empty()) { editor_->cloneSelected(sel + "_copy"); changed = true; } }
+            else if (b.action == "ed_clone" && !lk) { pushUndo(); if (!sel.empty()) { editor_->cloneSelected(sel + "_copy"); changed = true; } }
             else if (b.action == "ed_parent" && !lk) {
                 if (!selUi.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? ("UI:" + selUi) : std::string(""); changed = true; }
                 else if (!sel.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? sel : std::string(""); changed = true; }
             }
-            else if (b.action == "ed_unparent" && !lk) {
-                if (!selUi.empty()) { detachChild("UI:" + selUi); changed = true; }
-                else if (!sel.empty()) { detachChild(sel); changed = true; }
-            }
+            else if (b.action == "ed_unparent" && !lk) { pushUndo(); if (!selUi.empty()) { detachChild("UI:" + selUi); changed = true; } else if (!sel.empty()) { detachChild(sel); changed = true; } }
             else if (b.action.rfind("ed_selectui:", 0) == 0) {
                 std::string id = b.action.substr(12);
-                if (pickParent_ && !pickChild_.empty() && pickChild_ != id && pickChild_ != ("UI:" + id)) { attachChildTo(pickChild_, id); pickParent_ = false; pickChild_.clear(); }
+                if (pickParent_ && !pickChild_.empty() && pickChild_ != id && pickChild_ != ("UI:" + id)) { pushUndo(); attachChildTo(pickChild_, id); pickParent_ = false; pickChild_.clear(); }
                 else editor_->selectUi(id);
                 changed = true;
             }
             else if (b.action.rfind("ed_select:", 0) == 0) {
                 std::string nm = b.action.substr(10);
-                if (pickParent_ && !pickChild_.empty() && nm != pickChild_) { attachChildTo(pickChild_, nm); pickParent_ = false; pickChild_.clear(); }
+                if (pickParent_ && !pickChild_.empty() && nm != pickChild_) { pushUndo(); attachChildTo(pickChild_, nm); pickParent_ = false; pickChild_.clear(); }
                 else editor_->select(nm);
                 changed = true;
             }
-            else if (b.action == "create_cam") { std::string name = "Cam" + std::to_string(createCounter_++); editor_->addNode("Camera2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true; }
-            else if (b.action == "create_light") { std::string name = "Light" + std::to_string(createCounter_++); editor_->addNode("Light2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true; }
+            else if (b.action == "create_cam") { pushUndo(); std::string name = "Cam" + std::to_string(createCounter_++); editor_->addNode("Camera2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true; }
+            else if (b.action == "create_light") { pushUndo(); std::string name = "Light" + std::to_string(createCounter_++); editor_->addNode("Light2D", name, 640, 360); editor_->select(name); showCreate_ = false; changed = true; }
             else if (b.action == "create_grp") { pendingName_ = true; pendingKind_ = 0; pendingType_ = "Node2D"; pendingShape_ = "none"; showCreate_ = false; changed = true; }
+            else if (b.action == "create_btn") { pendingName_ = true; pendingKind_ = 1; showCreate_ = false; changed = true; }
             else if (b.action.rfind("create:", 0) == 0) {
                 std::string rest = b.action.substr(7); size_t c = rest.find(':');
                 pendingName_ = true; pendingKind_ = 0;
                 pendingType_ = rest.substr(0, c); pendingShape_ = (c == std::string::npos) ? "" : rest.substr(c + 1);
                 showCreate_ = false; changed = true;
             }
-            else if (b.action.rfind("ed_shape:", 0) == 0 && !lk) { if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; } }
+            else if (b.action.rfind("ed_shape:", 0) == 0 && !lk) { pushUndo(); if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; } }
             else if (b.action.rfind("ed_color:", 0) == 0 && !lk) {
+                pushUndo();
                 if (ub) { ub->color = parseColor(b.action.substr(9)); changed = true; }
                 else if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; }
             }
             else if (b.action.rfind("ed_move:", 0) == 0 && !lk) {
                 std::string d = b.action.substr(8);
+                pushUndo();
                 if (ub) {
                     if (manip_ == Manip::Move) { float dx=(d=="l")?-16:(d=="r")?16:0; float dy=(d=="u")?-16:(d=="d")?16:0; ub->touch.rect.x+=dx; ub->touch.rect.y+=dy; }
                     else if (manip_ == Manip::Rotate) { float dr=(d=="l")?-15.0f:(d=="r")?15.0f:0.0f; ub->angle += dr; }
@@ -749,6 +832,7 @@ private:
                 }
             }
             else if (b.action == "ed_del" && !lk) {
+                pushUndo();
                 if (ub) { editor_->deleteUi(selUi); ub = nullptr; changed = true; }
                 else if (!sel.empty()) { editor_->deleteNode(sel); sel.clear(); s2 = nullptr; changed = true; }
             }
@@ -768,20 +852,27 @@ private:
         }
         if (!editor_) return;
         if (hn) {
+            pushUndo();
             if (!nm.empty() && pendingKind_ == 0) {
                 editor_->addNode(pendingType_, nm, 640, 360);
                 if (!pendingShape_.empty()) editor_->setShape(nm, pendingShape_);
                 editor_->select(nm);
                 lastMsg_ = "created " + nm;
+            } else if (!nm.empty() && pendingKind_ == 1) {
+                editor_->addUi(nm, nm, 580, 335, 120, 50, std::string(""), parseColor("#808080"));
+                editor_->selectUi(nm);
+                lastMsg_ = "created button " + nm;
             }
             pendingName_ = false; showCreate_ = false;
         }
         if (ht) {
+            pushUndo();
             std::string uid = editor_->selectedUi();
             if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->text = txt; }
             else { Node* s = editor_->selected(); if (s && std::string(s->typeName()) == "Label") static_cast<Label*>(s)->text = txt; }
         }
         if (ha) {
+            pushUndo();
             std::string uid = editor_->selectedUi();
             if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->action = act; }
             else { Node* s = editor_->selected(); Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr; if (n2) n2->action = act; }
@@ -793,6 +884,7 @@ private:
             Node* s = editor_->selected();
             Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr;
             bool lk2 = (n2 != nullptr) && n2->locked;
+            if (!lk2 && (n2 || b)) pushUndo();
             if (!lk2 && n2) {
                 if (pendingNumKind_ == "nx") { float dx = v - n2->position.x; n2->position.x = v; if (editor_->scene()) moveGroupButtons(editor_->scene(), n2->name, dx, 0); }
                 else if (pendingNumKind_ == "ny") { float dy = v - n2->position.y; n2->position.y = v; if (editor_->scene()) moveGroupButtons(editor_->scene(), n2->name, 0, dy); }
@@ -813,11 +905,13 @@ private:
     }
 
     void emitViewport(const Scene& sc, std::string& out) {
-        const float VX0 = 300, VY0 = 64, VW = 592, VH = 492; const float CX = VX0 + VW/2, CY = VY0 + VH/2, S = 0.46875f;
+        const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
+        const float S = 0.46875f * edZoom_;
+        const float CX = VX0 + VW/2, CY = VY0 + VH/2;
         if (sc.bgSet()) out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|" + sc.bg + "|0\n";
         out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B|0\n";
-        for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640 - sc.camX)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D|0\n"; }
-        for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360 - sc.camY)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D|0\n"; }
+        for (int gx = 0; gx <= 2560; gx += 64) { float px = CX + ((float)gx - 640 - sc.camX)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D|0\n"; }
+        for (int gy = 0; gy <= 1440; gy += 64) { float py = CY + ((float)gy - 360 - sc.camY)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D|0\n"; }
         emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, sc.camX, sc.camY, 0, 0, 0, 1, 1, out);
         for (auto& b : sc.ui) {
             float bcx = CX + (b.touch.rect.x + b.touch.rect.w/2 - sc.camX - 640)*S;
@@ -834,30 +928,31 @@ private:
             if (!nodeWorld(esc, g->name, gwx, gwy, gwr, gsx, gsy)) { gwx = g->position.x; gwy = g->position.y; gsx = gsy = 1; }
             float cx = CX + (gwx - sc.camX - 640)*S;
             float cy = CY + (gwy - sc.camY - 360)*S;
+            float Z = edZoom_;
             if (manip_ == Manip::Move) {
-                out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-2)) + "|56|4|#D62828|0\n";
-                out += "DRAW shape|triangle|" + std::to_string((int)(cx+50)) + "|" + std::to_string((int)(cy-8)) + "|16|14|#D62828|90\n";
-                out += "DRAW rect|" + std::to_string((int)(cx-2)) + "|" + std::to_string((int)cy) + "|4|56|#40C040|0\n";
-                out += "DRAW shape|triangle|" + std::to_string((int)(cx-8)) + "|" + std::to_string((int)(cy+50)) + "|14|16|#40C040|180\n";
+                out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-2)) + "|" + std::to_string((int)(56*Z)) + "|4|#D62828|0\n";
+                out += "DRAW shape|triangle|" + std::to_string((int)(cx+50*Z)) + "|" + std::to_string((int)(cy-8*Z)) + "|" + std::to_string((int)(16*Z)) + "|" + std::to_string((int)(14*Z)) + "|#D62828|90\n";
+                out += "DRAW rect|" + std::to_string((int)(cx-2)) + "|" + std::to_string((int)cy) + "|4|" + std::to_string((int)(56*Z)) + "|#40C040|0\n";
+                out += "DRAW shape|triangle|" + std::to_string((int)(cx-8*Z)) + "|" + std::to_string((int)(cy+50*Z)) + "|" + std::to_string((int)(14*Z)) + "|" + std::to_string((int)(16*Z)) + "|#40C040|180\n";
             } else if (manip_ == Manip::Rotate) {
                 for (int k = 0; k < 24; ++k) {
                     float a = k * 6.28318f / 24.0f;
-                    float px = cx + std::cos(a) * 70, py = cy + std::sin(a) * 70;
+                    float px = cx + std::cos(a) * 70*Z, py = cy + std::sin(a) * 70*Z;
                     out += "DRAW rect|" + std::to_string((int)(px-3)) + "|" + std::to_string((int)(py-3)) + "|6|6|#FF8800|0\n";
                 }
             } else {
                 float hw = (g->w * gsx)*S/2, hh = (g->h * gsy)*S/2;
-                out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-1)) + "|" + std::to_string((int)(hw+24)) + "|2|#4CC9F0|0\n";
-                out += "DRAW rect|" + std::to_string((int)(cx+hw+16)) + "|" + std::to_string((int)(cy-8)) + "|16|16|#4CC9F0|0\n";
-                out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24)) + "|#4CC9F0|0\n";
-                out += "DRAW rect|" + std::to_string((int)(cx-8)) + "|" + std::to_string((int)(cy+hh+16)) + "|16|16|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-1)) + "|" + std::to_string((int)(hw+24*Z)) + "|2|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)(cx+hw+16*Z)) + "|" + std::to_string((int)(cy-8*Z)) + "|16|16|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24*Z)) + "|#4CC9F0|0\n";
+                out += "DRAW rect|" + std::to_string((int)(cx-8*Z)) + "|" + std::to_string((int)(cy+hh+16*Z)) + "|16|16|#4CC9F0|0\n";
             }
         }
         if (pickParent_ && !pickChild_.empty()) {
             out += "DRAW rect|300|64|592|26|#FF8800|0\n";
             out += "DRAW text|PARENT FOR: " + pickChild_ + "  ->  tap object or row|306|68|16|#1A1A2E|0\n";
         }
-        if (!lastMsg_.empty()) out += "DRAW text|" + lastMsg_ + "|306|580|14|#FFD700|0\n";
+        if (!lastMsg_.empty()) out += "DRAW text|" + lastMsg_ + "   fps " + std::to_string((int)fps_) + "|306|580|14|#FFD700|0\n";
     }
 
     void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH,
@@ -883,6 +978,13 @@ private:
                 out += "DRAW rect|" + std::to_string((int)(sx-14)) + "|" + std::to_string((int)(sy-10)) + "|28|20|#FFD700|0\n";
                 out += "DRAW text|CAM|" + std::to_string((int)(sx-12)) + "|" + std::to_string((int)(sy+12)) + "|12|#FFD700|0\n";
             }
+        }
+        else if (tn == "Light2D") {
+            // LIGHT-PREVIEW-FIX: свет виден в редакторе
+            Light2D* li = static_cast<Light2D*>(n2d);
+            float r = li->radius * ((wsx + wsy) * 0.5f) * S;
+            if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH)
+                out += "DRAW shape|glow|" + std::to_string((int)(sx-r)) + "|" + std::to_string((int)(sy-r)) + "|" + std::to_string((int)(2*r)) + "|" + std::to_string((int)(2*r)) + "|" + colorToHexA(colA) + "|0\n";
         }
         else if (tn != "Node") {
             float w = n2d->w * wsx * S, h = n2d->h * wsy * S;
@@ -922,7 +1024,6 @@ private:
         input_.endFrame(); return out;
     }
 
-    // БЛОК ПЕРЕМЕННЫХ-ЧЛЕНОВ (без него сборка не проходила)
     AppMode appMode_ = AppMode::Hub;
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
@@ -937,10 +1038,14 @@ private:
     std::string pendingType_, pendingShape_, pendingActionCur_;
     std::string pendingNodeAction_;
     std::string lastMsg_;
-    float pinchMX_ = 0, pinchMY_ = 0;
+    float edZoom_ = 1.0f;
+    float pinchMX_ = 0, pinchMY_ = 0, pinchDist0_ = 0;
     float dragOX_ = 0, dragOY_ = 0, dragPSX_ = 1, dragPSY_ = 1;
     int hierScroll_ = 0;
     std::set<std::string> collapsed_;
+    std::vector<std::string> undoStack_, redoStack_; int snapCounter_ = 0;
+    std::unique_ptr<Node> clipboard_; int clipCounter_ = 0;
+    bool dbg_ = false; float fps_ = 0; long long lastMs_ = 0; int nodeCount_ = 0, lastDraws_ = 0;
     Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     std::mutex dlgMtx_;
