@@ -42,6 +42,7 @@ public:
             s += "\"angle\": " + std::to_string(b.angle);
             if (!b.texture.empty()) s += ", \"texture\": \"" + b.texture + "\"";
             if (!b.group.empty()) s += ", \"group\": \"" + b.group + "\"";
+            s += ", \"alpha\": " + std::to_string(b.alpha);   // BTN-ALPHA
             s += " }";
             uiparts.push_back(s);
         }
@@ -52,7 +53,6 @@ public:
     }
 
 private:
-    // CHILDREN-FIX: рекурсивная запись детей в "children"
     static std::string nodeJson(Node& n, int indent) {
         std::string pad(indent, ' ');
         Node2D* n2 = dynamic_cast<Node2D*>(&n);
