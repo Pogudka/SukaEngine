@@ -85,8 +85,10 @@ public:
             ss_ << "DRAW shape|" << cmd.shape << "|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|"
                 << (int)cmd.rect.w << "|" << (int)cmd.rect.h << "|" << colorToHexA(cmd.color) << "|" << cmd.angle << "\n";
         } else {
+            // BTN-ALPHA: альфа кнопки запекается в цвет (#AARRGGBB)
             ss_ << "DRAW button|" << cmd.text << "|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|"
-                << (int)cmd.rect.w << "|" << (int)cmd.rect.h << "|" << colorToHex(cmd.color) << "|"
+                << (int)cmd.rect.w << "|" << (int)cmd.rect.h << "|"
+                << colorToHexA(withAlpha(cmd.color, cmd.alpha)) << "|"
                 << cmd.angle << "|" << cmd.texture << "\n";
         }
     }
@@ -129,6 +131,7 @@ public:
             DrawCmd cmd; cmd.kind = DrawCmd::Kind::Button;
             cmd.text = b.text; cmd.rect = b.touch.rect; cmd.color = b.color;
             cmd.angle = b.angle; cmd.texture = resolveAssetPath(b.texture);
+            cmd.alpha = b.alpha;   // BTN-ALPHA
             backend_.draw(cmd);
         }
         backend_.end();
