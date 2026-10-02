@@ -24,6 +24,7 @@
 #include "Hub.hpp"
 #include "Editor.hpp"
 #include "Script.hpp"
+#include "Tween.hpp"
 
 #include "CommonTypes.hpp"
 #include "UiUtils.hpp"
@@ -1304,6 +1305,7 @@ private:
         sceneMgr_ = std::move(mgr);
 
         scripts_.load(root);
+        g_tweens.clear();
 
         ctx_ = Context();
         g_luaLog.clear();
@@ -1369,6 +1371,18 @@ private:
         sceneMgr_->update(ctx_, 1.0 / 60.0, input_, resources_);
         scripts_.update(*sceneMgr_->current(), ctx_, 1.0 / 60.0, *sceneMgr_, ctx_.vars);
 
+        if (sceneMgr_->current()) {
+            g_tweens.update(
+                1.0f / 60.0f,
+                sceneMgr_->current(),
+                [this](const std::string& fn) {
+                    if (sceneMgr_ && sceneMgr_->current()) {
+                        scripts_.callGlobal(fn, ctx_, *sceneMgr_, ctx_.vars, sceneMgr_->current());
+                    }
+                }
+            );
+        }
+
         if (pendingLoadVars_) {
             if (saveVarsEnabled_) {
                 loadVars();
@@ -1411,6 +1425,7 @@ private:
             out += "DRAW text|fps " + std::to_string((int)fps_) +
                    "  nodes " + std::to_string(nodeCount_) +
                    "  draws " + std::to_string(lastDraws_) +
+                   "  tweens " + std::to_string((int)g_tweens.count()) +
                    "|20|100|18|#FFD700|0\n";
 
             out += "DRAW text|vars " + std::to_string((int)ctx_.vars.size()) +
@@ -1463,11 +1478,13 @@ private:
 
             rebuildHub();
         } else if (act.rfind(pRestart, 0) == 0) {
+            g_tweens.clear();
             sceneMgr_->requestChange(act.substr(pRestart.size()), true);
         } else if (act.rfind(pChange, 0) == 0) {
+            g_tweens.clear();
             sceneMgr_->requestChange(act.substr(pChange.size()), false);
         } else if (act.rfind(pCall, 0) == 0) {
-            scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars);
+            scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars, sc);
         } else if (act.rfind(pAdd, 0) == 0 || act.rfind(pSet, 0) == 0) {
             bool isAdd = act.rfind(pAdd, 0) == 0;
 
@@ -1577,6 +1594,8 @@ private:
         confirmDeleteDir_.clear();
 
         clearDialogResults();
+
+        g_tweens.clear();
 
         buildEditorPanels();
 
