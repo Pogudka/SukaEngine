@@ -10,6 +10,7 @@
 #include <mutex>
 #include <chrono>
 #include <fstream>
+#include <cctype>
 
 #include "Core.hpp"
 #include "Project.hpp"
@@ -66,6 +67,21 @@ inline int utf8ByteToCp(const std::string& s, int bytePos) {
     while (p < bytePos && p < (int)s.size()) { p = utf8Next(s, p); ++c; }
     return c;
 }
+// RGB-FIX: цвет <-> "r,g,b"
+inline std::string rgbStr(unsigned c) {
+    return std::to_string((c >> 24) & 255) + "," + std::to_string((c >> 16) & 255) + "," + std::to_string((c >> 8) & 255);
+}
+inline bool parseRgb(const std::string& s, unsigned& out) {
+    int v[3]; int idx = 0; std::string num;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i < s.size() && isdigit((unsigned char)s[i])) { num += s[i]; continue; }
+        if (!num.empty()) { if (idx < 3) v[idx++] = atoi(num.c_str()); num.clear(); }
+    }
+    if (idx < 3) return false;
+    for (int k = 0; k < 3; ++k) { if (v[k] < 0) v[k] = 0; if (v[k] > 255) v[k] = 255; }
+    out = ((unsigned)v[0] << 24) | ((unsigned)v[1] << 16) | ((unsigned)v[2] << 8) | 0xFFu;
+    return true;
+}
 
 class GameApp {
 public:
@@ -94,7 +110,7 @@ public:
     void submitScriptKey(int k)                   { std::lock_guard<std::mutex> lk(imeMtx_); imeKeyQ_.push_back(k); }
 
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
-        if (appMode_ != AppMode::Editor || scriptMode_ || showCreate_ || showBg_) return;
+        if (appMode_ != AppMode::Editor || scriptMode_ || showCreate_) return;
         Scene* es = editor_ ? editor_->scene() : nullptr;
         if (!es) return;
         float mx = (x0 + x1) / 2.0f, my = (y0 + y1) / 2.0f;
@@ -160,7 +176,7 @@ public:
             }
         }
 
-        if (appMode_ == AppMode::Editor && !scriptMode_ && !showCreate_ && !showBg_) {
+        if (appMode_ == AppMode::Editor && !scriptMode_ && !showCreate_) {
             Scene* es = editor_ ? editor_->scene() : nullptr;
             float Z = edZoom_;
 
@@ -645,7 +661,7 @@ private:
         if (!sceneMgr_->restartScene("scenes/main.json", resources_))
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
+        showCreate_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
         scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear(); compAnchor_ = -1; imeShown_ = false;
@@ -758,7 +774,7 @@ private:
                 addLbl("InName", ub->touch.id, 900, 64, 22, GODOT_ORANGE); addLbl("InType", "Button", 900, 92, 16, th.ink);
                 addLbl("InPos", "Pos  (" + std::to_string((int)ub->touch.rect.x) + ", " + std::to_string((int)ub->touch.rect.y) + ")", 900, 124, 16, th.ink);
                 addLbl("InSiz", "Size (" + std::to_string((int)ub->touch.rect.w) + ", " + std::to_string((int)ub->touch.rect.h) + ")", 900, 148, 16, th.ink);
-                addLbl("InCol", "Color " + colorToHex(ub->color), 900, 172, 16, th.ink);
+                addLbl("InCol", "Color " + colorToHex(ub->color) + " (" + rgbStr(ub->color) + ")", 900, 172, 16, th.ink);
                 addLbl("InText", "Text: " + ub->text, 900, 196, 16, th.ink);
                 addLbl("InAct", "Action: " + (ub->action.empty() ? std::string("(none)") : ub->action), 900, 220, 16, th.ink);
                 addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 244, 16, th.ink);
@@ -784,7 +800,7 @@ private:
                 addLbl("InLck", "Locked  " + std::string(s->locked ? "YES" : "no"), 900, 220, 16, s->locked ? parseColor("#D62828") : th.ink);
                 addLbl("InAlp", "Alpha  " + std::to_string((int)(s->alpha * 100)) + "%", 900, 244, 16, th.ink);
                 addLbl("InShp", "Shape  " + s->shape, 900, 268, 16, th.ink);
-                addLbl("InCol", "Color  " + colorToHex(s->color), 900, 292, 16, th.ink);
+                addLbl("InCol", "Color  " + colorToHex(s->color) + "  (" + rgbStr(s->color) + ")", 900, 292, 16, th.ink);
                 addLbl("InTex", "Texture: " + (s->texture.empty() ? std::string("(none)") : s->texture), 900, 316, 16, th.ink);
                 addLbl("InAct", "Touch: " + (s->action.empty() ? std::string("(none)") : s->action), 900, 340, 16, th.ink);
                 if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 364, 16, th.ink);
@@ -812,7 +828,7 @@ private:
         std::string sb = (editor_ && editor_->scene() && editor_->scene()->bgSet()) ? editor_->scene()->bg : std::string("(theme)");
         addLbl("InBg", "scene bg: " + sb, 900, 426, 16, th.ink);
         { UiButton b; b.touch.id = "lckbtn"; b.touch.rect = Rect{900, 448, 44, 30}; b.text = "LCK"; b.action = "ed_lock"; b.color = parseColor("#D62828"); editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{948, 448, 44, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{948, 448, 44, 30}; b.text = "BG"; b.action = "bg_rgb"; b.color = th.accent; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{996, 448, 44, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id = "texbtn"; b.touch.rect = Rect{1044, 448, 44, 30}; b.text = "T-"; b.action = "clear_tex"; b.color = th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id = "clnbtn"; b.touch.rect = Rect{1092, 448, 44, 30}; b.text = "DUP"; b.action = "ed_clone"; b.color = th.button; editorScene_.ui.push_back(b); }
@@ -829,8 +845,7 @@ private:
         float tx = 300;
         const char* shapes[4] = { "square","circle","diamond","triangle" }; const char* shTxt[4] = { "SQ","CI","DI","TR" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("sh")+std::to_string(k); b.touch.rect = Rect{tx,34,44,26}; tx+=46; b.text = shTxt[k]; b.action = std::string("ed_shape:")+shapes[k]; b.color = th.button; editorScene_.ui.push_back(b); }
-        const char* cols[3] = { "#D62828","#2EC4B6","#F4EDE4" };
-        for (int k = 0; k < 3; ++k) { UiButton b; b.touch.id = std::string("col")+std::to_string(k); b.touch.rect = Rect{tx,34,44,26}; tx+=46; b.text = ""; b.action = std::string("ed_color:")+cols[k]; b.color = parseColor(cols[k]); editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="colbtn"; b.touch.rect=Rect{tx,34,54,26}; tx+=56; b.text="RGB"; b.action="col_rgb"; b.color=th.accent; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="del"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="DEL"; b.action="ed_del"; b.color=parseColor("#D62828"); editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="save"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="SAVE"; b.action="ed_save"; b.color=parseColor("#2E7D32"); editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="eback"; b.touch.rect=Rect{tx,34,44,26}; tx+=46; b.text="<"; b.action="ed_back"; b.color=GODOT_ORANGE; editorScene_.ui.push_back(b); }
@@ -847,11 +862,6 @@ private:
             { UiButton b; b.touch.id="ctlit"; b.touch.rect=Rect{300+7*58,560,54,40}; b.text="LIGHT"; b.action="create_light"; b.color=parseColor("#FFD700"); editorScene_.ui.push_back(b); }
             { UiButton b; b.touch.id="ctgrp"; b.touch.rect=Rect{300+8*58,560,54,40}; b.text="GRP"; b.action="create_grp"; b.color=parseColor("#808080"); editorScene_.ui.push_back(b); }
             { UiButton b; b.touch.id="ctbtn"; b.touch.rect=Rect{300+9*58,560,54,40}; b.text="BTN"; b.action="create_btn"; b.color=parseColor("#2EC4B6"); editorScene_.ui.push_back(b); }
-        }
-        if (showBg_) {
-            const char* bgs[6] = { "#FFF3E0","#111111","#16213E","#2EC4B6","#D62828","#87CEEB" };
-            for (int k = 0; k < 6; ++k) { UiButton b; b.touch.id = std::string("bgsw")+std::to_string(k); b.touch.rect = Rect{300+(float)k*84, 560, 80, 40}; b.text = ""; b.action = std::string("bg_set:")+bgs[k]; b.color = parseColor(bgs[k]); editorScene_.ui.push_back(b); }
-            UiButton cl; cl.touch.id = "bgclr"; cl.touch.rect = Rect{300+6*84, 560, 80, 40}; cl.text = "CLR"; cl.action = "bg_clear"; cl.color = th.button; editorScene_.ui.push_back(cl);
         }
 
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
@@ -979,6 +989,15 @@ private:
             else if (b.action == "scdn") { scriptScroll_ += 3; imeChanged_ = true; changed = true; }
             else if (b.action == "snew") { pendingName_ = true; pendingKind_ = 2; changed = true; }
             else if (scriptMode_) { continue; }
+            else if (b.action == "col_rgb" && !lk) {
+                pendingRgb_ = 1; pendingText_ = true;
+                pendingTextCur_ = ub ? rgbStr(ub->color) : (s2 ? rgbStr(s2->color) : std::string("255,255,255"));
+            }
+            else if (b.action == "bg_rgb") {
+                pendingRgb_ = 2; pendingText_ = true;
+                unsigned bc = (editor_->scene() && editor_->scene()->bgSet()) ? parseColor(editor_->scene()->bg) : currentTheme().bg;
+                pendingTextCur_ = rgbStr(bc);
+            }
             else if (b.action == "fscroll_up") { fsScroll_ -= 3; changed = true; }
             else if (b.action == "fscroll_dn") { fsScroll_ += 3; changed = true; }
             else if (b.action == "ed_lock") {
@@ -1017,7 +1036,7 @@ private:
                 if (rel.size() > 5 && rel.compare(rel.size()-5, 5, ".json") == 0) {
                     if (sceneMgr_->restartScene(rel, resources_)) {
                         editor_->attach(sceneMgr_->current());
-                        scripted_.clear(); showCreate_ = false; showBg_ = false; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
+                        scripted_.clear(); showCreate_ = false; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                         ub = nullptr; sel.clear(); s2 = nullptr; lk = false; hierScroll_ = 0;
                         undoStack_.clear(); redoStack_.clear();
                         changed = true;
@@ -1036,11 +1055,9 @@ private:
             else if (b.action == "manip:move")   { manip_ = Manip::Move;   changed = true; }
             else if (b.action == "manip:rotate") { manip_ = Manip::Rotate; changed = true; }
             else if (b.action == "manip:scale")  { manip_ = Manip::Scale;  changed = true; }
-            else if (b.action == "create_open") { showCreate_ = !showCreate_; showBg_ = false; changed = true; }
-            else if (b.action == "bg_open") { showBg_ = !showBg_; showCreate_ = false; changed = true; }
-            else if (b.action.rfind("bg_set:", 0) == 0) { pushUndo(); if (editor_->scene()) editor_->scene()->bg = b.action.substr(7); showBg_ = false; changed = true; }
-            else if (b.action == "bg_clear") { pushUndo(); if (editor_->scene()) editor_->scene()->bg.clear(); showBg_ = false; changed = true; }
+            else if (b.action == "create_open") { showCreate_ = !showCreate_; changed = true; }
             else if (b.action == "edit_text" && !lk) {
+                pendingRgb_ = 0;
                 if (ub) { pendingText_ = true; pendingTextCur_ = ub->text; }
                 else if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; }
             }
@@ -1092,11 +1109,6 @@ private:
                 showCreate_ = false; changed = true;
             }
             else if (b.action.rfind("ed_shape:", 0) == 0 && !lk) { pushUndo(); if (!sel.empty()) { editor_->setShape(sel, b.action.substr(9)); changed = true; } }
-            else if (b.action.rfind("ed_color:", 0) == 0 && !lk) {
-                pushUndo();
-                if (ub) { ub->color = parseColor(b.action.substr(9)); changed = true; }
-                else if (!sel.empty()) { editor_->setColor(sel, b.action.substr(9)); changed = true; }
-            }
             else if (b.action.rfind("ed_move:", 0) == 0 && !lk) {
                 std::string d = b.action.substr(8);
                 pushUndo();
@@ -1162,10 +1174,26 @@ private:
             pendingName_ = false; showCreate_ = false;
         }
         if (ht) {
-            pushUndo();
-            std::string uid = editor_->selectedUi();
-            if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->text = txt; }
-            else { Node* s = editor_->selected(); if (s && std::string(s->typeName()) == "Label") static_cast<Label*>(s)->text = txt; }
+            if (pendingRgb_ == 1) {
+                unsigned c = 0;
+                if (parseRgb(txt, c)) {
+                    pushUndo();
+                    std::string uid = editor_->selectedUi();
+                    if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->color = c; }
+                    else { Node* s = editor_->selected(); Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr; if (n2) n2->color = c; }
+                } else lastMsg_ = "bad rgb, need r,g,b";
+                pendingRgb_ = 0;
+            } else if (pendingRgb_ == 2) {
+                unsigned c = 0;
+                if (parseRgb(txt, c) && editor_->scene()) { pushUndo(); editor_->scene()->bg = colorToHex(c); }
+                else lastMsg_ = "bad rgb, need r,g,b";
+                pendingRgb_ = 0;
+            } else {
+                pushUndo();
+                std::string uid = editor_->selectedUi();
+                if (!uid.empty()) { UiButton* b = editor_->findUi(uid); if (b) b->text = txt; }
+                else { Node* s = editor_->selected(); if (s && std::string(s->typeName()) == "Label") static_cast<Label*>(s)->text = txt; }
+            }
         }
         if (ha) {
             pushUndo();
@@ -1324,9 +1352,10 @@ private:
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
     Manip manip_ = Manip::Move;
-    bool showCreate_ = false, showBg_ = false, dragging_ = false, pendingText_ = false, pinching_ = false;
+    bool showCreate_ = false, dragging_ = false, pendingText_ = false, pinching_ = false;
     bool pendingName_ = false, pendingAction_ = false, pendingNum_ = false;
     int pendingKind_ = 0;
+    int pendingRgb_ = 0;
     std::string pendingNumKind_, pendingNumCur_;
     bool gizmoRot_ = false, gizmoSclX_ = false, gizmoSclY_ = false; int lockAxis_ = 0;
     float gizmoStartAngle_ = 0, gizmoStartRot_ = 0, gizmoStartDist_ = 1, gizmoStartSX_ = 1, gizmoStartSY_ = 1;
