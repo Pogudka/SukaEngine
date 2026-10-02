@@ -32,6 +32,16 @@ inline unsigned dimColor(unsigned c, float k) {
     return (r << 24) | (g << 16) | (b << 8) | a;
 }
 
+// OPACITY-FIX: применить прозрачность к цвету
+inline unsigned applyOpacity(unsigned color, float opacity) {
+    unsigned r = (color >> 24) & 255;
+    unsigned g = (color >> 16) & 255;
+    unsigned b = (color >> 8)  & 255;
+    unsigned a = (unsigned)((color & 255) * opacity);
+    if (a > 255) a = 255;
+    return (r << 24) | (g << 16) | (b << 8) | a;
+}
+
 class GameApp {
 public:
     enum class Mode { Console, String };
@@ -111,13 +121,14 @@ public:
             Node2D* g = (editor_ && editor_->selectedUi().empty()) ?
                         (editor_->selected() ? dynamic_cast<Node2D*>(editor_->selected()) : nullptr) : nullptr;
 
+            // LOCK-FIX: если узел заблокирован, не даём двигать/крутить/масштабировать
             if (g && es) {
                 float gwx, gwy, gwr, gsx, gsy;
                 bool ok = nodeWorld(es, g->name, gwx, gwy, gwr, gsx, gsy);
                 if (!ok) { gwx = g->position.x; gwy = g->position.y; gsx = gsy = 1; }
                 float scx, scy; proj(*es, gwx, gwy, scx, scy);
 
-                if (t.action == RawTouch::Action::Down) {
+                if (t.action == RawTouch::Action::Down && !g->locked) {
                     float dx = x - scx, dy = y - scy;
                     float dist = std::sqrt(dx*dx + dy*dy);
                     if (manip_ == Manip::Rotate) {
@@ -132,7 +143,7 @@ public:
                         if (std::fabs(dx) < 16 && dy > 8 && dy < 64) { lockAxis_ = 2; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
                     }
                 }
-                else if (t.action == RawTouch::Action::Move) {
+                else if (t.action == RawTouch::Action::Move && !g->locked) {
                     if (gizmoRot_) { float dx = x - scx, dy = y - scy; g->rotation = gizmoStartRot_ + (std::atan2(dy, dx) - gizmoStartAngle_); return; }
                     if (gizmoSclX_ || gizmoSclY_) {
                         float dist = std::sqrt((x-scx)*(x-scx) + (y-scy)*(y-scy));
@@ -153,12 +164,18 @@ public:
                 if (!uiHit.empty()) { editor_->selectUi(uiHit); dragUi_ = editor_->findUi(uiHit); dragging_ = (dragUi_ != nullptr); lockAxis_ = 0; }
                 else if (es->root) {
                     std::string hit = hitTest(es->root.get(), wx, wy);
-                    if (!hit.empty()) { editor_->select(hit); dragNode_ = editor_->find2d(hit); dragging_ = (dragNode_ != nullptr); lockAxis_ = 0; startDragParent(es, hit); }
+                    if (!hit.empty()) {
+                        Node2D* n2d = editor_->find2d(hit);
+                        // LOCK-FIX: не даём выбрать заблокированный объект для drag
+                        if (n2d && !n2d->locked) {
+                            editor_->select(hit); dragNode_ = n2d; dragging_ = true; lockAxis_ = 0; startDragParent(es, hit);
+                        }
+                    }
                 }
             } else if (t.action == RawTouch::Action::Move && dragging_ && es) {
                 float wx, wy; unproj(*es, x, y, wx, wy);
                 if (dragUi_) { dragUi_->touch.rect.x = wx - dragUi_->touch.rect.w / 2; dragUi_->touch.rect.y = wy - dragUi_->touch.rect.h / 2; }
-                else if (dragNode_) {
+                else if (dragNode_ && !dragNode_->locked) {
                     float oldX = dragOX_ + dragNode_->position.x * dragPSX_;
                     float oldY = dragOY_ + dragNode_->position.y * dragPSY_;
                     float nx, ny;
@@ -212,7 +229,6 @@ private:
         return "";
     }
 
-    // NODE2D-FIX: проверяем тип перед доступом к position/rotation/scale
     static bool nodeWorldRec(Node* n, const std::string& name,
                              float ox, float oy, float orot, float osx, float osy,
                              float& wx, float& wy, float& wr, float& wsx, float& wsy) {
@@ -290,7 +306,6 @@ private:
         if (up) root->addChild(std::move(up));
     }
 
-    // ---------------- HUB ----------------
     void rebuildHub() { hubState_.games = ProjectList::scan(); hubScene_ = buildHubLandscape(); input_.setUi(&hubScene_.ui); }
     Scene buildHubLandscape() {
         Theme& th = currentTheme();
@@ -345,7 +360,6 @@ private:
         input_.endFrame(); return out;
     }
 
-    // ---------------- GAME ----------------
     bool enterGame(const std::string& dir) {
         ProjectInfo pi;
         if (!ProjectLoader::load(PROJECT_ROOT + "/projects/" + dir + "/project.json", pi)) return false;
@@ -395,7 +409,6 @@ private:
         }
     }
 
-    // ---------------- EDITOR ----------------
     std::string hitTest(const Node* n, float wx, float wy) {
         if (!n) return "";
         std::string bestBox, bestNear; float bestDist = 1e9f;
@@ -531,7 +544,6 @@ private:
                 editorScene_.ui.push_back(f);
             }
             UiButton b; b.touch.id = "h" + std::to_string(i);
-            // NARROWING-FIX: явное приведение int к float
             float rx = rows[i].hasKids ? 36.0f : 8.0f;
             float rw = rows[i].hasKids ? 256.0f : 284.0f;
             b.touch.rect = Rect{rx, y, rw, 28};
@@ -573,26 +585,32 @@ private:
                 addLbl("InCol", "Color  " + colorToHex(s->color), 900, 244, 16, th.ink);
                 addLbl("InTex", "Texture: " + (s->texture.empty() ? std::string("(none)") : s->texture), 900, 268, 16, th.ink);
                 addLbl("InAct", "Touch: " + (s->action.empty() ? std::string("(none)") : s->action), 900, 292, 16, th.ink);
-                if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 316, 16, th.ink);
+                // LOCK-FIX + OPACITY-FIX: показываем статус замка и прозрачность
+                addLbl("InLock", "Locked: " + std::string(s->locked ? "YES" : "NO"), 900, 316, 16, s->locked ? parseColor("#D62828") : th.ink);
+                addLbl("InOpa", "Opacity: " + std::to_string((int)(s->opacity * 100)) + "%", 900, 340, 16, th.ink);
+                if (std::string(s->typeName()) == "Label") addLbl("InText", "Text: " + static_cast<Label*>(s)->text, 900, 364, 16, th.ink);
                 const char* nl[6] = { "X","Y","ROT","SCL","W","H" };
                 const char* na[6] = { "nx","ny","nrot","nscl","nw","nh" };
                 for (int k = 0; k < 6; ++k) {
                     UiButton b; b.touch.id = std::string("numbtn")+std::to_string(k);
-                    b.touch.rect = Rect{900 + (float)k * 62, 344, 58, 28};
+                    b.touch.rect = Rect{900 + (float)k * 62, 392, 58, 28};
                     b.text = nl[k]; b.action = std::string("num:") + na[k];
                     b.color = th.button; editorScene_.ui.push_back(b);
                 }
+                // Кнопки замка и прозрачности
+                { UiButton b; b.touch.id = "lockbtn"; b.touch.rect = Rect{900, 424, 62, 30}; b.text = "LK"; b.action = "ed_lock"; b.color = s->locked ? parseColor("#D62828") : th.button; editorScene_.ui.push_back(b); }
+                { UiButton b; b.touch.id = "opabtn"; b.touch.rect = Rect{966, 424, 62, 30}; b.text = "OPA"; b.action = "num:op"; b.color = th.button; editorScene_.ui.push_back(b); }
             } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
         }
 
         std::string sb = (editor_ && editor_->scene() && editor_->scene()->bgSet()) ? editor_->scene()->bg : std::string("(theme)");
-        addLbl("InBg", "scene bg: " + sb, 900, 380, 16, th.ink);
-        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 402, 62, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{966, 402, 62, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "texbtn"; b.touch.rect = Rect{1032, 402, 62, 30}; b.text = "T-"; b.action = "clear_tex"; b.color = th.button; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "clnbtn"; b.touch.rect = Rect{1098, 402, 62, 30}; b.text = "DUP"; b.action = "ed_clone"; b.color = th.button; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "parbtn"; b.touch.rect = Rect{1164, 402, 62, 30}; b.text = pickParent_ ? "PICK" : "PAR"; b.action = "ed_parent"; b.color = pickParent_ ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id = "unpbtn"; b.touch.rect = Rect{1164, 436, 62, 30}; b.text = "UNP"; b.action = "ed_unparent"; b.color = th.button; editorScene_.ui.push_back(b); }
+        addLbl("InBg", "scene bg: " + sb, 900, 460, 16, th.ink);
+        { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{900, 482, 62, 30}; b.text = "BG"; b.action = "bg_open"; b.color = th.accent; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{966, 482, 62, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "texbtn"; b.touch.rect = Rect{1032, 482, 62, 30}; b.text = "T-"; b.action = "clear_tex"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "clnbtn"; b.touch.rect = Rect{1098, 482, 62, 30}; b.text = "DUP"; b.action = "ed_clone"; b.color = th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "parbtn"; b.touch.rect = Rect{1164, 482, 62, 30}; b.text = pickParent_ ? "PICK" : "PAR"; b.action = "ed_parent"; b.color = pickParent_ ? GODOT_ORANGE : th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id = "unpbtn"; b.touch.rect = Rect{1164, 516, 62, 30}; b.text = "UNP"; b.action = "ed_unparent"; b.color = th.button; editorScene_.ui.push_back(b); }
 
         const char* mv[4] = { "l","u","d","r" }; const char* mvTxt[4] = { "<","^","v",">" };
         for (int k = 0; k < 4; ++k) { UiButton b; b.touch.id = std::string("mv")+std::to_string(k); b.touch.rect = Rect{900+(float)k*58, 616, 54, 48}; b.text = mvTxt[k]; b.action = std::string("ed_move:")+mv[k]; b.color = th.button; editorScene_.ui.push_back(b); }
@@ -657,6 +675,11 @@ private:
                 if (collapsed_.count(nm)) collapsed_.erase(nm); else collapsed_.insert(nm);
                 changed = true;
             }
+            // LOCK-FIX: переключение замка
+            else if (b.action == "ed_lock") {
+                Node2D* n2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
+                if (n2) { n2->locked = !n2->locked; lastMsg_ = n2->locked ? "locked " + sel : "unlocked " + sel; changed = true; }
+            }
             else if (b.action == "hier_up") { hierScroll_ -= 3; changed = true; }
             else if (b.action == "hier_dn") { hierScroll_ += 3; changed = true; }
             else if (b.action == "fs_up") {
@@ -709,6 +732,8 @@ private:
                 else if (pendingNumKind_ == "nscl") pendingNumCur_ = s2 ? std::to_string((int)(s2->scale.x * 100)) : "100";
                 else if (pendingNumKind_ == "nw") pendingNumCur_ = s2 ? std::to_string((int)s2->w) : "32";
                 else if (pendingNumKind_ == "nh") pendingNumCur_ = s2 ? std::to_string((int)s2->h) : "32";
+                // OPACITY-FIX: диалог для прозрачности (0-100%)
+                else if (pendingNumKind_ == "op") pendingNumCur_ = s2 ? std::to_string((int)(s2->opacity * 100)) : "100";
                 else if (pendingNumKind_ == "bx") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.x) : "0";
                 else if (pendingNumKind_ == "by") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.y) : "0";
                 else if (pendingNumKind_ == "bw") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.w) : "100";
@@ -820,6 +845,8 @@ private:
             else if (pendingNumKind_ == "nscl" && n2) { float f = v / 100.0f; if (f > 0.01f) { n2->scale.x = f; n2->scale.y = f; } }
             else if (pendingNumKind_ == "nw" && n2) n2->w = v;
             else if (pendingNumKind_ == "nh" && n2) n2->h = v;
+            // OPACITY-FIX: применение прозрачности (0-100% -> 0.0-1.0)
+            else if (pendingNumKind_ == "op" && n2) { n2->opacity = v / 100.0f; if (n2->opacity < 0) n2->opacity = 0; if (n2->opacity > 1) n2->opacity = 1; }
             else if (pendingNumKind_ == "bx" && b) b->touch.rect.x = v;
             else if (pendingNumKind_ == "by" && b) b->touch.rect.y = v;
             else if (pendingNumKind_ == "bw" && b) b->touch.rect.w = v;
@@ -876,7 +903,6 @@ private:
         if (!lastMsg_.empty()) out += "DRAW text|" + lastMsg_ + "|306|580|14|#FFD700|0\n";
     }
 
-    // NODE2D-FIX: проверяем тип перед доступом к position/rotation/scale
     void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH,
                          float camX, float camY, float ox, float oy, float orot, float osx, float osy,
                          std::string& out) {
@@ -917,15 +943,16 @@ private:
             }
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
+                // OPACITY-FIX: применяем прозрачность к цвету
+                unsigned colWithOpacity = applyOpacity(n2d->color, n2d->opacity);
                 if (tn == "Label") {
-                    // LABEL-FIX: приводим к Label* перед доступом к fontSize
                     const Label* lbl = static_cast<const Label*>(n2d);
                     int fs = (int)(lbl->fontSize * ((wsx + wsy) * 0.5f) * S);
                     if (fs < 6) fs = 6;
-                    out += "DRAW text|" + lbl->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHex(n2d->color) + "|" + std::to_string(ang) + "\n";
+                    out += "DRAW text|" + lbl->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHex(colWithOpacity) + "|" + std::to_string(ang) + "\n";
                 }
                 else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555|" + std::to_string(ang) + "\n";
-                else if (n2d->hasAppearance()) out += "DRAW shape|" + n2d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(n2d->color) + "|" + std::to_string(ang) + "\n";
+                else if (n2d->hasAppearance()) out += "DRAW shape|" + n2d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(colWithOpacity) + "|" + std::to_string(ang) + "\n";
             }
         }
         for (const auto& ch : n2d->getChildren())
