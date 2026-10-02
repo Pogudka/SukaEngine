@@ -3,403 +3,475 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <memory>
-#include <functional>
-#include <iostream>
+#include <cstdio>
+#include <cstring>
 #include <cmath>
 
-#include "LuaVM.hpp"
-#include "Json.hpp"
+extern "C" {
+#include <lua.h>
+#include <lauxlib.h>
+#include <lualib.h>
+}
+
+#include "Core.hpp"
 #include "Scene.hpp"
-#include "Sound.hpp"
+#include "Resources.hpp"
+#include "Tween.hpp"
 
 namespace suka {
 
-// LOG-FIX: экранный лог Lua (print и служебные сообщения)
 inline std::vector<std::string> g_luaLog;
-inline void luaLog(const std::string& s) {
-    g_luaLog.push_back(s);
-    if (g_luaLog.size() > 80) g_luaLog.erase(g_luaLog.begin());
+
+inline Context* g_scriptCtx = nullptr;
+inline Scene* g_scriptScene = nullptr;
+inline SceneManager* g_scriptMgr = nullptr;
+inline std::map<std::string,double>* g_scriptVars = nullptr;
+
+static Node2D* scriptFindNode(const char* name) {
+    if (!g_scriptScene || !g_scriptScene->root || !name) return nullptr;
+
+    Node* n = g_scriptScene->root->findNode(name);
+    return dynamic_cast<Node2D*>(n);
 }
 
-struct ScriptHost {
-    Node2D* node = nullptr;
-    Context* ctx = nullptr;
-    SceneManager* scenes = nullptr;
-    SoundManager* sound = nullptr;
-    std::map<std::string, double>* vars = nullptr;
-};
+static int lua_print(lua_State* L) {
+    int n = lua_gettop(L);
+    std::string line;
+
+    for (int i = 1; i <= n; ++i) {
+        size_t len = 0;
+        const char* s = luaL_tolstring(L, i, &len);
+
+        if (i > 1) line += "\t";
+        line += s;
+
+        lua_pop(L, 1);
+    }
+
+    g_luaLog.push_back(line);
+
+    if (g_luaLog.size() > 64) {
+        g_luaLog.erase(g_luaLog.begin());
+    }
+
+    return 0;
+}
+
+static int lua_get_var(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+
+    if (g_scriptVars) {
+        auto it = g_scriptVars->find(name);
+        if (it != g_scriptVars->end()) {
+            lua_pushnumber(L, it->second);
+            return 1;
+        }
+    }
+
+    lua_pushnumber(L, 0);
+    return 1;
+}
+
+static int lua_set_var(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    double v = luaL_checknumber(L, 2);
+
+    if (g_scriptVars) (*g_scriptVars)[name] = v;
+
+    return 0;
+}
+
+static int lua_add_var(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    double v = luaL_checknumber(L, 2);
+
+    if (g_scriptVars) (*g_scriptVars)[name] += v;
+
+    return 0;
+}
+
+static int lua_get_score(lua_State* L) {
+    lua_pushinteger(L, g_scriptCtx ? g_scriptCtx->score : 0);
+    return 1;
+}
+
+static int lua_add_score(lua_State* L) {
+    int v = (int)luaL_checkinteger(L, 1);
+
+    if (g_scriptCtx) g_scriptCtx->score += v;
+
+    return 0;
+}
+
+static int lua_coin_collected(lua_State* L) {
+    if (g_scriptCtx) g_scriptCtx->coinCollectedThisFrame = true;
+    return 0;
+}
+
+static int lua_jump_pressed(lua_State* L) {
+    if (g_scriptCtx) g_scriptCtx->jumpPressedThisFrame = true;
+    return 0;
+}
+
+static int lua_node_exists(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+
+    lua_pushboolean(L, scriptFindNode(name) != nullptr);
+    return 1;
+}
+
+static int lua_get_node_x(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->position.x : 0);
+    return 1;
+}
+
+static int lua_set_node_x(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) n->position.x = (float)luaL_checknumber(L, 2);
+
+    return 0;
+}
+
+static int lua_get_node_y(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->position.y : 0);
+    return 1;
+}
+
+static int lua_set_node_y(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) n->position.y = (float)luaL_checknumber(L, 2);
+
+    return 0;
+}
+
+static int lua_get_node_rotation(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->rotation * 180.0 / TWEEN_PI : 0);
+    return 1;
+}
+
+static int lua_set_node_rotation(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) n->rotation = (float)(luaL_checknumber(L, 2) * TWEEN_PI / 180.0);
+
+    return 0;
+}
+
+static int lua_get_node_scale(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? (n->scale.x + n->scale.y) * 0.5 : 1);
+    return 1;
+}
+
+static int lua_set_node_scale(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+    float s = (float)luaL_checknumber(L, 2);
+
+    if (n) {
+        n->scale.x = s;
+        n->scale.y = s;
+    }
+
+    return 0;
+}
+
+static int lua_get_node_alpha(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->alpha : 1);
+    return 1;
+}
+
+static int lua_set_node_alpha(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) n->alpha = (float)luaL_checknumber(L, 2);
+
+    return 0;
+}
+
+static int lua_get_node_width(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->w : 0);
+    return 1;
+}
+
+static int lua_set_node_width(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) n->w = (float)luaL_checknumber(L, 2);
+
+    return 0;
+}
+
+static int lua_get_node_height(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->h : 0);
+    return 1;
+}
+
+static int lua_set_node_height(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) n->h = (float)luaL_checknumber(L, 2);
+
+    return 0;
+}
+
+static int lua_change_scene(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+
+    if (g_scriptMgr) g_scriptMgr->requestChange(path, false);
+
+    return 0;
+}
+
+static int lua_restart_scene(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+
+    if (g_scriptMgr) g_scriptMgr->requestChange(path, true);
+
+    return 0;
+}
+
+static int lua_tween_to(lua_State* L) {
+    const char* node = luaL_checkstring(L, 1);
+    const char* prop = luaL_checkstring(L, 2);
+
+    double to = luaL_checknumber(L, 3);
+    float dur = (float)luaL_checknumber(L, 4);
+
+    const char* easing = "linear";
+    bool loop = false;
+    bool yoyo = false;
+    const char* onComplete = "";
+
+    int top = lua_gettop(L);
+
+    if (top >= 5 && lua_isstring(L, 5)) easing = lua_tostring(L, 5);
+    if (top >= 6) loop = lua_toboolean(L, 6) != 0;
+    if (top >= 7) yoyo = lua_toboolean(L, 7) != 0;
+    if (top >= 8 && lua_isstring(L, 8)) onComplete = lua_tostring(L, 8);
+
+    int id = g_tweens.add(
+        node ? node : "",
+        prop ? prop : "",
+        to,
+        dur,
+        easing ? easing : "linear",
+        loop,
+        yoyo,
+        onComplete ? onComplete : ""
+    );
+
+    lua_pushinteger(L, id);
+    return 1;
+}
+
+static int lua_tween_stop(lua_State* L) {
+    g_tweens.stop((int)luaL_checkinteger(L, 1));
+    return 0;
+}
+
+static int lua_tween_stop_node(lua_State* L) {
+    g_tweens.stopNode(luaL_checkstring(L, 1));
+    return 0;
+}
+
+static int lua_tween_clear(lua_State* L) {
+    g_tweens.clear();
+    return 0;
+}
+
+static int lua_tween_count(lua_State* L) {
+    lua_pushinteger(L, (lua_Integer)g_tweens.count());
+    return 1;
+}
+
+static int lua_tween_is_active(lua_State* L) {
+    lua_pushboolean(L, g_tweens.isActive((int)luaL_checkinteger(L, 1)));
+    return 1;
+}
 
 class ScriptSystem {
 public:
-    void load(const std::string& projectRoot) {
-        root_ = projectRoot;
-        entries_.clear();   // PROJ-FIX: не тащим скрипты прошлого проекта
-        std::string path = projectRoot + "/scripts.json";
-        if (!fileExists(path)) { std::cout << "[Scripts] no scripts.json\n"; return; }
-        std::string json = readFile(path);
-        size_t b = 0, e = 0;
-        if (!jsonFindArray(json, "scripts", b, e)) return;
-        for (const auto& obj : jsonSplitObjects(json.substr(b, e - b + 1))) {
-            std::string node, script;
-            jsonGetString(obj, "node", node);
-            jsonGetString(obj, "path", script);
-            if (node.empty() || script.empty()) continue;
-            Entry ent;
-            ent.vm = std::make_unique<LuaVM>();
-            std::string src = readFile(projectRoot + "/" + script);
-            if (!ent.vm->load(src)) { luaLog("parse error: " + script); continue; }
-            registerNatives(*ent.vm);
-            entries_[node] = std::move(ent);
-            luaLog("loaded: " + node + " -> " + script);
+    ~ScriptSystem() {
+        if (L_) lua_close(L_);
+    }
+
+    void load(const std::string& root) {
+        if (L_) {
+            lua_close(L_);
+            L_ = nullptr;
         }
-    }
 
-    void update(Scene& scene, Context& ctx, double dt,
-                SceneManager& scenes, SoundManager& sound,
-                std::map<std::string, double>& vars) {
-        updateImpl(scene, ctx, dt, scenes, &sound, vars);
-    }
-    void update(Scene& scene, Context& ctx, double dt,
-                SceneManager& scenes,
-                std::map<std::string, double>& vars) {
-        updateImpl(scene, ctx, dt, scenes, nullptr, vars);
-    }
+        L_ = luaL_newstate();
+        luaL_openlibs(L_);
+        registerFunctions();
 
-    bool callGlobal(const std::string& fn, Context& ctx, SceneManager& scenes,
-                    std::map<std::string, double>& vars) {
-        host_.node = nullptr; host_.ctx = &ctx; host_.scenes = &scenes;
-        host_.sound = nullptr; host_.vars = &vars;
-        for (auto& kv : entries_) {
-            if (kv.second.vm->has(fn)) {
-                kv.second.vm->host = &host_;
-                kv.second.vm->call(fn, {});
-                return true;
+        std::string dir = root + "/scripts";
+        auto entries = FileBrowser::list(dir);
+
+        std::string combined;
+
+        for (auto& e : entries) {
+            if (e.isDir) continue;
+            if (e.name.size() < 4 || e.name.compare(e.name.size() - 4, 4, ".lua") != 0) continue;
+
+            std::string path = dir + "/" + e.name;
+
+            combined += "-- " + e.name + "\n";
+            combined += readFile(path);
+            combined += "\n\n";
+        }
+
+        if (!combined.empty()) {
+            if (luaL_dostring(L_, combined.c_str()) != LUA_OK) {
+                const char* err = lua_tostring(L_, -1);
+
+                g_luaLog.push_back(std::string("lua load error: ") + (err ? err : "?"));
+
+                lua_pop(L_, 1);
             }
         }
-        luaLog("call: no function '" + fn + "'");
-        return false;
+
+        started_ = false;
+    }
+
+    void update(
+        Scene& scene,
+        Context& ctx,
+        float dt,
+        SceneManager& mgr,
+        std::map<std::string,double>& vars
+    ) {
+        if (!L_) return;
+
+        g_scriptCtx = &ctx;
+        g_scriptScene = &scene;
+        g_scriptMgr = &mgr;
+        g_scriptVars = &vars;
+
+        if (!started_) {
+            callFunction("on_start");
+            started_ = true;
+        }
+
+        callFunctionWithDt("on_update", dt);
+    }
+
+    void callGlobal(
+        const std::string& fn,
+        Context& ctx,
+        SceneManager& mgr,
+        std::map<std::string,double>& vars,
+        Scene* scene = nullptr
+    ) {
+        if (!L_ || fn.empty()) return;
+
+        g_scriptCtx = &ctx;
+        g_scriptScene = scene;
+        g_scriptMgr = &mgr;
+        g_scriptVars = &vars;
+
+        callFunction(fn);
     }
 
 private:
-    void updateImpl(Scene& scene, Context& ctx, double dt,
-                    SceneManager& scenes, SoundManager* sound,
-                    std::map<std::string, double>& vars) {
-        for (auto& kv : entries_) {
-            Node* n = scene.root ? scene.root->findNode(kv.first) : nullptr;
-            Node2D* n2 = n ? dynamic_cast<Node2D*>(n) : nullptr;
-            if (!n2) continue;
-            host_.node = n2; host_.ctx = &ctx; host_.scenes = &scenes;
-            host_.sound = sound; host_.vars = &vars;
-            kv.second.vm->host = &host_;
-            if (!kv.second.started) { kv.second.vm->call("on_start", {}); kv.second.started = true; }
-            kv.second.vm->call("on_update", { LuaValue::numV(dt) });
+    void registerFunctions() {
+        lua_register(L_, "print", lua_print);
+
+        lua_register(L_, "get_var", lua_get_var);
+        lua_register(L_, "set_var", lua_set_var);
+        lua_register(L_, "add_var", lua_add_var);
+
+        lua_register(L_, "get_score", lua_get_score);
+        lua_register(L_, "add_score", lua_add_score);
+
+        lua_register(L_, "coin_collected", lua_coin_collected);
+        lua_register(L_, "jump_pressed", lua_jump_pressed);
+
+        lua_register(L_, "node_exists", lua_node_exists);
+
+        lua_register(L_, "get_node_x", lua_get_node_x);
+        lua_register(L_, "set_node_x", lua_set_node_x);
+
+        lua_register(L_, "get_node_y", lua_get_node_y);
+        lua_register(L_, "set_node_y", lua_set_node_y);
+
+        lua_register(L_, "get_node_rotation", lua_get_node_rotation);
+        lua_register(L_, "set_node_rotation", lua_set_node_rotation);
+
+        lua_register(L_, "get_node_scale", lua_get_node_scale);
+        lua_register(L_, "set_node_scale", lua_set_node_scale);
+
+        lua_register(L_, "get_node_alpha", lua_get_node_alpha);
+        lua_register(L_, "set_node_alpha", lua_set_node_alpha);
+
+        lua_register(L_, "get_node_width", lua_get_node_width);
+        lua_register(L_, "set_node_width", lua_set_node_width);
+
+        lua_register(L_, "get_node_height", lua_get_node_height);
+        lua_register(L_, "set_node_height", lua_set_node_height);
+
+        lua_register(L_, "change_scene", lua_change_scene);
+        lua_register(L_, "restart_scene", lua_restart_scene);
+
+        lua_register(L_, "tween_to", lua_tween_to);
+        lua_register(L_, "tween_stop", lua_tween_stop);
+        lua_register(L_, "tween_stop_node", lua_tween_stop_node);
+        lua_register(L_, "tween_clear", lua_tween_clear);
+        lua_register(L_, "tween_count", lua_tween_count);
+        lua_register(L_, "tween_is_active", lua_tween_is_active);
+    }
+
+    void callFunction(const std::string& fn) {
+        lua_getglobal(L_, fn.c_str());
+
+        if (lua_isfunction(L_, -1)) {
+            if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
+                const char* err = lua_tostring(L_, -1);
+
+                g_luaLog.push_back(fn + " error: " + (err ? err : "?"));
+
+                lua_pop(L_, 1);
+            }
+        } else {
+            lua_pop(L_, 1);
         }
     }
 
-    static Node* findAny(LuaVM& v, const std::string& name) {
-        auto* h = static_cast<ScriptHost*>(v.host);
-        if (!h || !h->scenes) return nullptr;
-        Scene* sc = h->scenes->current();
-        if (!sc || !sc->root) return nullptr;
-        return sc->root->findNode(name);
-    }
-    static Node2D* findAny2D(LuaVM& v, const std::string& name) {
-        Node* n = findAny(v, name);
-        return n ? dynamic_cast<Node2D*>(n) : nullptr;
-    }
-    static void collectNames(const Node* n, std::vector<std::string>& out) {
-        if (!n) return;
-        out.push_back(n->name);
-        for (const auto& ch : n->getChildren()) collectNames(ch.get(), out);
+    void callFunctionWithDt(const std::string& fn, float dt) {
+        lua_getglobal(L_, fn.c_str());
+
+        if (lua_isfunction(L_, -1)) {
+            lua_pushnumber(L_, dt);
+
+            if (lua_pcall(L_, 1, 0, 0) != LUA_OK) {
+                const char* err = lua_tostring(L_, -1);
+
+                g_luaLog.push_back(fn + " error: " + (err ? err : "?"));
+
+                lua_pop(L_, 1);
+            }
+        } else {
+            lua_pop(L_, 1);
+        }
     }
 
-    void registerNatives(LuaVM& vm) {
-        vm.setNative("print", [](LuaVM& v, std::vector<LuaValue>& a) {
-            std::string s; for (auto& x : a) s += x.toString();
-            luaLog(s);                       // LOG-FIX: на экран
-            std::cout << "[Lua] " << s << "\n";
-            return LuaValue();
-        });
-        vm.setNative("get_x", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            return LuaValue::numV(h && h->node ? h->node->position.x : 0);
-        });
-        vm.setNative("get_y", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            return LuaValue::numV(h && h->node ? h->node->position.y : 0);
-        });
-        vm.setNative("set_x", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->node && !a.empty()) h->node->position.x = (float)a[0].num;
-            return LuaValue();
-        });
-        vm.setNative("set_y", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->node && !a.empty()) h->node->position.y = (float)a[0].num;
-            return LuaValue();
-        });
-        vm.setNative("get_var", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->vars && !a.empty()) { auto it = h->vars->find(a[0].str); if (it != h->vars->end()) return LuaValue::numV(it->second); }
-            return LuaValue::numV(0);
-        });
-        vm.setNative("set_var", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->vars && a.size() >= 2) (*h->vars)[a[0].str] = a[1].num;
-            return LuaValue();
-        });
-        vm.setNative("add_var", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->vars && a.size() >= 2) (*h->vars)[a[0].str] += a[1].num;
-            return LuaValue();
-        });
-        vm.setNative("input_joy_x", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            return LuaValue::numV(h && h->ctx ? h->ctx->input.joystickX : 0);
-        });
-        vm.setNative("input_joy_y", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            return LuaValue::numV(h && h->ctx ? h->ctx->input.joystickY : 0);
-        });
-        vm.setNative("input_pressed", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (!h || !h->ctx || a.empty()) return LuaValue::boolV(false);
-            bool r = false;
-            if (a[0].str == "jump") r = h->ctx->input.jumpPressed;
-            if (a[0].str == "attack") r = h->ctx->input.attackPressed;
-            return LuaValue::boolV(r);
-        });
-        vm.setNative("play_sound", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->sound && !a.empty()) h->sound->play(a[0].str);
-            return LuaValue();
-        });
-        vm.setNative("change_scene", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->scenes && !a.empty()) h->scenes->requestChange(a[0].str, false);
-            return LuaValue();
-        });
-        vm.setNative("restart_scene", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            if (h && h->scenes && !a.empty()) h->scenes->requestChange(a[0].str, true);
-            return LuaValue();
-        });
-        vm.setNative("tostring", [](LuaVM& v, std::vector<LuaValue>& a) {
-            return LuaValue::strV(a.empty() ? std::string("nil") : a[0].toString());
-        });
-        vm.setNative("tonumber", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.empty()) return LuaValue::numV(0);
-            if (a[0].type == LuaValue::Num) return a[0];
-            if (a[0].type == LuaValue::Str) return LuaValue::numV(atof(a[0].str.c_str()));
-            if (a[0].type == LuaValue::Bool) return LuaValue::numV(a[0].boolean ? 1 : 0);
-            return LuaValue::numV(0);
-        });
-        vm.setNative("node_exists", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.empty()) return LuaValue::boolV(false);
-            return LuaValue::boolV(findAny(v, a[0].str) != nullptr);
-        });
-        vm.setNative("count_nodes", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            std::vector<std::string> names; if (sc && sc->root) collectNames(sc->root.get(), names);
-            return LuaValue::numV((double)names.size());
-        });
-        vm.setNative("node_at", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            std::vector<std::string> names; if (sc && sc->root) collectNames(sc->root.get(), names);
-            int i = a.empty() ? -1 : (int)a[0].num;
-            if (i < 0 || i >= (int)names.size()) return LuaValue::strV("");
-            return LuaValue::strV(names[i]);
-        });
-        vm.setNative("get_node_x", [](LuaVM& v, std::vector<LuaValue>& a) {
-            Node2D* n = a.empty() ? nullptr : findAny2D(v, a[0].str);
-            return LuaValue::numV(n ? n->position.x : 0);
-        });
-        vm.setNative("get_node_y", [](LuaVM& v, std::vector<LuaValue>& a) {
-            Node2D* n = a.empty() ? nullptr : findAny2D(v, a[0].str);
-            return LuaValue::numV(n ? n->position.y : 0);
-        });
-        vm.setNative("get_node_w", [](LuaVM& v, std::vector<LuaValue>& a) {
-            Node2D* n = a.empty() ? nullptr : findAny2D(v, a[0].str);
-            return LuaValue::numV(n ? n->w : 0);
-        });
-        vm.setNative("get_node_h", [](LuaVM& v, std::vector<LuaValue>& a) {
-            Node2D* n = a.empty() ? nullptr : findAny2D(v, a[0].str);
-            return LuaValue::numV(n ? n->h : 0);
-        });
-        vm.setNative("set_node_pos", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 3) return LuaValue();
-            Node2D* n = findAny2D(v, a[0].str);
-            if (n) { n->position.x = (float)a[1].num; n->position.y = (float)a[2].num; }
-            return LuaValue();
-        });
-        vm.setNative("move_node", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 3) return LuaValue();
-            Node2D* n = findAny2D(v, a[0].str);
-            if (n) { n->position.x += (float)a[1].num; n->position.y += (float)a[2].num; }
-            return LuaValue();
-        });
-        vm.setNative("set_scale", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 3) return LuaValue();
-            Node2D* n = findAny2D(v, a[0].str);
-            if (n) { n->scale.x = (float)a[1].num; n->scale.y = (float)a[2].num; }
-            return LuaValue();
-        });
-        vm.setNative("set_rot", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue();
-            Node2D* n = findAny2D(v, a[0].str);
-            if (n) n->rotation = (float)(a[1].num * 3.14159265 / 180.0);
-            return LuaValue();
-        });
-        vm.setNative("set_color", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue();
-            Node2D* n = findAny2D(v, a[0].str);
-            if (n) n->color = parseColor(a[1].str);
-            return LuaValue();
-        });
-        vm.setNative("set_shape", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue();
-            Node2D* n = findAny2D(v, a[0].str);
-            if (n) n->shape = a[1].str;
-            return LuaValue();
-        });
-        vm.setNative("set_text", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue();
-            Node* n = findAny(v, a[0].str);
-            Label* l = n ? dynamic_cast<Label*>(n) : nullptr;
-            if (l) l->text = a[1].str;
-            return LuaValue();
-        });
-        vm.setNative("get_text", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.empty()) return LuaValue::strV("");
-            Node* n = findAny(v, a[0].str);
-            Label* l = n ? dynamic_cast<Label*>(n) : nullptr;
-            return LuaValue::strV(l ? l->text : std::string(""));
-        });
-        vm.setNative("destroy", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.empty()) return LuaValue();
-            Node* n = findAny(v, a[0].str);
-            if (n) n->dead = true;
-            return LuaValue();
-        });
-        vm.setNative("pair_destroy", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue();
-            Node* x = findAny(v, a[0].str); if (x) x->dead = true;
-            Node* y = findAny(v, a[1].str); if (y) y->dead = true;
-            return LuaValue();
-        });
-        vm.setNative("spawn", [](LuaVM& v, std::vector<LuaValue>& a) {
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            if (!sc || !sc->root || a.size() < 4) return LuaValue();
-            std::string type = a[0].str, name = a[1].str;
-            float x = (float)a[2].num, y = (float)a[3].num;
-            std::unique_ptr<Node2D> nd;
-            if      (type == "Label")    nd = std::make_unique<Label>();
-            else if (type == "Sprite2D") nd = std::make_unique<Sprite2D>();
-            else if (type == "Player")   nd = std::make_unique<Player>();
-            else if (type == "Enemy")    nd = std::make_unique<Enemy>();
-            else if (type == "Coin")     nd = std::make_unique<Coin>();
-            else if (type == "Solid2D")  nd = std::make_unique<Solid2D>();
-            else if (type == "Camera2D") nd = std::make_unique<Camera2D>();
-            else if (type == "Light2D")  nd = std::make_unique<Light2D>();
-            else                         nd = std::make_unique<Node2D>();
-            nd->name = name; nd->position = Vec2{x, y};
-            sc->root->addChild(std::move(nd));
-            return LuaValue();
-        });
-        vm.setNative("distance", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue::numV(0);
-            Node2D* x = findAny2D(v, a[0].str); Node2D* y = findAny2D(v, a[1].str);
-            if (!x || !y) return LuaValue::numV(0);
-            double dx = x->position.x - y->position.x, dy = x->position.y - y->position.y;
-            return LuaValue::numV(std::sqrt(dx*dx + dy*dy));
-        });
-        vm.setNative("overlaps", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue::boolV(false);
-            Node2D* x = findAny2D(v, a[0].str); Node2D* y = findAny2D(v, a[1].str);
-            if (!x || !y) return LuaValue::boolV(false);
-            float hx = x->w > 0 ? x->w/2 : 24, hy = x->h > 0 ? x->h/2 : 24;
-            float gx = y->w > 0 ? y->w/2 : 24, gy = y->h > 0 ? y->h/2 : 24;
-            bool o = (x->position.x - hx <= y->position.x + gx) && (x->position.x + hx >= y->position.x - gx) &&
-                     (x->position.y - hy <= y->position.y + gy) && (x->position.y + hy >= y->position.y - gy);
-            return LuaValue::boolV(o);
-        });
-        vm.setNative("attach", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue::boolV(false);
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            if (!sc || !sc->root) return LuaValue::boolV(false);
-            Node* root = sc->root.get();
-            const std::string& child = a[0].str; const std::string& parent = a[1].str;
-            if (child == parent) return LuaValue::boolV(false);
-            Node* cn = root->findNode(child); Node* pn = root->findNode(parent);
-            if (!cn || !pn) return LuaValue::boolV(false);
-            if (cn->containsName(parent)) return LuaValue::boolV(false);
-            Node* owner = root->findParentOf(child);
-            if (!owner) return LuaValue::boolV(false);
-            std::unique_ptr<Node> up = owner->takeChild(child);
-            if (!up) return LuaValue::boolV(false);
-            pn->addChild(std::move(up));
-            return LuaValue::boolV(true);
-        });
-        vm.setNative("detach", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.empty()) return LuaValue::boolV(false);
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            if (!sc || !sc->root) return LuaValue::boolV(false);
-            Node* root = sc->root.get();
-            Node* owner = root->findParentOf(a[0].str);
-            if (!owner) return LuaValue::boolV(false);
-            std::unique_ptr<Node> up = owner->takeChild(a[0].str);
-            if (!up) return LuaValue::boolV(false);
-            root->addChild(std::move(up));
-            return LuaValue::boolV(true);
-        });
-        vm.setNative("parent_of", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.empty()) return LuaValue::strV("");
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            if (!sc || !sc->root) return LuaValue::strV("");
-            Node* p = sc->root->findParentOf(a[0].str);
-            return LuaValue::strV(p ? p->name : std::string(""));
-        });
-        vm.setNative("children_count", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.empty()) return LuaValue::numV(0);
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            if (!sc || !sc->root) return LuaValue::numV(0);
-            Node* n = sc->root->findNode(a[0].str);
-            return LuaValue::numV(n ? (double)n->childCount() : 0);
-        });
-        vm.setNative("child_at", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue::strV("");
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            if (!sc || !sc->root) return LuaValue::strV("");
-            Node* n = sc->root->findNode(a[0].str);
-            if (!n) return LuaValue::strV("");
-            int i = (int)a[1].num;
-            const auto& ch = n->getChildren();
-            if (i < 0 || i >= (int)ch.size()) return LuaValue::strV("");
-            return LuaValue::strV(ch[i]->name);
-        });
-        vm.setNative("is_child_of", [](LuaVM& v, std::vector<LuaValue>& a) {
-            if (a.size() < 2) return LuaValue::boolV(false);
-            auto* h = static_cast<ScriptHost*>(v.host);
-            Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
-            if (!sc || !sc->root) return LuaValue::boolV(false);
-            Node* p = sc->root->findParentOf(a[0].str);
-            return LuaValue::boolV(p && p->name == a[1].str);
-        });
-    }
-
-    struct Entry { std::unique_ptr<LuaVM> vm; std::string path; bool started = false; };
-    std::map<std::string, Entry> entries_;
-    std::string root_;
-    ScriptHost host_;
+    lua_State* L_ = nullptr;
+    bool started_ = false;
 };
 
 } // namespace suka
