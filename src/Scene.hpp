@@ -65,9 +65,30 @@ private:
     }
 };
 
+// SPLIT-FIX: разбор верхнеуровневых {...} с учётом вложенности и строк
+inline std::vector<std::string> splitTopObjects(const std::string& arr) {
+    std::vector<std::string> out;
+    int depth = 0; bool inStr = false; bool esc = false; bool have = false; size_t start = 0;
+    for (size_t i = 0; i < arr.size(); ++i) {
+        char c = arr[i];
+        if (inStr) {
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"') inStr = false;
+            continue;
+        }
+        if (c == '"') { inStr = true; continue; }
+        if (c == '{') { if (depth == 0) { start = i; have = true; } depth++; }
+        else if (c == '}') {
+            if (depth > 0) depth--;
+            if (depth == 0 && have) { out.push_back(arr.substr(start, i - start + 1)); have = false; }
+        }
+    }
+    return out;
+}
+
 class SceneLoader {
 public:
-    // CHILDREN-FIX: рекурсивный разбор узла вместе с детьми
     static std::unique_ptr<Node2D> parseNode(const std::string& obj, const std::string& fontPath) {
         std::string type; jsonGetString(obj, "type", type);
         std::unique_ptr<Node2D> node2d;
@@ -119,7 +140,7 @@ public:
 
         size_t cb = 0, ce = 0;
         if (jsonFindArray(obj, "children", cb, ce)) {
-            for (const auto& cobj : jsonSplitObjects(obj.substr(cb, ce - cb + 1))) {
+            for (const auto& cobj : splitTopObjects(obj.substr(cb, ce - cb + 1))) {
                 auto child = parseNode(cobj, fontPath);
                 if (child) node2d->addChild(std::move(child));
             }
@@ -143,7 +164,7 @@ public:
         size_t begin = 0, end = 0;
         if (jsonFindArray(json, "nodes", begin, end)) {
             std::string arr = json.substr(begin, end - begin + 1);
-            for (const auto& obj : jsonSplitObjects(arr)) {
+            for (const auto& obj : splitTopObjects(arr)) {
                 auto n = parseNode(obj, fontPath);
                 if (n) scene.root->addChild(std::move(n));
             }
@@ -152,7 +173,7 @@ public:
         begin = 0; end = 0;
         if (jsonFindArray(json, "ui", begin, end)) {
             std::string arr = json.substr(begin, end - begin + 1);
-            for (const auto& obj : jsonSplitObjects(arr)) {
+            for (const auto& obj : splitTopObjects(arr)) {
                 UiButton button; button.color = currentTheme().button;
                 jsonGetString(obj, "id", button.touch.id);
                 jsonGetString(obj, "text", button.text);
