@@ -55,8 +55,6 @@ public:
     void submitAction(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); actionRes_ = t; hasAction_ = true; }
     void submitNumber(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); numRes_ = t;    hasNum_ = true; }
 
-    // ZOOM-PAN SPLIT: зум = расхождение пальцев, пан = смещение середины,
-    // оба привязаны к якорю (мировая точка под пальцами в момент касания).
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
         if (appMode_ != AppMode::Editor || showCreate_ || showBg_) return;
         Scene* es = editor_ ? editor_->scene() : nullptr;
@@ -413,6 +411,10 @@ private:
             lastDraws_ = 0; for (size_t i = 0; i + 4 < out.size(); ++i) if (out[i]=='D' && out[i+1]=='R' && out[i+2]=='A' && out[i+3]=='W') ++lastDraws_;
             out += "DRAW text|fps " + std::to_string((int)fps_) + "  nodes " + std::to_string(nodeCount_) + "  draws " + std::to_string(lastDraws_) + "|20|100|18|#FFD700|0\n";
             out += "DRAW text|vars " + std::to_string((int)ctx_.vars.size()) + "  score " + std::to_string(ctx_.score) + "|20|124|18|#FFD700|0\n";
+            // LOG-FIX: последние строки Lua в игре
+            size_t ln = g_luaLog.size(); int show = ln > 4 ? 4 : (int)ln;
+            for (int i = 0; i < show; ++i)
+                out += "DRAW text|" + g_luaLog[ln - show + i] + "|20|" + std::to_string(148 + i*20) + "|16|#87CEEB|0\n";
         }
         input_.endFrame(); return out;
     }
@@ -483,7 +485,7 @@ private:
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
         showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
-        fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; pickParent_ = false; lastMsg_.clear();
+        fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
@@ -629,6 +631,17 @@ private:
             } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
         }
 
+        // LOG-FIX: последние 5 строк Lua-лога под инспектором
+        {
+            size_t ln = g_luaLog.size();
+            int show = ln > 5 ? 5 : (int)ln;
+            if (show == 0) addLbl("LogNone", "(lua log empty)", 900, 520, 13, th.ink);
+            for (int i = 0; i < show; ++i) {
+                std::string nm = "LogLn" + std::to_string(i);
+                addLbl(nm.c_str(), g_luaLog[ln - show + i], 900, 520 + i*16, 13, parseColor("#87CEEB"));
+            }
+        }
+
         std::string sb = (editor_ && editor_->scene() && editor_->scene()->bgSet()) ? editor_->scene()->bg : std::string("(theme)");
         addLbl("InBg", "scene bg: " + sb, 900, 426, 16, th.ink);
         { UiButton b; b.touch.id = "lckbtn"; b.touch.rect = Rect{900, 448, 44, 30}; b.text = "LCK"; b.action = "ed_lock"; b.color = parseColor("#D62828"); editorScene_.ui.push_back(b); }
@@ -674,23 +687,33 @@ private:
             UiButton cl; cl.touch.id = "bgclr"; cl.touch.rect = Rect{300+6*84, 560, 80, 40}; cl.text = "CLR"; cl.action = "bg_clear"; cl.color = th.button; editorScene_.ui.push_back(cl);
         }
 
+        // FILES-FIX: прокрутка как у дерева Scene
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
-        std::string shown = fsPath_.empty() ? std::string("res/") : ("res/" + fsPath_);
-        addLbl("FsPath", shown, 10, 406, 15, GODOT_ORANGE);
-        float fy = 428; const float STEP = 28; int rowsN = 0; const int MAXROWS = 8;
-        if (!fsPath_.empty()) {
-            UiButton up; up.touch.id = "fsup"; up.touch.rect = Rect{8, fy, 284, STEP-2}; up.text = ".."; up.action = "fs_up"; up.color = th.button; editorScene_.ui.push_back(up); fy += STEP; ++rowsN;
-        }
+        { UiButton b; b.touch.id="fsu"; b.touch.rect=Rect{248,382,20,22}; b.text="^"; b.action="fscroll_up"; b.color=th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="fsd"; b.touch.rect=Rect{270,382,20,22}; b.text="v"; b.action="fscroll_dn"; b.color=th.button; editorScene_.ui.push_back(b); }
+        struct FsRow { std::string text, action; unsigned col; };
+        std::vector<FsRow> frows;
+        if (!fsPath_.empty()) frows.push_back({ "..", "fs_up", th.button });
         std::string abs = project_.rootPath + "/" + fsPath_;
-        std::vector<FileEntry> items = FileBrowser::list(abs);
-        for (const auto& it : items) {
-            if (rowsN >= MAXROWS) { addLbl("FsMore", "  ...", 10, fy, 15, th.ink); break; }
-            UiButton fb; fb.touch.id = "fs" + std::to_string(rowsN); fb.touch.rect = Rect{8, fy, 284, STEP-2};
-            std::string rel = fsPath_ + it.name;
-            if (it.isDir) { fb.text = "/ " + it.name; fb.action = "fs_enter:" + it.name; fb.color = th.button; }
-            else { fb.text = "  " + it.name; fb.action = "fs_pick:" + rel; fb.color = th.accent; }
+        for (const auto& it : FileBrowser::list(abs)) {
+            FsRow r;
+            r.text = (it.isDir ? "/ " : "  ") + it.name;
+            r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + fsPath_ + it.name);
+            r.col = it.isDir ? th.button : th.accent;
+            frows.push_back(r);
+        }
+        const int FMAXROWS = 8;
+        int fmax = (int)frows.size() > FMAXROWS ? (int)frows.size() - FMAXROWS : 0;
+        if (fsScroll_ < 0) fsScroll_ = 0;
+        if (fsScroll_ > fmax) fsScroll_ = fmax;
+        std::string shown = fsPath_.empty() ? std::string("res/") : ("res/" + fsPath_);
+        addLbl("FsPath", shown + "  (" + std::to_string((int)frows.size()) + ")", 10, 406, 15, GODOT_ORANGE);
+        float fy = 428; const float STEP = 28;
+        for (int i = fsScroll_; i < (int)frows.size() && i < fsScroll_ + FMAXROWS; ++i) {
+            UiButton fb; fb.touch.id = "fs" + std::to_string(i); fb.touch.rect = Rect{8, fy, 284, STEP-2};
+            fb.text = frows[i].text; fb.action = frows[i].action; fb.color = frows[i].col;
             editorScene_.ui.push_back(fb);
-            fy += STEP; ++rowsN;
+            fy += STEP;
         }
     }
 
@@ -704,7 +727,9 @@ private:
         bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
-            if (b.action == "ed_lock") {
+            if (b.action == "fscroll_up") { fsScroll_ -= 3; changed = true; }
+            else if (b.action == "fscroll_dn") { fsScroll_ += 3; changed = true; }
+            else if (b.action == "ed_lock") {
                 if (s2) { pushUndo(); s2->locked = !s2->locked; lastMsg_ = s2->locked ? "locked " + sel : "unlocked " + sel; changed = true; }
             }
             else if (b.action == "ed_undo") { doUndo(); }
@@ -731,9 +756,10 @@ private:
                 while (!tmp.empty() && tmp.back() == '/') tmp.pop_back();
                 size_t sl = tmp.find_last_of('/');
                 fsPath_ = (sl == std::string::npos) ? std::string("") : tmp.substr(0, sl + 1);
+                fsScroll_ = 0;
                 changed = true;
             }
-            else if (b.action.rfind("fs_enter:", 0) == 0) { fsPath_ += b.action.substr(9) + "/"; changed = true; }
+            else if (b.action.rfind("fs_enter:", 0) == 0) { fsPath_ += b.action.substr(9) + "/"; fsScroll_ = 0; changed = true; }
             else if (b.action.rfind("fs_pick:", 0) == 0) {
                 std::string rel = b.action.substr(8);
                 if (rel.size() > 5 && rel.compare(rel.size()-5, 5, ".json") == 0) {
@@ -1048,6 +1074,7 @@ private:
     float pinchDist0_ = 0, pinchZoom0_ = 1.0f, pinchAX_ = 0, pinchAY_ = 0;
     float dragOX_ = 0, dragOY_ = 0, dragPSX_ = 1, dragPSY_ = 1;
     int hierScroll_ = 0;
+    int fsScroll_ = 0;
     std::set<std::string> collapsed_;
     std::vector<std::string> undoStack_, redoStack_; int snapCounter_ = 0;
     std::unique_ptr<Node> clipboard_; int clipCounter_ = 0;
