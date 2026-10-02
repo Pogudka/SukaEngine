@@ -443,44 +443,34 @@ private:
         std::string s = readFile(root + "/project.json");
         size_t p = s.find("\"save_vars\"");
         if (p == std::string::npos) return false;
-
         p = s.find(':', p + 11);
         if (p == std::string::npos) return false;
         ++p;
-
         while (p < s.size() && std::isspace((unsigned char)s[p])) ++p;
         if (p >= s.size()) return false;
-
         char c = s[p];
         if (c == 't' || c == 'T' || c == '1') return true;
         if (c == 'f' || c == 'F' || c == '0') return false;
-
         if (c == '"') {
             size_t e = s.find('"', p + 1);
             if (e == std::string::npos) return false;
             std::string v = s.substr(p + 1, e - p - 1);
             return v == "1" || v == "true" || v == "on" || v == "yes";
         }
-
         return false;
     }
-
     // SAVE-OPTION: запись/переключение save_vars в project.json
     static bool setProjectSaveFlag(const std::string& root, bool on) {
         std::string path = root + "/project.json";
         std::string s = readFile(path);
         if (s.empty()) return false;
-
         std::string val = on ? "true" : "false";
         size_t key = s.find("\"save_vars\"");
-
         if (key != std::string::npos) {
             size_t colon = s.find(':', key + 11);
             if (colon == std::string::npos) return false;
-
             size_t st = colon + 1;
             while (st < s.size() && std::isspace((unsigned char)s[st])) ++st;
-
             size_t en = st;
             if (en < s.size() && s[en] == '"') {
                 en = s.find('"', en + 1);
@@ -492,29 +482,23 @@ private:
                     ++en;
                 }
             }
-
             if (st == en) return false;
             s.replace(st, en - st, val);
         } else {
             size_t last = s.rfind('}');
             if (last == std::string::npos) return false;
-
             size_t ins = last;
             while (ins > 0 && std::isspace((unsigned char)s[ins - 1])) --ins;
-
             if (ins > 0 && s[ins - 1] != '{') s.insert(ins, ",\n  ");
             else s.insert(ins, "\n  ");
-
             s.insert(ins, "\"save_vars\": " + val);
         }
-
         std::ofstream f(path);
         if (!f.good()) return false;
         f << s;
         f.close();
         return true;
     }
-
     // SAVE-B4: переменные игры между запусками
     void saveVars() {
         if (project_.rootPath.empty()) return;
@@ -544,6 +528,48 @@ private:
             if (k == "__score__") ctx_.score = (int)v;
             else if (!k.empty()) ctx_.vars[k] = v;
         }
+    }
+
+    // NAME-FIX: именование проекта через диалог
+    static std::string sanitizeProjectDir(const std::string& raw) {
+        std::string o;
+        for (unsigned char c : raw) {
+            if (std::isalnum(c) || c == '_' || c == '-' || c == '.') o.push_back((char)c);
+            else if (c == ' ') o.push_back('_');
+        }
+        while (!o.empty() && o[0] == '.') o.erase(o.begin());
+        if (o.size() > 32) o.resize(32);
+        if (o.empty()) o = "Project";
+        return o;
+    }
+    static std::string safeDisplayName(const std::string& raw) {
+        std::string o;
+        for (unsigned char c : raw) {
+            if (c == '"' || c == '\\') continue;
+            if (c < 32) o.push_back(' ');
+            else o.push_back((char)c);
+        }
+        size_t a = 0, b = o.size();
+        while (a < b && std::isspace((unsigned char)o[a])) ++a;
+        while (b > a && std::isspace((unsigned char)o[b - 1])) --b;
+        o = o.substr(a, b - a);
+        if (o.empty()) o = "Project";
+        if (o.size() > 48) o.resize(48);
+        return o;
+    }
+    std::string uniqueProjectDir(const std::string& base) {
+        std::string b = base.empty() ? std::string("Project") : base;
+        std::string dir = b;
+        int suffix = 2;
+        while (suffix < 1000) {
+            bool exists = false;
+            for (const auto& g : hubState_.games) {
+                if (g.dir == dir) { exists = true; break; }
+            }
+            if (!exists && !fileExists(PROJECT_ROOT + "/projects/" + dir)) break;
+            dir = b + "_" + std::to_string(suffix++);
+        }
+        return dir;
     }
 
     void scTypeChar(char c) {
@@ -684,20 +710,64 @@ private:
         return a;
     }
     std::string stepHub() {
-        gameBackend_.begin(); Renderer r(gameBackend_); r.render(hubScene_, nullptr); std::string out = gameBackend_.str();
+        if (pendingNewProject_) {
+            std::string nm;
+            bool got = false;
+            {
+                std::lock_guard<std::mutex> lk(dlgMtx_);
+                got = hasName_;
+                if (got) { nm = nameRes_; hasName_ = false; }
+            }
+            if (got) {
+                pendingNewProject_ = false;
+                if (!nm.empty()) {
+                    std::string dir = uniqueProjectDir(sanitizeProjectDir(nm));
+                    std::string disp = safeDisplayName(nm);
+                    ProjectCreator::createProject(dir, disp);
+                    hubState_.selectedDir = dir;
+                }
+                rebuildHub();
+            }
+        }
+
+        gameBackend_.begin();
+        Renderer r(gameBackend_);
+        r.render(hubScene_, nullptr);
+        std::string out = gameBackend_.str();
+
         HubAct a = processHubLandscape();
-        if (a.kind == 3) { std::string dir = nextGameDir(hubState_.games); ProjectCreator::createProject(dir, dir + " Game"); hubState_.selectedDir = dir; rebuildHub(); }
-        else if (a.kind == 4) { hubState_.selectedDir = a.dir; rebuildHub(); }
-        else if (a.kind == 5) { cycleTheme(); saveSettings(); rebuildHub(); }
+
+        if (a.kind == 3) {
+            if (!pendingNewProject_) pendingNewProject_ = true;
+        }
+        else if (a.kind == 4) {
+            hubState_.selectedDir = a.dir;
+            rebuildHub();
+        }
+        else if (a.kind == 5) {
+            cycleTheme();
+            saveSettings();
+            rebuildHub();
+        }
         else if (a.kind == 6) {
             std::string root = PROJECT_ROOT + "/projects/" + hubState_.selectedDir;
             bool cur = projectWantsSave(root);
             setProjectSaveFlag(root, !cur);
             rebuildHub();
         }
-        else if (a.kind == 1) enterGame(a.dir);
-        else if (a.kind == 2) enterEditor(a.dir);
-        input_.endFrame(); return out;
+        else if (a.kind == 1) {
+            enterGame(a.dir);
+        }
+        else if (a.kind == 2) {
+            enterEditor(a.dir);
+        }
+
+        if (pendingNewProject_) {
+            out += "REQ_NAME|Project\n";
+        }
+
+        input_.endFrame();
+        return out;
     }
 
     bool enterGame(const std::string& dir) {
@@ -714,6 +784,7 @@ private:
         saveVarsEnabled_ = projectWantsSave(pi.rootPath);
         pendingLoadVars_ = saveVarsEnabled_;
         saveTimer_ = 0.0f;
+        pendingNewProject_ = false;
         Scene* sc = sceneMgr_->current();
         UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
         UiButton dbg; dbg.touch.id = "dbg"; dbg.touch.rect = Rect{1080, 10, 90, 70}; dbg.text = "DBG"; dbg.action = "dbg:"; dbg.color = parseColor("#808080"); sc->ui.push_back(dbg);
@@ -732,13 +803,9 @@ private:
             if (saveVarsEnabled_) loadVars();
             pendingLoadVars_ = false;
         }
-
         if (saveVarsEnabled_) {
             saveTimer_ += 1.0f / 60.0f;
-            if (saveTimer_ >= 1.0f) {
-                saveVars();
-                saveTimer_ = 0.0f;
-            }
+            if (saveTimer_ >= 1.0f) { saveVars(); saveTimer_ = 0.0f; }
         }
 
         std::string out;
@@ -829,7 +896,7 @@ private:
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
         scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear(); compAnchor_ = -1; imeShown_ = false;
-        pendingLoadVars_ = false; saveVarsEnabled_ = false; saveTimer_ = 0.0f;
+        pendingLoadVars_ = false; saveVarsEnabled_ = false; saveTimer_ = 0.0f; pendingNewProject_ = false;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -1569,6 +1636,7 @@ private:
     std::string textRes_, nameRes_, actionRes_, numRes_;
     bool pendingLoadVars_ = false;
     bool saveVarsEnabled_ = false;
+    bool pendingNewProject_ = false;
     float saveTimer_ = 0.0f;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
