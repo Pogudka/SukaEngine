@@ -52,6 +52,7 @@ public:
     }
 
 private:
+    // CHILDREN-FIX: рекурсивная запись детей в "children"
     static std::string nodeJson(Node& n, int indent) {
         std::string pad(indent, ' ');
         Node2D* n2 = dynamic_cast<Node2D*>(&n);
@@ -64,7 +65,6 @@ private:
             s += ", \"rotation\": " + std::to_string(n2->rotation * 57.2957795f);
             s += ", \"scale_x\": " + std::to_string(n2->scale.x);
             s += ", \"scale_y\": " + std::to_string(n2->scale.y);
-            // ACTION-FIX: действие узла теперь сохраняется
             if (!n2->action.empty()) s += ", \"action\": \"" + n2->action + "\"";
             if (n2->hasAppearance()) {
                 s += ", \"shape\": \"" + n2->shape + "\"";
@@ -86,6 +86,17 @@ private:
             s += ", \"locked\": " + std::string(n2->locked ? "1" : "0");
             s += ", \"alpha\": " + std::to_string(n2->alpha);
         }
+
+        const auto& kids = n.getChildren();
+        if (!kids.empty()) {
+            s += ", \"children\": [\n";
+            for (size_t i = 0; i < kids.size(); ++i) {
+                s += nodeJson(*kids[i], indent + 2);
+                s += (i + 1 < kids.size() ? ",\n" : "\n");
+            }
+            s += pad + "]";
+        }
+
         s += " }";
         return s;
     }
