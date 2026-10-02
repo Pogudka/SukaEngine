@@ -437,6 +437,115 @@ private:
         scripts_.load(project_.rootPath);
         lastMsg_ = "script saved: " + scriptPath_;
     }
+
+    // SAVE-OPTION: чтение флага save_vars из project.json
+    static bool projectWantsSave(const std::string& root) {
+        std::string s = readFile(root + "/project.json");
+        size_t p = s.find("\"save_vars\"");
+        if (p == std::string::npos) return false;
+
+        p = s.find(':', p + 11);
+        if (p == std::string::npos) return false;
+        ++p;
+
+        while (p < s.size() && std::isspace((unsigned char)s[p])) ++p;
+        if (p >= s.size()) return false;
+
+        char c = s[p];
+        if (c == 't' || c == 'T' || c == '1') return true;
+        if (c == 'f' || c == 'F' || c == '0') return false;
+
+        if (c == '"') {
+            size_t e = s.find('"', p + 1);
+            if (e == std::string::npos) return false;
+            std::string v = s.substr(p + 1, e - p - 1);
+            return v == "1" || v == "true" || v == "on" || v == "yes";
+        }
+
+        return false;
+    }
+
+    // SAVE-OPTION: запись/переключение save_vars в project.json
+    static bool setProjectSaveFlag(const std::string& root, bool on) {
+        std::string path = root + "/project.json";
+        std::string s = readFile(path);
+        if (s.empty()) return false;
+
+        std::string val = on ? "true" : "false";
+        size_t key = s.find("\"save_vars\"");
+
+        if (key != std::string::npos) {
+            size_t colon = s.find(':', key + 11);
+            if (colon == std::string::npos) return false;
+
+            size_t st = colon + 1;
+            while (st < s.size() && std::isspace((unsigned char)s[st])) ++st;
+
+            size_t en = st;
+            if (en < s.size() && s[en] == '"') {
+                en = s.find('"', en + 1);
+                if (en == std::string::npos) return false;
+                ++en;
+            } else {
+                while (en < s.size() &&
+                       (std::isalnum((unsigned char)s[en]) || s[en] == '_' || s[en] == '.' || s[en] == '+' || s[en] == '-')) {
+                    ++en;
+                }
+            }
+
+            if (st == en) return false;
+            s.replace(st, en - st, val);
+        } else {
+            size_t last = s.rfind('}');
+            if (last == std::string::npos) return false;
+
+            size_t ins = last;
+            while (ins > 0 && std::isspace((unsigned char)s[ins - 1])) --ins;
+
+            if (ins > 0 && s[ins - 1] != '{') s.insert(ins, ",\n  ");
+            else s.insert(ins, "\n  ");
+
+            s.insert(ins, "\"save_vars\": " + val);
+        }
+
+        std::ofstream f(path);
+        if (!f.good()) return false;
+        f << s;
+        f.close();
+        return true;
+    }
+
+    // SAVE-B4: переменные игры между запусками
+    void saveVars() {
+        if (project_.rootPath.empty()) return;
+        std::ofstream f(project_.rootPath + "/save.vars");
+        if (!f.good()) return;
+        f << "__score__=" << ctx_.score << "\n";
+        for (const auto& kv : ctx_.vars) f << kv.first << "=" << kv.second << "\n";
+        f.close();
+    }
+    void loadVars() {
+        if (project_.rootPath.empty()) return;
+        std::string path = project_.rootPath + "/save.vars";
+        if (!fileExists(path)) return;
+        std::string s = readFile(path);
+        size_t pos = 0;
+        while (pos <= s.size()) {
+            size_t nl = s.find('\n', pos);
+            std::string line;
+            if (nl == std::string::npos) { line = s.substr(pos); pos = s.size() + 1; }
+            else { line = s.substr(pos, nl - pos); pos = nl + 1; }
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::string k = line.substr(0, eq);
+            double v = atof(line.substr(eq + 1).c_str());
+            if (k == "__score__") ctx_.score = (int)v;
+            else if (!k.empty()) ctx_.vars[k] = v;
+        }
+    }
+
     void scTypeChar(char c) {
         if (curLine_ >= (int)scriptLines_.size()) scriptLines_.push_back("");
         std::string& L = scriptLines_[curLine_];
@@ -545,6 +654,14 @@ private:
             auto sc = std::make_unique<Label>(); sc->name = "SelScene"; sc->text = "scene: " + info.mainScene; sc->fontSize = 20; sc->color = th.ink; sc->position = Vec2{740, 170}; s.root->addChild(std::move(sc));
             UiButton play; play.touch.id = "play"; play.touch.rect = Rect{740, 280, 150, 60}; play.text = "Play"; play.action = "play:" + hubState_.selectedDir; play.color = th.accent; s.ui.push_back(play);
             UiButton edit; edit.touch.id = "edit"; edit.touch.rect = Rect{910, 280, 150, 60}; edit.text = "Edit"; edit.action = "edit:" + hubState_.selectedDir; edit.color = th.button; s.ui.push_back(edit);
+
+            std::string root = PROJECT_ROOT + "/projects/" + hubState_.selectedDir;
+            bool svOn = projectWantsSave(root);
+            UiButton sv; sv.touch.id = "toggle_save"; sv.touch.rect = Rect{740, 360, 150, 60};
+            sv.text = svOn ? "SAVE: ON" : "SAVE: OFF";
+            sv.action = "save_toggle";
+            sv.color = svOn ? parseColor("#2E7D32") : th.button;
+            s.ui.push_back(sv);
         } else {
             auto hint = std::make_unique<Label>(); hint->name = "Hint"; hint->text = "(select a project)"; hint->fontSize = 24; hint->color = th.ink; hint->position = Vec2{740, 300}; s.root->addChild(std::move(hint));
         }
@@ -559,6 +676,7 @@ private:
             if (!b.touch.pressEdge || b.action.empty()) continue;
             if (b.action == "new") a.kind = 3;
             else if (b.action == "theme") a.kind = 5;
+            else if (b.action == "save_toggle") a.kind = 6;
             else if (b.action.rfind("play:", 0) == 0) { a.kind = 1; a.dir = b.action.substr(5); }
             else if (b.action.rfind("edit:", 0) == 0) { a.kind = 2; a.dir = b.action.substr(5); }
             else if (b.action.rfind("sel:", 0) == 0) { a.kind = 4; a.dir = b.action.substr(4); }
@@ -571,6 +689,12 @@ private:
         if (a.kind == 3) { std::string dir = nextGameDir(hubState_.games); ProjectCreator::createProject(dir, dir + " Game"); hubState_.selectedDir = dir; rebuildHub(); }
         else if (a.kind == 4) { hubState_.selectedDir = a.dir; rebuildHub(); }
         else if (a.kind == 5) { cycleTheme(); saveSettings(); rebuildHub(); }
+        else if (a.kind == 6) {
+            std::string root = PROJECT_ROOT + "/projects/" + hubState_.selectedDir;
+            bool cur = projectWantsSave(root);
+            setProjectSaveFlag(root, !cur);
+            rebuildHub();
+        }
         else if (a.kind == 1) enterGame(a.dir);
         else if (a.kind == 2) enterEditor(a.dir);
         input_.endFrame(); return out;
@@ -587,6 +711,9 @@ private:
         ctx_ = Context();
         g_luaLog.clear();
         dbg_ = false;
+        saveVarsEnabled_ = projectWantsSave(pi.rootPath);
+        pendingLoadVars_ = saveVarsEnabled_;
+        saveTimer_ = 0.0f;
         Scene* sc = sceneMgr_->current();
         UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
         UiButton dbg; dbg.touch.id = "dbg"; dbg.touch.rect = Rect{1080, 10, 90, 70}; dbg.text = "DBG"; dbg.action = "dbg:"; dbg.color = parseColor("#808080"); sc->ui.push_back(dbg);
@@ -600,6 +727,20 @@ private:
         if (appMode_ != AppMode::Game) return "";
         sceneMgr_->update(ctx_, 1.0 / 60.0, input_, resources_);
         scripts_.update(*sceneMgr_->current(), ctx_, 1.0 / 60.0, *sceneMgr_, ctx_.vars);
+
+        if (pendingLoadVars_) {
+            if (saveVarsEnabled_) loadVars();
+            pendingLoadVars_ = false;
+        }
+
+        if (saveVarsEnabled_) {
+            saveTimer_ += 1.0f / 60.0f;
+            if (saveTimer_ >= 1.0f) {
+                saveVars();
+                saveTimer_ = 0.0f;
+            }
+        }
+
         std::string out;
         if (ctx_.coinCollectedThisFrame) out += "SOUND coin\n";
         if (ctx_.jumpPressedThisFrame)   out += "SOUND jump\n";
@@ -619,7 +760,11 @@ private:
         Scene* sc = sceneMgr_->current(); if (!sc) return;
         if (act == "dbg:") { dbg_ = !dbg_; return; }
         const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:";
-        if (act.rfind(pHub, 0) == 0) { appMode_ = AppMode::Hub; rebuildHub(); }
+        if (act.rfind(pHub, 0) == 0) {
+            if (saveVarsEnabled_) saveVars();
+            appMode_ = AppMode::Hub;
+            rebuildHub();
+        }
         else if (act.rfind(pRestart, 0) == 0) sceneMgr_->requestChange(act.substr(pRestart.size()), true);
         else if (act.rfind(pChange, 0) == 0)  sceneMgr_->requestChange(act.substr(pChange.size()), false);
         else if (act.rfind(pCall, 0) == 0) scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars);
@@ -684,6 +829,7 @@ private:
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
         scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear(); compAnchor_ = -1; imeShown_ = false;
+        pendingLoadVars_ = false; saveVarsEnabled_ = false; saveTimer_ = 0.0f;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -892,6 +1038,7 @@ private:
         std::string abs = project_.rootPath + "/" + fsPath_;
         for (const auto& it : FileBrowser::list(abs)) {
             if (it.name.rfind("snap_", 0) == 0) continue;
+            if (it.name == "save.vars") continue;
             FsRow r;
             r.text = (it.isDir ? "/ " : "  ") + it.name;
             r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + fsPath_ + it.name);
@@ -1420,6 +1567,9 @@ private:
     std::mutex dlgMtx_;
     bool hasText_ = false, hasName_ = false, hasAction_ = false, hasNum_ = false;
     std::string textRes_, nameRes_, actionRes_, numRes_;
+    bool pendingLoadVars_ = false;
+    bool saveVarsEnabled_ = false;
+    float saveTimer_ = 0.0f;
     ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
 };
 
