@@ -66,3 +66,17 @@ Java_com_sukaengine_app_MainActivity_nativeSetNumber(JNIEnv* env, jobject, jstri
     g_app->submitNumber(std::string(t));
     env->ReleaseStringUTFChars(text, t);
 }
+
+// IME-FIX: символы и служебные клавиши с мягкой клавиатуры
+extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeScriptText(JNIEnv* env, jobject, jstring text) {
+    if (!g_app || !text) return;
+    const char* t = env->GetStringUTFChars(text, nullptr);
+    g_app->submitScriptText(std::string(t));
+    env->ReleaseStringUTFChars(text, t);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeScriptKey(JNIEnv* env, jobject, jint key) {
+    if (g_app) g_app->submitScriptKey((int)key);
+}
