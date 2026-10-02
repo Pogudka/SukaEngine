@@ -43,7 +43,6 @@ inline std::string sanitizeLine(const std::string& s) {
     }
     return o;
 }
-// UTF8-FIX: ход по code points, чтобы не рвать многбайтовые символы
 inline bool utf8Cont(char c) { return ((unsigned char)c & 0xC0) == 0x80; }
 inline int utf8Prev(const std::string& s, int pos) {
     if (pos <= 0) return 0;
@@ -66,6 +65,31 @@ inline int utf8ByteToCp(const std::string& s, int bytePos) {
     int c = 0, p = 0;
     while (p < bytePos && p < (int)s.size()) { p = utf8Next(s, p); ++c; }
     return c;
+}
+// CURSOR-FIX: оценка ширины символа пропорционального шрифта
+inline float charW(char c) {
+    switch (c) {
+        case 'i': case 'l': case 'j': case 't': case 'f': case '.': case ',': case ':': case ';':
+        case '\'': case '`': case '|': case '!': case '(': case ')': case '[': case ']':
+        case '{': case '}': case '-': case '"': return 5.0f;
+        case ' ': return 4.5f;
+        case 'm': case 'w': case 'M': case 'W': case '@': return 10.0f;
+        default: return 7.0f;
+    }
+}
+inline float estW(const std::string& s, int byteEnd) {
+    float w = 0; int p = 0;
+    while (p < byteEnd && p < (int)s.size()) { w += charW(s[p]); p = utf8Next(s, p); }
+    return w;
+}
+inline int byteAtW(const std::string& s, float target) {
+    float w = 0; int p = 0;
+    while (p < (int)s.size()) {
+        float cw = charW(s[p]);
+        if (w + cw > target) break;
+        w += cw; p = utf8Next(s, p);
+    }
+    return p;
 }
 
 class GameApp {
@@ -135,15 +159,12 @@ public:
                 int line = scriptScroll_ + (int)((y - 70) / LH);
                 if (line < 0) line = 0;
                 if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
-                int colCp = (int)((x - 340) / 7.2f);
                 const std::string& L = scriptLines_[line];
-                int total = utf8ByteToCp(L, (int)L.size());
-                if (colCp < 0) colCp = 0;
-                if (colCp > total) colCp = total;
+                // CURSOR-FIX: колонка из координаты по ширинам символов
                 curLine_ = line;
-                curCol_ = utf8CpToByte(L, colCp);   // UTF8-FIX: курсор по символам
+                curCol_ = byteAtW(L, x - 340);
                 compAnchor_ = -1;
-                imeWantOn_ = true; imeShown_ = true;   // KB-FIX: тап возвращает клавиатуру
+                imeWantOn_ = true; imeShown_ = true;
                 imeChanged_ = true;
             }
             touch_.onTouch(t, *cur, input_);
@@ -450,7 +471,7 @@ private:
         if (curLine_ >= (int)scriptLines_.size()) return;
         std::string& L = scriptLines_[curLine_];
         if (curCol_ > 0) {
-            int p = utf8Prev(L, curCol_);          // UTF8-FIX: стираем целый символ
+            int p = utf8Prev(L, curCol_);
             L.erase(L.begin() + p, L.begin() + curCol_);
             curCol_ = p;
         }
@@ -937,18 +958,18 @@ private:
             addLbl(nmC.c_str(), txt, 340, y, 14, i == curLine_ ? parseColor("#FFD700") : parseColor("#D8E0F0"));
         }
         if (curLine_ >= scriptScroll_ && curLine_ < scriptScroll_ + LINES) {
-            // UTF8-FIX: позиция курсора по символам, не байтам
-            int cps = utf8ByteToCp(scriptLines_[curLine_], curCol_);
+            // CURSOR-FIX: тонкая черта точно на границе символов (ширины как у текста)
+            const std::string& L = scriptLines_[curLine_];
+            float cw = estW(L, curCol_);
             auto cur = std::make_unique<Node2D>(); cur->name = "__sccur"; cur->shape = "square";
-            cur->color = 0x4CC9F0FF; cur->w = 8; cur->h = 16;
-            float cxp = 340 + cps * 7.2f;
+            cur->color = 0x4CC9F0FF; cur->w = 2; cur->h = 16;
             float cyp = 70 + (float)(curLine_ - scriptScroll_) * LH + 8;
-            cur->position = Vec2{cxp + 4, cyp};
+            cur->position = Vec2{340 + cw + 1, cyp};
             editorScene_.root->addChild(std::move(cur));
         }
 
         addLbl("ScInfo", scriptPath_.empty() ? "(no script)" : scriptPath_, 900, 64, 16, GODOT_ORANGE);
-        addLbl("ScInfo2", "lines " + std::to_string((int)scriptLines_.size()) + "   cur " + std::to_string(curLine_+1) + ":" + std::to_string(utf8ByteToCp(scriptLines_.size() ? scriptLines_[curLine_] : std::string(""), curCol_)), 900, 88, 14, th.ink);
+        addLbl("ScInfo2", "lines " + std::to_string((int)scriptLines_.size()) + "   cur " + std::to_string(curLine_+1) + ":" + std::to_string(utf8ByteToCp(scriptLines_.empty() ? std::string("") : scriptLines_[curLine_], curCol_)), 900, 88, 14, th.ink);
         addLbl("ScInfo3", "tap line = cursor + keyboard", 900, 110, 14, th.ink);
         addLbl("ScInfo4", "SAVE writes file + reloads scripts", 900, 132, 14, th.ink);
     }
@@ -1233,91 +1254,85 @@ private:
             float Z = edZoom_;
             if (manip_ == Manip::Move) {
                 out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-2)) + "|" + std::to_string((int)(56*Z)) + "|4|#D62828|0\n";
-                out += "DRAW shape|triangle|" + std::to_string((int)(cx+50*Z)) + "|" + std::to_string((int)(cy-8*Z)) + "|" + std::to_string((int)(16*Z)) + "|" + std::to_string((int)(14*Z)) + "|#D62828|90\n";
-                out += "DRAW rect|" + std::to_string((int)(cx-2)) + "|" + std::to_string((int)cy) + "|4|" + std::to_string((int)(56*Z)) + "|#40C040|0\n";
                 out += "DRAW shape|triangle|" + std::to_string((int)(cx-8*Z)) + "|" + std::to_string((int)(cy+50*Z)) + "|" + std::to_string((int)(14*Z)) + "|" + std::to_string((int)(16*Z)) + "|#40C040|180\n";
-            } else if (manip_ == Manip::Rotate) {
-                for (int k = 0; k < 24; ++k) {
-                    float a = k * 6.28318f / 24.0f;
-                    float px = cx + std::cos(a) * 70*Z, py = cy + std::sin(a) * 70*Z;
+        if (!n) return;
+        }
+            float r = li->radius * ((wsx + wsy) * 0.5f) * S;
+                    out += "DRAW rect|" + std::to_string((int)(sx-10)) + "|" + std::to_string((int)(sy-2)) + "|20|4|#808080|0\n";
+                out += "DRAW rect|" + std::to_string((int)(cx+hw+16*Z)) + "|" + std::to_string((int)(cy-8*Z)) + "|16|16|#4CC9F0|0\n";
+        if (!lastMsg_.empty()) out += "DRAW text|" + lastMsg_ + "   fps " + std::to_string((int)fps_) + "|306|580|14|#FFD700|0\n";
+        consumeDialogResults();
+                out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24*Z)) + "|#4CC9F0|0\n";
+            }
+        Node2D* n2d = dynamic_cast<Node2D*>(const_cast<Node*>(n));
+            }
+                }
+
                     out += "DRAW rect|" + std::to_string((int)(px-3)) + "|" + std::to_string((int)(py-3)) + "|6|6|#FF8800|0\n";
                 }
-            } else {
-                float hw = (g->w * gsx)*S/2, hh = (g->h * gsy)*S/2;
                 out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-1)) + "|" + std::to_string((int)(hw+24*Z)) + "|2|#4CC9F0|0\n";
-                out += "DRAW rect|" + std::to_string((int)(cx+hw+16*Z)) + "|" + std::to_string((int)(cy-8*Z)) + "|16|16|#4CC9F0|0\n";
-                out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24*Z)) + "|#4CC9F0|0\n";
-                out += "DRAW rect|" + std::to_string((int)(cx-8*Z)) + "|" + std::to_string((int)(cy+hh+16*Z)) + "|16|16|#4CC9F0|0\n";
-            }
-        }
-        if (pickParent_ && !pickChild_.empty()) {
-            out += "DRAW rect|300|64|592|26|#FF8800|0\n";
-            out += "DRAW text|PARENT FOR: " + pickChild_ + "  ->  tap object or row|306|68|16|#1A1A2E|0\n";
-        }
-        if (!lastMsg_.empty()) out += "DRAW text|" + lastMsg_ + "   fps " + std::to_string((int)fps_) + "|306|580|14|#FFD700|0\n";
-    }
-
-    void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH,
-                         float camX, float camY, float ox, float oy, float orot, float osx, float osy,
-                         std::string& out) {
-        if (!n) return;
-        Node2D* n2d = dynamic_cast<Node2D*>(const_cast<Node*>(n));
-        if (!n2d) { for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, ox, oy, orot, osx, osy, out); return; }
-        float cr = std::cos(orot), sr = std::sin(orot);
-        float wx = ox + (n2d->position.x * osx) * cr - (n2d->position.y * osy) * sr;
-        float wy = oy + (n2d->position.x * osx) * sr + (n2d->position.y * osy) * cr;
-        float wrot = orot + n2d->rotation;
-        float wsx = osx * n2d->scale.x, wsy = osy * n2d->scale.y;
-        std::string tn = std::string(n2d->typeName());
-        float sx = CX + (wx - camX - 640)*S, sy = CY + (wy - camY - 360)*S;
-        float ang = wrot * 57.2957795f;
-        unsigned colA = withAlpha(n2d->color, n2d->alpha);
-        if (tn == "Camera2D") {
-            if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
-                out += "DRAW rect|" + std::to_string((int)(sx-14)) + "|" + std::to_string((int)(sy-10)) + "|28|20|#FFD700|0\n";
-                out += "DRAW text|CAM|" + std::to_string((int)(sx-12)) + "|" + std::to_string((int)(sy+12)) + "|12|#FFD700|0\n";
-            }
-        }
-        else if (tn == "Light2D") {
             Light2D* li = static_cast<Light2D*>(n2d);
-            float r = li->radius * ((wsx + wsy) * 0.5f) * S;
-            if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH)
-                out += "DRAW shape|glow|" + std::to_string((int)(sx-r)) + "|" + std::to_string((int)(sy-r)) + "|" + std::to_string((int)(2*r)) + "|" + std::to_string((int)(2*r)) + "|" + colorToHexA(colA) + "|0\n";
-        }
-        else if (tn != "Node") {
-            float w = n2d->w * wsx * S, h = n2d->h * wsy * S;
-            float rx = sx - w/2, ry = sy - h/2;
+        unsigned colA = withAlpha(n2d->color, n2d->alpha);
+                else if (n2d->hasAppearance()) out += "DRAW shape|" + n2d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
+        if (pickParent_ && !pickChild_.empty()) {
             if (!n2d->hasAppearance() && tn == "Node2D") {
-                if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
-                    out += "DRAW rect|" + std::to_string((int)(sx-10)) + "|" + std::to_string((int)(sy-2)) + "|20|4|#808080|0\n";
-                    out += "DRAW rect|" + std::to_string((int)(sx-2)) + "|" + std::to_string((int)(sy-10)) + "|4|20|#808080|0\n";
-                    out += "DRAW text|" + n2d->name + "|" + std::to_string((int)(sx+12)) + "|" + std::to_string((int)(sy+4)) + "|12|#808080|0\n";
-                }
-            }
-            bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
-            if (vis) {
-                if (tn == "Label") {
-                    int fs = (int)(static_cast<Label*>(n2d)->fontSize * ((wsx + wsy) * 0.5f) * S);
                     if (fs < 6) fs = 6;
                     out += "DRAW text|" + static_cast<Label*>(n2d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
-                }
-                else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(withAlpha(0x555555FFu, n2d->alpha)) + "|" + std::to_string(ang) + "\n";
-                else if (n2d->hasAppearance()) out += "DRAW shape|" + n2d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
-            }
-        }
-        for (const auto& ch : n2d->getChildren())
+                if (tn == "Label") {
+                out += "DRAW text|CAM|" + std::to_string((int)(sx-12)) + "|" + std::to_string((int)(sy+12)) + "|12|#FFD700|0\n";
+            } else {
             emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, wx, wy, wrot, wsx, wsy, out);
-    }
-
-    std::string stepEditor() {
-        if (!editor_ || !editor_->scene()) { appMode_ = AppMode::Hub; rebuildHub(); return ""; }
-        consumeDialogResults();
-        if (scriptMode_) imeApply();
+        if (tn == "Camera2D") {
+                out += "DRAW rect|" + std::to_string((int)(sx-14)) + "|" + std::to_string((int)(sy-10)) + "|28|20|#FFD700|0\n";
+            if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
+        else if (tn == "Light2D") {
+        float ang = wrot * 57.2957795f;
+                out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-2)) + "|" + std::to_string((int)(56*Z)) + "|4|#D62828|0\n";
         gameBackend_.begin(); Renderer gr(gameBackend_); gr.render(editorScene_, &ctx_); std::string out = gameBackend_.str();
+            out += "DRAW text|PARENT FOR: " + pickChild_ + "  ->  tap object or row|306|68|16|#1A1A2E|0\n";
+        std::string tn = std::string(n2d->typeName());
+        }
+                    out += "DRAW text|" + n2d->name + "|" + std::to_string((int)(sx+12)) + "|" + std::to_string((int)(sy+4)) + "|12|#808080|0\n";
+            if (vis) {
+                out += "DRAW shape|glow|" + std::to_string((int)(sx-r)) + "|" + std::to_string((int)(sy-r)) + "|" + std::to_string((int)(2*r)) + "|" + std::to_string((int)(2*r)) + "|" + colorToHexA(colA) + "|0\n";
+        }
+        float wsx = osx * n2d->scale.x, wsy = osy * n2d->scale.y;
+if (manip_ == Manip::Move) {
+                    float px = cx + std::cos(a) * 70*Z, py = cy + std::sin(a) * 70*Z;
+            } else if (manip_ == Manip::Rotate) {
+        for (const auto& ch : n2d->getChildren())
+                    out += "DRAW rect|" + std::to_string((int)(sx-2)) + "|" + std::to_string((int)(sy-10)) + "|4|20|#808080|0\n";
+    }
+        if (scriptMode_) imeApply();
+                out += "DRAW rect|" + std::to_string((int)(cx-8*Z)) + "|" + std::to_string((int)(cy+hh+16*Z)) + "|16|16|#4CC9F0|0\n";
+        }
+        if (!n2d) { for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, ox, oy, orot, osx, osy, out); return; }
+                else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(withAlpha(0x555555FFu, n2d->alpha)) + "|" + std::to_string(ang) + "\n";
+    void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH,
+            out += "DRAW rect|300|64|592|26|#FF8800|0\n";
+                if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
+                    int fs = (int)(static_cast<Label*>(n2d)->fontSize * ((wsx + wsy) * 0.5f) * S);
+                out += "DRAW shape|triangle|" + std::to_string((int)(cx+50*Z)) + "|" + std::to_string((int)(cy-8*Z)) + "|" + std::to_string((int)(16*Z)) + "|" + std::to_string((int)(14*Z)) + "|#D62828|90\n";
         if (!scriptMode_) emitViewport(*editor_->scene(), out);
+        }
+        float sx = CX + (wx - camX - 640)*S, sy = CY + (wy - camY - 360)*S;
+        else if (tn != "Node") {
+                }
+            }
+        float cr = std::cos(orot), sr = std::sin(orot);
+                         float camX, float camY, float ox, float oy, float orot, float osx, float osy,
+                out += "DRAW rect|" + std::to_string((int)(cx-2)) + "|" + std::to_string((int)cy) + "|4|" + std::to_string((int)(56*Z)) + "|#40C040|0\n";
         processEditorActions();
+            float w = n2d->w * wsx * S, h = n2d->h * wsy * S;
+            }
+        float wx = ox + (n2d->position.x * osx) * cr - (n2d->position.y * osy) * sr;
+                         std::string& out) {
         if (scriptMode_ && imeChanged_) { buildEditorPanels(); input_.setUi(&editorScene_.ui); imeChanged_ = false; }
+            float rx = sx - w/2, ry = sy - h/2;
+            bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
+        float wy = oy + (n2d->position.x * osx) * sr + (n2d->position.y * osy) * cr;
         if (imeWantOn_)  { out += "IME_ON\n";  imeWantOn_ = false; }
+        float wrot = orot + n2d->rotation;
         if (imeWantOff_) { out += "IME_OFF\n"; imeWantOff_ = false; }
         if (pendingText_ && appMode_ == AppMode::Editor) { out += "REQ_TEXT|" + pendingTextCur_ + "\n"; pendingText_ = false; }
         if (pendingName_ && appMode_ == AppMode::Editor) { out += "REQ_NAME|Object\n"; }
