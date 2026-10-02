@@ -43,6 +43,30 @@ inline std::string sanitizeLine(const std::string& s) {
     }
     return o;
 }
+// UTF8-FIX: ход по code points, чтобы не рвать многбайтовые символы
+inline bool utf8Cont(char c) { return ((unsigned char)c & 0xC0) == 0x80; }
+inline int utf8Prev(const std::string& s, int pos) {
+    if (pos <= 0) return 0;
+    --pos;
+    while (pos > 0 && utf8Cont(s[pos])) --pos;
+    return pos;
+}
+inline int utf8Next(const std::string& s, int pos) {
+    if (pos >= (int)s.size()) return (int)s.size();
+    ++pos;
+    while (pos < (int)s.size() && utf8Cont(s[pos])) ++pos;
+    return pos;
+}
+inline int utf8CpToByte(const std::string& s, int cp) {
+    int p = 0;
+    for (int i = 0; i < cp && p < (int)s.size(); ++i) p = utf8Next(s, p);
+    return p;
+}
+inline int utf8ByteToCp(const std::string& s, int bytePos) {
+    int c = 0, p = 0;
+    while (p < bytePos && p < (int)s.size()) { p = utf8Next(s, p); ++c; }
+    return c;
+}
 
 class GameApp {
 public:
@@ -105,18 +129,21 @@ public:
         Scene* cur = uiScene();
         if (!cur) return;
 
-        // CURSOR-FIX: тап по окну кода ставит курсор в строку/колонку
         if (appMode_ == AppMode::Editor && scriptMode_) {
             if (t.action == RawTouch::Action::Down && x >= 300 && x <= 850 && y >= 64 && y <= 556) {
                 const float LH = 19;
                 int line = scriptScroll_ + (int)((y - 70) / LH);
                 if (line < 0) line = 0;
                 if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
-                int col = (int)((x - 340) / 7.2f);
+                int colCp = (int)((x - 340) / 7.2f);
                 const std::string& L = scriptLines_[line];
-                if (col < 0) col = 0;
-                if (col > (int)L.size()) col = (int)L.size();
-                curLine_ = line; curCol_ = col; compAnchor_ = -1;
+                int total = utf8ByteToCp(L, (int)L.size());
+                if (colCp < 0) colCp = 0;
+                if (colCp > total) colCp = total;
+                curLine_ = line;
+                curCol_ = utf8CpToByte(L, colCp);   // UTF8-FIX: курсор по символам
+                compAnchor_ = -1;
+                imeWantOn_ = true; imeShown_ = true;   // KB-FIX: тап возвращает клавиатуру
                 imeChanged_ = true;
             }
             touch_.onTouch(t, *cur, input_);
@@ -384,7 +411,8 @@ private:
         if (curLine_ >= (int)scriptLines_.size()) scriptLines_.push_back("");
         std::string& L = scriptLines_[curLine_];
         if (c == '\n') {
-            std::string tail = L.substr(curCol_ < (int)L.size() ? curCol_ : L.size());
+            if (curCol_ > (int)L.size()) curCol_ = (int)L.size();
+            std::string tail = L.substr(curCol_);
             L = L.substr(0, curCol_);
             scriptLines_.insert(scriptLines_.begin() + curLine_ + 1, tail);
             curLine_++; curCol_ = 0;
@@ -395,17 +423,11 @@ private:
         }
         scClampView();
     }
-    // COMPOSE-FIX: живой предпросмотр набора — заменяем диапазон от якоря
     void scCompose(const std::string& text) {
         if (curLine_ >= (int)scriptLines_.size()) scriptLines_.push_back("");
-        if (compAnchor_ < 0) compAnchor_ = curCol_;
         std::string& L = scriptLines_[curLine_];
-        if (curCol_ > compAnchor_ && compAnchor_ <= (int)L.size()) {
-            int del = curCol_ - compAnchor_;
-            if (compAnchor_ + del > (int)L.size()) del = (int)L.size() - compAnchor_;
-            L.erase(L.begin() + compAnchor_, L.begin() + compAnchor_ + del);
-            curCol_ = compAnchor_;
-        }
+        if (compAnchor_ < 0 || compAnchor_ > (int)L.size()) compAnchor_ = curCol_;
+        if (curCol_ > compAnchor_) { L.erase(L.begin() + compAnchor_, L.begin() + curCol_); curCol_ = compAnchor_; }
         for (char c : text) {
             if (c == '\n') c = ' ';
             if (curCol_ > (int)L.size()) curCol_ = (int)L.size();
@@ -417,12 +439,7 @@ private:
     void scCommit(const std::string& text) {
         if (compAnchor_ >= 0) {
             std::string& L = scriptLines_[curLine_];
-            if (curCol_ > compAnchor_ && compAnchor_ <= (int)L.size()) {
-                int del = curCol_ - compAnchor_;
-                if (compAnchor_ + del > (int)L.size()) del = (int)L.size() - compAnchor_;
-                L.erase(L.begin() + compAnchor_, L.begin() + compAnchor_ + del);
-                curCol_ = compAnchor_;
-            }
+            if (compAnchor_ <= (int)L.size() && curCol_ > compAnchor_) { L.erase(L.begin() + compAnchor_, L.begin() + curCol_); curCol_ = compAnchor_; }
             compAnchor_ = -1;
         }
         for (char c : text) scTypeChar(c);
@@ -432,7 +449,11 @@ private:
         compAnchor_ = -1;
         if (curLine_ >= (int)scriptLines_.size()) return;
         std::string& L = scriptLines_[curLine_];
-        if (curCol_ > 0) { L.erase(L.begin() + curCol_ - 1); curCol_--; }
+        if (curCol_ > 0) {
+            int p = utf8Prev(L, curCol_);          // UTF8-FIX: стираем целый символ
+            L.erase(L.begin() + p, L.begin() + curCol_);
+            curCol_ = p;
+        }
         else if (curLine_ > 0) {
             size_t prevLen = scriptLines_[curLine_ - 1].size();
             scriptLines_[curLine_ - 1] += L;
@@ -443,12 +464,16 @@ private:
     }
     void scMove(int d) {
         compAnchor_ = -1;
-        curCol_ += d;
-        if (curLine_ < 0) curLine_ = 0;
         if (curLine_ >= (int)scriptLines_.size()) curLine_ = (int)scriptLines_.size() - 1;
         std::string& L = scriptLines_[curLine_];
-        if (curCol_ < 0) { if (curLine_ > 0) { curLine_--; curCol_ = (int)scriptLines_[curLine_].size(); } else curCol_ = 0; }
-        if (curCol_ > (int)L.size()) { if (curLine_ + 1 < (int)scriptLines_.size()) { curLine_++; curCol_ = 0; } else curCol_ = (int)L.size(); }
+        if (curCol_ > (int)L.size()) curCol_ = (int)L.size();
+        if (d < 0) {
+            if (curCol_ > 0) curCol_ = utf8Prev(L, curCol_);
+            else if (curLine_ > 0) { curLine_--; curCol_ = (int)scriptLines_[curLine_].size(); }
+        } else {
+            if (curCol_ < (int)L.size()) curCol_ = utf8Next(L, curCol_);
+            else if (curLine_ + 1 < (int)scriptLines_.size()) { curLine_++; curCol_ = 0; }
+        }
         scClampView();
     }
     void scClampView() {
@@ -628,7 +653,7 @@ private:
         showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
-        scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear(); compAnchor_ = -1;
+        scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear(); compAnchor_ = -1; imeShown_ = false;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -890,8 +915,9 @@ private:
         edbg->position = Vec2{VX0 + VW/2, VY0 + VH/2};
         editorScene_.root->addChild(std::move(edbg));
 
-        { UiButton b; b.touch.id="ssave"; b.touch.rect=Rect{300,34,80,26}; b.text="SAVE"; b.action="ssave"; b.color=parseColor("#2E7D32"); editorScene_.ui.push_back(b); }
-        { UiButton b; b.touch.id="sclose"; b.touch.rect=Rect{384,34,80,26}; b.text="SCENE"; b.action="tab_scene"; b.color=GODOT_ORANGE; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="ssave"; b.touch.rect=Rect{300,34,70,26}; b.text="SAVE"; b.action="ssave"; b.color=parseColor("#2E7D32"); editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="sclose"; b.touch.rect=Rect{374,34,70,26}; b.text="SCENE"; b.action="tab_scene"; b.color=GODOT_ORANGE; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="kbtog"; b.touch.rect=Rect{448,34,80,26}; b.text=imeShown_?"KB OFF":"KB ON"; b.action="kb_toggle"; b.color=imeShown_?th.button:th.accent; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="scu"; b.touch.rect=Rect{860,70,26,26}; b.text="^"; b.action="scup"; b.color=th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="scd"; b.touch.rect=Rect{860,100,26,26}; b.text="v"; b.action="scdn"; b.color=th.button; editorScene_.ui.push_back(b); }
 
@@ -911,17 +937,19 @@ private:
             addLbl(nmC.c_str(), txt, 340, y, 14, i == curLine_ ? parseColor("#FFD700") : parseColor("#D8E0F0"));
         }
         if (curLine_ >= scriptScroll_ && curLine_ < scriptScroll_ + LINES) {
+            // UTF8-FIX: позиция курсора по символам, не байтам
+            int cps = utf8ByteToCp(scriptLines_[curLine_], curCol_);
             auto cur = std::make_unique<Node2D>(); cur->name = "__sccur"; cur->shape = "square";
             cur->color = 0x4CC9F0FF; cur->w = 8; cur->h = 16;
-            float cxp = 340 + curCol_ * 7.2f;
+            float cxp = 340 + cps * 7.2f;
             float cyp = 70 + (float)(curLine_ - scriptScroll_) * LH + 8;
             cur->position = Vec2{cxp + 4, cyp};
             editorScene_.root->addChild(std::move(cur));
         }
 
         addLbl("ScInfo", scriptPath_.empty() ? "(no script)" : scriptPath_, 900, 64, 16, GODOT_ORANGE);
-        addLbl("ScInfo2", "lines " + std::to_string((int)scriptLines_.size()) + "   cur " + std::to_string(curLine_+1) + ":" + std::to_string(curCol_), 900, 88, 14, th.ink);
-        addLbl("ScInfo3", "tap line = cursor; keyboard types here", 900, 110, 14, th.ink);
+        addLbl("ScInfo2", "lines " + std::to_string((int)scriptLines_.size()) + "   cur " + std::to_string(curLine_+1) + ":" + std::to_string(utf8ByteToCp(scriptLines_.size() ? scriptLines_[curLine_] : std::string(""), curCol_)), 900, 88, 14, th.ink);
+        addLbl("ScInfo3", "tap line = cursor + keyboard", 900, 110, 14, th.ink);
         addLbl("ScInfo4", "SAVE writes file + reloads scripts", 900, 132, 14, th.ink);
     }
 
@@ -935,16 +963,21 @@ private:
         bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
-            if (b.action == "tab_scripts") {
+            if (b.action == "kb_toggle") {
+                if (imeShown_) { imeWantOff_ = true; imeShown_ = false; }
+                else { imeWantOn_ = true; imeShown_ = true; }
+                changed = true;
+            }
+            else if (b.action == "tab_scripts") {
                 if (!scriptMode_) {
                     scriptMode_ = true;
                     if (scriptPath_.empty()) loadScript("scripts/main.lua");
-                    imeWantOn_ = true;
+                    imeWantOn_ = true; imeShown_ = true;
                     changed = true;
                 }
             }
             else if (b.action == "tab_scene") {
-                if (scriptMode_) { scriptMode_ = false; imeWantOff_ = true; changed = true; }
+                if (scriptMode_) { scriptMode_ = false; imeWantOff_ = true; imeShown_ = false; changed = true; }
             }
             else if (b.action.rfind("scrfile:", 0) == 0) { loadScript("scripts/" + b.action.substr(8)); imeChanged_ = true; changed = true; }
             else if (b.action == "ssave") { saveScript(); changed = true; }
@@ -1095,7 +1128,7 @@ private:
                 else if (!sel.empty()) { editor_->deleteNode(sel); sel.clear(); s2 = nullptr; changed = true; }
             }
             else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/scenes/main.json"); lastMsg_ = "saved"; }
-            else if (b.action == "ed_back") { if (scriptMode_) { scriptMode_ = false; imeWantOff_ = true; } appMode_ = AppMode::Hub; rebuildHub(); return; }
+            else if (b.action == "ed_back") { if (scriptMode_) { scriptMode_ = false; imeWantOff_ = true; imeShown_ = false; } appMode_ = AppMode::Hub; rebuildHub(); return; }
         }
         if (changed) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
     }
@@ -1269,13 +1302,12 @@ private:
                     out += "DRAW text|" + static_cast<Label*>(n2d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
                 }
                 else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(withAlpha(0x555555FFu, n2d->alpha)) + "|" + std::to_string(ang) + "\n";
-                else if (n2d->hasAppearance()) out += "DRAW shape|" + d_shape(n2d) + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
+                else if (n2d->hasAppearance()) out += "DRAW shape|" + n2d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
             }
         }
         for (const auto& ch : n2d->getChildren())
             emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, wx, wy, wrot, wsx, wsy, out);
     }
-    static std::string d_shape(Node2D* d) { return d->shape; }
 
     std::string stepEditor() {
         if (!editor_ || !editor_->scene()) { appMode_ = AppMode::Hub; rebuildHub(); return ""; }
@@ -1320,7 +1352,7 @@ private:
     bool scriptMode_ = false; std::string scriptPath_;
     std::vector<std::string> scriptLines_; int curLine_ = 0, curCol_ = 0, scriptScroll_ = 0;
     int compAnchor_ = -1;
-    bool imeWantOn_ = false, imeWantOff_ = false, imeChanged_ = false;
+    bool imeWantOn_ = false, imeWantOff_ = false, imeChanged_ = false, imeShown_ = false;
     std::mutex imeMtx_; std::vector<std::string> imeTextQ_, imeCompQ_; std::vector<int> imeKeyQ_; bool imeFinish_ = false;
     Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
