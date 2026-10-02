@@ -67,7 +67,68 @@ private:
 
 class SceneLoader {
 public:
-    static bool load(const std::string& path, Scene& scene, const std::string& fontPath, const std::string& projectRoot) {
+    // CHILDREN-FIX: рекурсивный разбор узла вместе с детьми
+    static std::unique_ptr<Node2D> parseNode(const std::string& obj, const std::string& fontPath) {
+        std::string type; jsonGetString(obj, "type", type);
+        std::unique_ptr<Node2D> node2d;
+
+        if (type == "Label") {
+            auto label = std::make_unique<Label>();
+            jsonGetString(obj, "text", label->text);
+            float fontSize = 0; if (jsonGetNumber(obj, "font_size", fontSize)) label->fontSize = (int)fontSize;
+            label->fontName = DEFAULT_FONT_NAME; label->fontPath = fontPath; label->color = currentTheme().ink;
+            node2d = std::move(label);
+        }
+        else if (type == "Sprite2D") {
+            auto sprite = std::make_unique<Sprite2D>();
+            jsonGetString(obj, "texture", sprite->texturePath);
+            float w = 0, h = 0; if (jsonGetNumber(obj, "w", w)) sprite->size.x = w; if (jsonGetNumber(obj, "h", h)) sprite->size.y = h;
+            node2d = std::move(sprite);
+        }
+        else if (type == "Player") {
+            auto player = std::make_unique<Player>();
+            float speed = 0; if (jsonGetNumber(obj, "speed", speed)) player->speed = speed;
+            jsonGetString(obj, "mode", player->mode);
+            float js = 0; if (jsonGetNumber(obj, "jump_speed", js)) player->jumpSpeed = js;
+            node2d = std::move(player);
+        }
+        else if (type == "Enemy") { auto e = std::make_unique<Enemy>(); float s = 0; if (jsonGetNumber(obj, "speed", s)) e->speed = s; node2d = std::move(e); }
+        else if (type == "Coin") { auto c = std::make_unique<Coin>(); float r = 0; if (jsonGetNumber(obj, "radius", r)) c->radius = r; node2d = std::move(c); }
+        else if (type == "Solid2D") { auto s = std::make_unique<Solid2D>(); float w = 0, h = 0; if (jsonGetNumber(obj, "w", w)) s->w = w; if (jsonGetNumber(obj, "h", h)) s->h = h; node2d = std::move(s); }
+        else if (type == "Camera2D") { auto c = std::make_unique<Camera2D>(); jsonGetString(obj, "follow", c->followName); float z = 0; if (jsonGetNumber(obj, "zoom", z)) c->zoom = z; node2d = std::move(c); }
+        else if (type == "Light2D") { auto l = std::make_unique<Light2D>(); float r = 0; if (jsonGetNumber(obj, "radius", r)) l->radius = r; float i = 0; if (jsonGetNumber(obj, "intensity", i)) l->intensity = i; node2d = std::move(l); }
+        else node2d = std::make_unique<Node2D>();
+
+        jsonGetString(obj, "name", node2d->name);
+        float x = 0, y = 0; if (jsonGetNumber(obj, "x", x)) node2d->position.x = x; if (jsonGetNumber(obj, "y", y)) node2d->position.y = y;
+
+        std::string shapeStr, colorStr, texStr, actStr;
+        jsonGetString(obj, "shape", shapeStr); if (!shapeStr.empty()) node2d->shape = shapeStr;
+        jsonGetString(obj, "color", colorStr); if (!colorStr.empty()) node2d->color = parseColor(colorStr);
+        if (type != "Sprite2D") { jsonGetString(obj, "texture", texStr); if (!texStr.empty()) node2d->texture = texStr; }
+        jsonGetString(obj, "action", actStr); if (!actStr.empty()) node2d->action = actStr;
+
+        float aw = 0, ah = 0; if (jsonGetNumber(obj, "w", aw)) node2d->w = aw; if (jsonGetNumber(obj, "h", ah)) node2d->h = ah;
+        float rotDeg = 0, scx = 1, scy = 1;
+        if (jsonGetNumber(obj, "rotation", rotDeg)) node2d->rotation = rotDeg * 3.14159265f / 180.0f;
+        if (jsonGetNumber(obj, "scale_x", scx)) node2d->scale.x = scx;
+        if (jsonGetNumber(obj, "scale_y", scy)) node2d->scale.y = scy;
+
+        float lk = 0; if (jsonGetNumber(obj, "locked", lk)) node2d->locked = (lk != 0);
+        float alp = 1.0f; if (jsonGetNumber(obj, "alpha", alp)) node2d->alpha = alp;
+
+        size_t cb = 0, ce = 0;
+        if (jsonFindArray(obj, "children", cb, ce)) {
+            for (const auto& cobj : jsonSplitObjects(obj.substr(cb, ce - cb + 1))) {
+                auto child = parseNode(cobj, fontPath);
+                if (child) node2d->addChild(std::move(child));
+            }
+        }
+        return node2d;
+    }
+
+    static bool load(const std::string& path, Scene& scene,
+                     const std::string& fontPath, const std::string& projectRoot) {
         if (!fileExists(path)) return false;
         std::string json = readFile(path);
         if (json.empty()) return false;
@@ -83,54 +144,8 @@ public:
         if (jsonFindArray(json, "nodes", begin, end)) {
             std::string arr = json.substr(begin, end - begin + 1);
             for (const auto& obj : jsonSplitObjects(arr)) {
-                std::string type; jsonGetString(obj, "type", type);
-                std::unique_ptr<Node2D> node2d;
-                if (type == "Label") {
-                    auto label = std::make_unique<Label>();
-                    jsonGetString(obj, "text", label->text);
-                    float fontSize = 0; if (jsonGetNumber(obj, "font_size", fontSize)) label->fontSize = (int)fontSize;
-                    label->fontName = DEFAULT_FONT_NAME; label->fontPath = fontPath; label->color = currentTheme().ink;
-                    node2d = std::move(label);
-                }
-                else if (type == "Sprite2D") {
-                    auto sprite = std::make_unique<Sprite2D>();
-                    jsonGetString(obj, "texture", sprite->texturePath);
-                    float w = 0, h = 0; if (jsonGetNumber(obj, "w", w)) sprite->size.x = w; if (jsonGetNumber(obj, "h", h)) sprite->size.y = h;
-                    node2d = std::move(sprite);
-                }
-                else if (type == "Player") {
-                    auto player = std::make_unique<Player>();
-                    float speed = 0; if (jsonGetNumber(obj, "speed", speed)) player->speed = speed;
-                    jsonGetString(obj, "mode", player->mode);
-                    float js = 0; if (jsonGetNumber(obj, "jump_speed", js)) player->jumpSpeed = js;
-                    node2d = std::move(player);
-                }
-                else if (type == "Enemy") { auto e = std::make_unique<Enemy>(); float s = 0; if (jsonGetNumber(obj, "speed", s)) e->speed = s; node2d = std::move(e); }
-                else if (type == "Coin") { auto c = std::make_unique<Coin>(); float r = 0; if (jsonGetNumber(obj, "radius", r)) c->radius = r; node2d = std::move(c); }
-                else if (type == "Solid2D") { auto s = std::make_unique<Solid2D>(); float w = 0, h = 0; if (jsonGetNumber(obj, "w", w)) s->w = w; if (jsonGetNumber(obj, "h", h)) s->h = h; node2d = std::move(s); }
-                else if (type == "Camera2D") { auto c = std::make_unique<Camera2D>(); jsonGetString(obj, "follow", c->followName); float z = 0; if (jsonGetNumber(obj, "zoom", z)) c->zoom = z; node2d = std::move(c); }
-                else if (type == "Light2D") { auto l = std::make_unique<Light2D>(); float r = 0; if (jsonGetNumber(obj, "radius", r)) l->radius = r; float i = 0; if (jsonGetNumber(obj, "intensity", i)) l->intensity = i; node2d = std::move(l); }
-                else node2d = std::make_unique<Node2D>();
-
-                jsonGetString(obj, "name", node2d->name);
-                float x = 0, y = 0; if (jsonGetNumber(obj, "x", x)) node2d->position.x = x; if (jsonGetNumber(obj, "y", y)) node2d->position.y = y;
-
-                std::string shapeStr, colorStr, texStr, actStr;
-                jsonGetString(obj, "shape", shapeStr); if (!shapeStr.empty()) node2d->shape = shapeStr;
-                jsonGetString(obj, "color", colorStr); if (!colorStr.empty()) node2d->color = parseColor(colorStr);
-                if (type != "Sprite2D") { jsonGetString(obj, "texture", texStr); if (!texStr.empty()) node2d->texture = texStr; }
-                jsonGetString(obj, "action", actStr); if (!actStr.empty()) node2d->action = actStr;
-
-                float aw = 0, ah = 0; if (jsonGetNumber(obj, "w", aw)) node2d->w = aw; if (jsonGetNumber(obj, "h", ah)) node2d->h = ah;
-                float rotDeg = 0, scx = 1, scy = 1;
-                if (jsonGetNumber(obj, "rotation", rotDeg)) node2d->rotation = rotDeg * 3.14159265f / 180.0f;
-                if (jsonGetNumber(obj, "scale_x", scx)) node2d->scale.x = scx;
-                if (jsonGetNumber(obj, "scale_y", scy)) node2d->scale.y = scy;
-
-                float lk = 0; if (jsonGetNumber(obj, "locked", lk)) node2d->locked = (lk != 0);
-                float alp = 1.0f; if (jsonGetNumber(obj, "alpha", alp)) node2d->alpha = alp;
-
-                scene.root->addChild(std::move(node2d));
+                auto n = parseNode(obj, fontPath);
+                if (n) scene.root->addChild(std::move(n));
             }
         }
 
