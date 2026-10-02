@@ -932,4 +932,15 @@ private:
     std::string pendingNodeAction_;
     std::string lastMsg_;
     float pinchMX_ = 0, pinchMY_ = 0;
-    float
+    float dragOX_ = 0, dragOY_ = 0, dragPSX_ = 1, dragPSY_ = 1;
+    int hierScroll_ = 0;
+    std::set<std::string> collapsed_;
+    Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
+    std::string fsPath_;
+    std::mutex dlgMtx_;
+    bool hasText_ = false, hasName_ = false, hasAction_ = false, hasNum_ = false;
+    std::string textRes_, nameRes_, actionRes_, numRes_;
+    ProjectInfo project_; std::string fontPath_; ResourceManager resources_; std::unique_ptr<SceneManager> sceneMgr_; InputManager input_; TouchProcessor touch_; StringRenderBackend gameBackend_; Context ctx_;
+};
+
+} // namespace suka
