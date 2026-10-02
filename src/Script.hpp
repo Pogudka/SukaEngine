@@ -15,6 +15,13 @@
 
 namespace suka {
 
+// LOG-FIX: экранный лог Lua (print и служебные сообщения)
+inline std::vector<std::string> g_luaLog;
+inline void luaLog(const std::string& s) {
+    g_luaLog.push_back(s);
+    if (g_luaLog.size() > 80) g_luaLog.erase(g_luaLog.begin());
+}
+
 struct ScriptHost {
     Node2D* node = nullptr;
     Context* ctx = nullptr;
@@ -28,10 +35,7 @@ public:
     void load(const std::string& projectRoot) {
         root_ = projectRoot;
         std::string path = projectRoot + "/scripts.json";
-        if (!fileExists(path)) {
-            std::cout << "[Scripts] no scripts.json\n";
-            return;
-        }
+        if (!fileExists(path)) { std::cout << "[Scripts] no scripts.json\n"; return; }
         std::string json = readFile(path);
         size_t b = 0, e = 0;
         if (!jsonFindArray(json, "scripts", b, e)) return;
@@ -43,38 +47,28 @@ public:
             Entry ent;
             ent.vm = std::make_unique<LuaVM>();
             std::string src = readFile(projectRoot + "/" + script);
-            if (!ent.vm->load(src)) {
-                std::cout << "[Scripts] parse error: " << script << "\n";
-                continue;
-            }
+            if (!ent.vm->load(src)) { luaLog("parse error: " + script); continue; }
             registerNatives(*ent.vm);
             entries_[node] = std::move(ent);
-            std::cout << "[Scripts] loaded: " << node << " -> " << script << "\n";
+            luaLog("loaded: " + node + " -> " + script);
         }
     }
 
-    // консольный трек (main.cpp) — со звуком
     void update(Scene& scene, Context& ctx, double dt,
                 SceneManager& scenes, SoundManager& sound,
                 std::map<std::string, double>& vars) {
         updateImpl(scene, ctx, dt, scenes, &sound, vars);
     }
-
-    // APK-трек (GameApp) — без звука; play_sound = безопасный no-op
     void update(Scene& scene, Context& ctx, double dt,
                 SceneManager& scenes,
                 std::map<std::string, double>& vars) {
         updateImpl(scene, ctx, dt, scenes, nullptr, vars);
     }
 
-    // CALL-FIX: дёргает Lua-функцию по имени из кнопки (action = call:имя).
     bool callGlobal(const std::string& fn, Context& ctx, SceneManager& scenes,
                     std::map<std::string, double>& vars) {
-        host_.node = nullptr;
-        host_.ctx = &ctx;
-        host_.scenes = &scenes;
-        host_.sound = nullptr;
-        host_.vars = &vars;
+        host_.node = nullptr; host_.ctx = &ctx; host_.scenes = &scenes;
+        host_.sound = nullptr; host_.vars = &vars;
         for (auto& kv : entries_) {
             if (kv.second.vm->has(fn)) {
                 kv.second.vm->host = &host_;
@@ -82,7 +76,7 @@ public:
                 return true;
             }
         }
-        std::cout << "[Scripts] callGlobal: no function '" << fn << "'\n";
+        luaLog("call: no function '" + fn + "'");
         return false;
     }
 
@@ -94,16 +88,10 @@ private:
             Node* n = scene.root ? scene.root->findNode(kv.first) : nullptr;
             Node2D* n2 = n ? dynamic_cast<Node2D*>(n) : nullptr;
             if (!n2) continue;
-            host_.node = n2;
-            host_.ctx = &ctx;
-            host_.scenes = &scenes;
-            host_.sound = sound;
-            host_.vars = &vars;
+            host_.node = n2; host_.ctx = &ctx; host_.scenes = &scenes;
+            host_.sound = sound; host_.vars = &vars;
             kv.second.vm->host = &host_;
-            if (!kv.second.started) {
-                kv.second.vm->call("on_start", {});
-                kv.second.started = true;
-            }
+            if (!kv.second.started) { kv.second.vm->call("on_start", {}); kv.second.started = true; }
             kv.second.vm->call("on_update", { LuaValue::numV(dt) });
         }
     }
@@ -126,10 +114,11 @@ private:
     }
 
     void registerNatives(LuaVM& vm) {
-        // ===== свои нода / vars / ввод / сцена / звук =====
         vm.setNative("print", [](LuaVM& v, std::vector<LuaValue>& a) {
             std::string s; for (auto& x : a) s += x.toString();
-            std::cout << "[Lua] " << s << "\n"; return LuaValue();
+            luaLog(s);                       // LOG-FIX: на экран
+            std::cout << "[Lua] " << s << "\n";
+            return LuaValue();
         });
         vm.setNative("get_x", [](LuaVM& v, std::vector<LuaValue>& a) {
             auto* h = static_cast<ScriptHost*>(v.host);
@@ -195,8 +184,6 @@ private:
             if (h && h->scenes && !a.empty()) h->scenes->requestChange(a[0].str, true);
             return LuaValue();
         });
-
-        // ===== приведение типов =====
         vm.setNative("tostring", [](LuaVM& v, std::vector<LuaValue>& a) {
             return LuaValue::strV(a.empty() ? std::string("nil") : a[0].toString());
         });
@@ -207,8 +194,6 @@ private:
             if (a[0].type == LuaValue::Bool) return LuaValue::numV(a[0].boolean ? 1 : 0);
             return LuaValue::numV(0);
         });
-
-        // ===== любая нода по имени =====
         vm.setNative("node_exists", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.empty()) return LuaValue::boolV(false);
             return LuaValue::boolV(findAny(v, a[0].str) != nullptr);
@@ -279,8 +264,6 @@ private:
             if (n) n->shape = a[1].str;
             return LuaValue();
         });
-
-        // ===== тексты (Label) =====
         vm.setNative("set_text", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.size() < 2) return LuaValue();
             Node* n = findAny(v, a[0].str);
@@ -294,8 +277,6 @@ private:
             Label* l = n ? dynamic_cast<Label*>(n) : nullptr;
             return LuaValue::strV(l ? l->text : std::string(""));
         });
-
-        // ===== жизнь объектов =====
         vm.setNative("destroy", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.empty()) return LuaValue();
             Node* n = findAny(v, a[0].str);
@@ -322,13 +303,12 @@ private:
             else if (type == "Coin")     nd = std::make_unique<Coin>();
             else if (type == "Solid2D")  nd = std::make_unique<Solid2D>();
             else if (type == "Camera2D") nd = std::make_unique<Camera2D>();
+            else if (type == "Light2D")  nd = std::make_unique<Light2D>();
             else                         nd = std::make_unique<Node2D>();
             nd->name = name; nd->position = Vec2{x, y};
             sc->root->addChild(std::move(nd));
             return LuaValue();
         });
-
-        // ===== геометрия-триггеры =====
         vm.setNative("distance", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.size() < 2) return LuaValue::numV(0);
             Node2D* x = findAny2D(v, a[0].str); Node2D* y = findAny2D(v, a[1].str);
@@ -346,23 +326,19 @@ private:
                      (x->position.y - hy <= y->position.y + gy) && (x->position.y + hy >= y->position.y - gy);
             return LuaValue::boolV(o);
         });
-
-        // ===== HIER-FIX: структура дерева (распаковано Nodes.hpp) =====
         vm.setNative("attach", [](LuaVM& v, std::vector<LuaValue>& a) {
             if (a.size() < 2) return LuaValue::boolV(false);
             auto* h = static_cast<ScriptHost*>(v.host);
             Scene* sc = (h && h->scenes) ? h->scenes->current() : nullptr;
             if (!sc || !sc->root) return LuaValue::boolV(false);
             Node* root = sc->root.get();
-            const std::string& child = a[0].str;
-            const std::string& parent = a[1].str;
+            const std::string& child = a[0].str; const std::string& parent = a[1].str;
             if (child == parent) return LuaValue::boolV(false);
-            Node* cn = root->findNode(child);
-            Node* pn = root->findNode(parent);
+            Node* cn = root->findNode(child); Node* pn = root->findNode(parent);
             if (!cn || !pn) return LuaValue::boolV(false);
-            if (cn->containsName(parent)) return LuaValue::boolV(false);   // защита от цикла
+            if (cn->containsName(parent)) return LuaValue::boolV(false);
             Node* owner = root->findParentOf(child);
-            if (!owner) return LuaValue::boolV(false);                    // ребёнок = корень
+            if (!owner) return LuaValue::boolV(false);
             std::unique_ptr<Node> up = owner->takeChild(child);
             if (!up) return LuaValue::boolV(false);
             pn->addChild(std::move(up));
