@@ -916,6 +916,7 @@ private:
         input_.endFrame(); return out;
     }
 
+    // БЛОК ПЕРЕМЕННЫХ-ЧЛЕНОВ (без него сборка не проходила)
     AppMode appMode_ = AppMode::Hub;
     HubState hubState_; Scene hubScene_; Scene editorScene_; std::unique_ptr<Editor> editor_;
     ScriptSystem scripts_; std::set<std::string> scripted_;
@@ -924,4 +925,11 @@ private:
     bool pendingName_ = false, pendingAction_ = false, pendingNum_ = false;
     int pendingKind_ = 0;
     std::string pendingNumKind_, pendingNumCur_;
-    bool gizmoRot_ = false, gizmoSclX_ = false, gizmoSclY_ = fal
+    bool gizmoRot_ = false, gizmoSclX_ = false, gizmoSclY_ = false; int lockAxis_ = 0;
+    float gizmoStartAngle_ = 0, gizmoStartRot_ = 0, gizmoStartDist_ = 1, gizmoStartSX_ = 1, gizmoStartSY_ = 1;
+    bool pickParent_ = false; std::string pickChild_;
+    std::string pendingType_, pendingShape_, pendingActionCur_;
+    std::string pendingNodeAction_;
+    std::string lastMsg_;
+    float pinchMX_ = 0, pinchMY_ = 0;
+    float
