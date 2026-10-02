@@ -11,10 +11,8 @@
 namespace suka {
 
 struct InputState {
-    float joystickX = 0.0f;
-    float joystickY = 0.0f;
-    bool jumpPressed = false;
-    bool attackPressed = false;
+    float joystickX = 0.0f, joystickY = 0.0f;
+    bool jumpPressed = false, attackPressed = false;
 };
 
 struct Context {
@@ -22,31 +20,20 @@ struct Context {
     double time = 0.0;
     int score = 0;
     Vec2 playerPos;
-    bool hasPlayer = false;
-    bool coinCollectedThisFrame = false;
-    bool jumpPressedThisFrame = false;
+    bool hasPlayer = false, coinCollectedThisFrame = false, jumpPressedThisFrame = false;
     std::map<std::string, double> vars;
 };
 
 enum class TouchType { Down, Move, Up };
-
 struct TouchEvent {
-    TouchType type = TouchType::Down;
-    int id = 0;
-    float x = 0.0f;
-    float y = 0.0f;
+    TouchType type = TouchType::Down; int id = 0;
+    float x = 0.0f, y = 0.0f;
 };
 
 struct VirtualJoystick {
-    bool active = false;
-    int fingerId = -1;
-    float baseX = 0, baseY = 0;
-    float stickX = 0, stickY = 0;
-    float radius = 140.0f;
-    float axisX = 0, axisY = 0;
-
+    bool active = false; int fingerId = -1;
+    float baseX = 0, baseY = 0, stickX = 0, stickY = 0, radius = 140.0f, axisX = 0, axisY = 0;
     void reset() { active = false; fingerId = -1; axisX = 0; axisY = 0; }
-
     void updateStick(float x, float y) {
         float dx = x - baseX, dy = y - baseY;
         float len = std::sqrt(dx*dx + dy*dy);
@@ -54,7 +41,6 @@ struct VirtualJoystick {
         stickX = baseX + dx; stickY = baseY + dy;
         axisX = dx / radius; axisY = dy / radius;
     }
-
     void handle(const TouchEvent& e, float screenW, float screenH) {
         if (e.type == TouchType::Down) {
             if (!active && e.x < screenW * 0.5f) { active = true; fingerId = e.id; baseX = e.x; baseY = e.y; stickX = e.x; stickY = e.y; axisX = 0; axisY = 0; }
@@ -66,12 +52,8 @@ struct VirtualJoystick {
 };
 
 struct TouchButton {
-    std::string id;
-    Rect rect;
-    bool pressed = false;
-    int fingerId = -1;
-    bool pressEdge = false;
-
+    std::string id; Rect rect;
+    bool pressed = false; int fingerId = -1; bool pressEdge = false;
     bool handle(const TouchEvent& e) {
         if (e.type == TouchType::Down) {
             if (!pressed && rect.contains(e.x, e.y)) { pressed = true; fingerId = e.id; pressEdge = true; return true; }
@@ -87,42 +69,34 @@ struct TouchButton {
 
 struct UiButton {
     TouchButton touch;
-    std::string text;
-    std::string action;
+    std::string text, action, texture, group;
     unsigned int color = 0xFF3A3A4A;
     float angle = 0.0f;
-    std::string texture;
-    std::string group;      // GROUP-FIX: имя узла-группы, к которому прицеплена кнопка
+    float alpha = 1.0f;     // ALPHA-FIX: прозрачность кнопки 0.0..1.0
 };
 
 class InputManager {
 public:
-    float screenWidth = 1280.0f;
-    float screenHeight = 720.0f;
+    float screenWidth = 1280.0f, screenHeight = 720.0f;
     VirtualJoystick joystick;
     std::vector<UiButton>* ui = nullptr;
 
     void setUi(std::vector<UiButton>* uiButtons) { ui = uiButtons; }
-
     void feed(const TouchEvent& e) {
         bool consumed = false;
         if (ui) for (auto& b : *ui) if (b.touch.handle(e)) consumed = true;
         if (e.type == TouchType::Down && consumed) return;
         joystick.handle(e, screenWidth, screenHeight);
     }
-
     InputState state() const {
-        InputState s;
-        s.joystickX = joystick.axisX; s.joystickY = joystick.axisY;
+        InputState s; s.joystickX = joystick.axisX; s.joystickY = joystick.axisY;
         if (ui) for (const auto& b : *ui) {
             if (b.touch.id == "jump") s.jumpPressed = b.touch.pressed;
             if (b.touch.id == "attack") s.attackPressed = b.touch.pressed;
         }
         return s;
     }
-
     void endFrame() { if (ui) for (auto& b : *ui) b.touch.pressEdge = false; }
-
     void printStatus() const {
         std::cout << "  input: joy=(" << joystick.axisX << ", " << joystick.axisY << ")";
         if (ui) for (const auto& b : *ui) std::cout << " " << b.touch.id << "=" << (b.touch.pressed ? 1 : 0);
