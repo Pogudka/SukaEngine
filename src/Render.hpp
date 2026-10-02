@@ -11,36 +11,40 @@
 namespace suka {
 
 inline std::string g_projectRoot;
-
 inline std::string resolveAssetPath(const std::string& p) {
     if (p.empty() || p[0] == '/' || g_projectRoot.empty()) return p;
     return g_projectRoot + "/" + p;
 }
 
+inline std::string colorToHexA(unsigned c) {
+    auto hx = [](unsigned v) { std::string s = "0123456789ABCDEF"; return std::string(1, s[(v >> 4) & 15]) + std::string(1, s[v & 15]); };
+    return "#" + hx(c & 255) + hx((c >> 24) & 255) + hx((c >> 16) & 255) + hx((c >> 8) & 255);
+}
+inline unsigned withAlpha(unsigned c, float a) {
+    unsigned v = (unsigned)((c & 255) * a); if (v > 255) v = 255;
+    return (c & 0xFFFFFF00u) | v;
+}
+
 struct DrawCmd {
     enum class Kind { Bg, Rect, Text, Texture, Shape, Button } kind = Kind::Rect;
     Rect rect;
-    std::string text;
-    std::string texture;
-    std::string shape;
+    std::string text, texture, shape;
     float fontSize = 0;
     unsigned int color = 0xFFFFFFFF;
     float angle = 0.0f;
+    float alpha = 1.0f;
 };
 
 inline std::string substituteVars(const std::string& text, const std::map<std::string, double>& vars) {
-    std::string out;
-    size_t i = 0;
+    std::string out; size_t i = 0;
     while (i < text.size()) {
         if (text[i] == '{') {
             size_t j = text.find('}', i);
             if (j != std::string::npos) {
                 std::string key = text.substr(i + 1, j - i - 1);
                 auto it = vars.find(key);
-                if (it != vars.end()) out += std::to_string((long long)it->second);
-                else out += "0";
-                i = j + 1;
-                continue;
+                if (it != vars.end()) out += std::to_string((long long)it->second); else out += "0";
+                i = j + 1; continue;
             }
         }
         out += text[i++];
@@ -51,27 +55,15 @@ inline std::string substituteVars(const std::string& text, const std::map<std::s
 class IRenderBackend {
 public:
     virtual ~IRenderBackend() = default;
-    virtual void begin() = 0;
-    virtual void draw(const DrawCmd& cmd) = 0;
-    virtual void end() = 0;
+    virtual void begin() = 0; virtual void draw(const DrawCmd& cmd) = 0; virtual void end() = 0;
 };
 
 class LogRenderBackend : public IRenderBackend {
 public:
     void begin() override { index_ = 0; }
-    void draw(const DrawCmd& cmd) override {
-        std::cout << "  draw[" << index_++ << "] ";
-        if (cmd.kind == DrawCmd::Kind::Bg) std::cout << "bg=" << colorToHex(cmd.color);
-        else if (cmd.kind == DrawCmd::Kind::Rect) std::cout << "rect=(" << cmd.rect.x << "," << cmd.rect.y << "," << cmd.rect.w << "," << cmd.rect.h << ") color=" << colorToHex(cmd.color) << " ang=" << cmd.angle;
-        else if (cmd.kind == DrawCmd::Kind::Text) std::cout << "text='" << cmd.text << "' at=(" << cmd.rect.x << "," << cmd.rect.y << ") font=" << (int)cmd.fontSize << " color=" << colorToHex(cmd.color) << " ang=" << cmd.angle;
-        else if (cmd.kind == DrawCmd::Kind::Texture) std::cout << "texture='" << cmd.texture << "' at=(" << cmd.rect.x << "," << cmd.rect.y << "," << cmd.rect.w << "," << cmd.rect.h << ") ang=" << cmd.angle;
-        else if (cmd.kind == DrawCmd::Kind::Shape) std::cout << "shape=" << cmd.shape << " at=(" << cmd.rect.x << "," << cmd.rect.y << "," << cmd.rect.w << "," << cmd.rect.h << ") color=" << colorToHex(cmd.color) << " ang=" << cmd.angle;
-        else std::cout << "button='" << cmd.text << "' at=(" << cmd.rect.x << "," << cmd.rect.y << "," << cmd.rect.w << "," << cmd.rect.h << ") color=" << colorToHex(cmd.color) << " ang=" << cmd.angle << " tex=" << cmd.texture;
-        std::cout << "\n";
-    }
+    void draw(const DrawCmd& cmd) override { (void)cmd; std::cout << "  draw[" << index_++ << "]\n"; }
     void end() override {}
-private:
-    int index_ = 0;
+private: int index_ = 0;
 };
 
 class StringRenderBackend : public IRenderBackend {
@@ -81,45 +73,36 @@ public:
         if (cmd.kind == DrawCmd::Kind::Bg) {
             ss_ << "DRAW bg|" << colorToHex(cmd.color) << "\n";
         } else if (cmd.kind == DrawCmd::Kind::Text) {
-            ss_ << "DRAW text|" << cmd.text << "|" << (int)cmd.rect.x << "|"
-                << (int)cmd.rect.y << "|" << (int)cmd.fontSize << "|"
-                << colorToHex(cmd.color) << "|" << cmd.angle << "\n";
+            ss_ << "DRAW text|" << cmd.text << "|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|"
+                << (int)cmd.fontSize << "|" << colorToHexA(cmd.color) << "|" << cmd.angle << "\n";
         } else if (cmd.kind == DrawCmd::Kind::Rect) {
-            ss_ << "DRAW rect|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|"
-                << (int)cmd.rect.w << "|" << (int)cmd.rect.h << "|"
-                << colorToHex(cmd.color) << "|" << cmd.angle << "\n";
+            ss_ << "DRAW rect|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|" << (int)cmd.rect.w << "|"
+                << (int)cmd.rect.h << "|" << colorToHexA(cmd.color) << "|" << cmd.angle << "\n";
         } else if (cmd.kind == DrawCmd::Kind::Texture) {
-            ss_ << "DRAW tex|" << cmd.texture << "|" << (int)cmd.rect.x << "|"
-                << (int)cmd.rect.y << "|" << (int)cmd.rect.w << "|"
-                << (int)cmd.rect.h << "|" << cmd.angle << "\n";
+            ss_ << "DRAW tex|" << cmd.texture << "|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|"
+                << (int)cmd.rect.w << "|" << (int)cmd.rect.h << "|" << cmd.angle << "|" << cmd.alpha << "\n";
         } else if (cmd.kind == DrawCmd::Kind::Shape) {
-            ss_ << "DRAW shape|" << cmd.shape << "|" << (int)cmd.rect.x << "|"
-                << (int)cmd.rect.y << "|" << (int)cmd.rect.w << "|"
-                << (int)cmd.rect.h << "|" << colorToHex(cmd.color) << "|" << cmd.angle << "\n";
+            ss_ << "DRAW shape|" << cmd.shape << "|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|"
+                << (int)cmd.rect.w << "|" << (int)cmd.rect.h << "|" << colorToHexA(cmd.color) << "|" << cmd.angle << "\n";
         } else {
-            ss_ << "DRAW button|" << cmd.text << "|" << (int)cmd.rect.x << "|"
-                << (int)cmd.rect.y << "|" << (int)cmd.rect.w << "|"
-                << (int)cmd.rect.h << "|" << colorToHex(cmd.color) << "|"
+            ss_ << "DRAW button|" << cmd.text << "|" << (int)cmd.rect.x << "|" << (int)cmd.rect.y << "|"
+                << (int)cmd.rect.w << "|" << (int)cmd.rect.h << "|" << colorToHex(cmd.color) << "|"
                 << cmd.angle << "|" << cmd.texture << "\n";
         }
     }
     void end() override {}
     std::string str() const { return ss_.str(); }
-private:
-    std::ostringstream ss_;
+private: std::ostringstream ss_;
 };
 
 struct WorldXf {
     float x = 0, y = 0, rot = 0, sx = 1, sy = 1;
-
     WorldXf child(const Vec2& p, float r, float csx, float csy) const {
         float cr = std::cos(rot), sr = std::sin(rot);
         WorldXf w;
         w.x = x + (p.x * sx) * cr - (p.y * sy) * sr;
         w.y = y + (p.x * sx) * sr + (p.y * sy) * cr;
-        w.rot = rot + r;
-        w.sx = sx * csx;
-        w.sy = sy * csy;
+        w.rot = rot + r; w.sx = sx * csx; w.sy = sy * csy;
         return w;
     }
 };
@@ -131,133 +114,87 @@ public:
     void render(Scene& scene, Context* ctx = nullptr) {
         ctx_ = ctx;
         backend_.begin();
-
-        DrawCmd bg;
-        bg.kind = DrawCmd::Kind::Bg;
+        DrawCmd bg; bg.kind = DrawCmd::Kind::Bg;
         bg.color = scene.bgSet() ? parseColor(scene.bg) : currentTheme().bg;
         backend_.draw(bg);
 
         camActive_ = false; camX_ = 0; camY_ = 0; camZoom_ = 1;
         if (scene.root) {
             Node* cn = scene.root->findByType("Camera2D");
-            if (cn) {
-                Camera2D* cam = static_cast<Camera2D*>(cn);
-                camActive_ = true;
-                camX_ = cam->position.x; camY_ = cam->position.y;
-                camZoom_ = cam->zoom > 0.01f ? cam->zoom : 1.0f;
-            }
+            if (cn) { Camera2D* cam = static_cast<Camera2D*>(cn); camActive_ = true; camX_ = cam->position.x; camY_ = cam->position.y; camZoom_ = cam->zoom > 0.01f ? cam->zoom : 1.0f; }
         }
-
-        if (scene.root) {
-            WorldXf identity;
-            collectNode(*scene.root, identity);
-        }
+        if (scene.root) { WorldXf identity; collectNode(*scene.root, identity); }
 
         for (auto& b : scene.ui) {
-            DrawCmd cmd;
-            cmd.kind = DrawCmd::Kind::Button;
-            cmd.text = b.text;
-            cmd.rect = b.touch.rect;
-            cmd.color = b.color;
-            cmd.angle = b.angle;
-            cmd.texture = resolveAssetPath(b.texture);
+            DrawCmd cmd; cmd.kind = DrawCmd::Kind::Button;
+            cmd.text = b.text; cmd.rect = b.touch.rect; cmd.color = b.color;
+            cmd.angle = b.angle; cmd.texture = resolveAssetPath(b.texture);
             backend_.draw(cmd);
         }
-
         backend_.end();
     }
 
 private:
     static float deg(float rad) { return rad * 57.2957795f; }
-
     float toScreenX(float wx) const { return camActive_ ? (wx - camX_) * camZoom_ + 640.0f : wx; }
     float toScreenY(float wy) const { return camActive_ ? (wy - camY_) * camZoom_ + 360.0f : wy; }
     float zsf() const { return camActive_ ? camZoom_ : 1.0f; }
 
-    static unsigned applyOpacity(unsigned color, float opacity) {
-        unsigned r = (color >> 24) & 255;
-        unsigned g = (color >> 16) & 255;
-        unsigned b = (color >> 8)  & 255;
-        unsigned a = (unsigned)((color & 255) * opacity);
-        if (a > 255) a = 255;
-        return (r << 24) | (g << 16) | (b << 8) | a;
-    }
-
     void collectNode(Node& node, const WorldXf& parent) {
         Node2D* node2d = dynamic_cast<Node2D*>(&node);
-        if (!node2d) {
-            for (const auto& child : node.getChildren()) collectNode(*child, parent);
-            return;
-        }
-
+        if (!node2d) { for (const auto& child : node.getChildren()) collectNode(*child, parent); return; }
         const std::string type = node2d->typeName();
 
         WorldXf w = parent.child(node2d->position, node2d->rotation, node2d->scale.x, node2d->scale.y);
-        float wx = w.x, wy = w.y;
-        float wang = deg(w.rot);
-        float wsx = w.sx, wsy = w.sy;
-
-        float sx = toScreenX(wx), sy = toScreenY(wy);
-        float zf = zsf();
+        float sx = toScreenX(w.x), sy = toScreenY(w.y), zf = zsf();
+        float wang = deg(w.rot), wsx = w.sx, wsy = w.sy;
+        unsigned colA = withAlpha(node2d->color, node2d->alpha);
 
         if (type == "Label") {
             Label& label = static_cast<Label&>(*node2d);
-            DrawCmd cmd;
-            cmd.kind = DrawCmd::Kind::Text;
+            DrawCmd cmd; cmd.kind = DrawCmd::Kind::Text;
             cmd.text = ctx_ ? substituteVars(label.text, ctx_->vars) : label.text;
             cmd.rect = Rect{sx, sy, 0, 0};
             cmd.fontSize = label.fontSize * ((wsx + wsy) * 0.5f) * zf;
-            cmd.color = applyOpacity(label.color, node2d->opacity);
-            cmd.angle = wang;
+            cmd.color = colA; cmd.angle = wang;
             backend_.draw(cmd);
         }
         else if (type == "Sprite2D") {
             Sprite2D& sprite = static_cast<Sprite2D&>(*node2d);
-            DrawCmd cmd;
-            cmd.kind = DrawCmd::Kind::Texture;
+            DrawCmd cmd; cmd.kind = DrawCmd::Kind::Texture;
             cmd.texture = resolveAssetPath(sprite.texturePath);
-            cmd.rect = Rect{sx - sprite.size.x * wsx * zf / 2, sy - sprite.size.y * wsy * zf / 2,
-                            sprite.size.x * wsx * zf, sprite.size.y * wsy * zf};
-            cmd.angle = wang;
+            cmd.rect = Rect{sx - sprite.size.x*wsx*zf/2, sy - sprite.size.y*wsy*zf/2, sprite.size.x*wsx*zf, sprite.size.y*wsy*zf};
+            cmd.angle = wang; cmd.alpha = node2d->alpha;
             backend_.draw(cmd);
         }
-        else if (type == "Camera2D") {
-        }
+        else if (type == "Camera2D") { }
         else if (type == "Light2D") {
             Light2D& li = static_cast<Light2D&>(*node2d);
             float r = li.radius * ((wsx + wsy) * 0.5f) * zf;
-            DrawCmd cmd;
-            cmd.kind = DrawCmd::Kind::Shape;
-            cmd.shape = "glow";
-            cmd.rect = Rect{sx - r, sy - r, r * 2, r * 2};
-            cmd.color = applyOpacity(li.color, node2d->opacity);
-            cmd.angle = 0;
+            DrawCmd cmd; cmd.kind = DrawCmd::Kind::Shape; cmd.shape = "glow";
+            cmd.rect = Rect{sx - r, sy - r, r*2, r*2};
+            cmd.color = colA; cmd.angle = 0;
             backend_.draw(cmd);
         }
         else if (node2d->hasAppearance()) {
             float ww = node2d->w * wsx * zf, hh = node2d->h * wsy * zf;
             DrawCmd cmd;
             if (!node2d->texture.empty()) {
-                cmd.kind = DrawCmd::Kind::Texture;
-                cmd.texture = resolveAssetPath(node2d->texture);
-                cmd.rect = Rect{sx - ww / 2, sy - hh / 2, ww, hh};
+                cmd.kind = DrawCmd::Kind::Texture; cmd.texture = resolveAssetPath(node2d->texture);
+                cmd.rect = Rect{sx - ww/2, sy - hh/2, ww, hh};
+                cmd.alpha = node2d->alpha;
             } else {
-                cmd.kind = DrawCmd::Kind::Shape;
-                cmd.shape = node2d->shape;
-                cmd.rect = Rect{sx - ww / 2, sy - hh / 2, ww, hh};
-                cmd.color = applyOpacity(node2d->color, node2d->opacity);
+                cmd.kind = DrawCmd::Kind::Shape; cmd.shape = node2d->shape;
+                cmd.rect = Rect{sx - ww/2, sy - hh/2, ww, hh}; cmd.color = colA;
             }
             cmd.angle = wang;
             backend_.draw(cmd);
         }
-
         for (const auto& child : node2d->getChildren()) collectNode(*child, w);
     }
 
-    IRenderBackend& backend_;
-    Context* ctx_ = nullptr;
-    bool camActive_ = false;
-    float camX_ = 0, camY_ = 0, camZoom_ = 1;
+    IRenderBackend& backend_; Context* ctx_ = nullptr;
+    bool camActive_ = false; float camX_ = 0, camY_ = 0, camZoom_ = 1;
 };
 
 } // namespace suka
