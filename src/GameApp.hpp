@@ -193,7 +193,6 @@ public:
                 return;
             }
 
-            // BTN-ROT: кольцо поворота для выбранной UI-кнопки
             UiButton* gb = (!editor_->selectedUi().empty()) ? editor_->findUi(editor_->selectedUi()) : nullptr;
             if (gb && es) {
                 float bcx, bcy; proj(*es, gb->touch.rect.x + gb->touch.rect.w/2, gb->touch.rect.y + gb->touch.rect.h/2, bcx, bcy);
@@ -585,9 +584,9 @@ private:
         sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
         if (!sceneMgr_->restartScene(pi.mainScene, resources_)) return false;
         scripts_.load(pi.rootPath);
-        ctx_ = Context();          // PROJ-FIX: переменные/счёт не перетекают между проектами
-        g_luaLog.clear();          // PROJ-FIX: лог Lua начинается заново
-        dbg_ = false;              // PROJ-FIX: DBG не липнет между проектами
+        ctx_ = Context();
+        g_luaLog.clear();
+        dbg_ = false;
         Scene* sc = sceneMgr_->current();
         UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
         UiButton dbg; dbg.touch.id = "dbg"; dbg.touch.rect = Rect{1080, 10, 90, 70}; dbg.text = "DBG"; dbg.action = "dbg:"; dbg.color = parseColor("#808080"); sc->ui.push_back(dbg);
@@ -794,17 +793,17 @@ private:
                 addLbl("InName", ub->touch.id, 900, 64, 22, GODOT_ORANGE); addLbl("InType", "Button", 900, 92, 16, th.ink);
                 addLbl("InPos", "Pos  (" + std::to_string((int)ub->touch.rect.x) + ", " + std::to_string((int)ub->touch.rect.y) + ")", 900, 124, 16, th.ink);
                 addLbl("InSiz", "Size (" + std::to_string((int)ub->touch.rect.w) + ", " + std::to_string((int)ub->touch.rect.h) + ")", 900, 148, 16, th.ink);
-                addLbl("InCol", "Color " + colorToHex(ub->color) + " (" + rgbStr(ub->color) + ")", 900, 172, 16, th.ink);
+                addLbl("InCol", "Color " + colorToHex(ub->color) + " (" + rgbStr(ub->color) + ") A" + std::to_string((int)(ub->alpha * 100)) + "%", 900, 172, 16, th.ink);
                 addLbl("InText", "Text: " + ub->text, 900, 196, 16, th.ink);
                 addLbl("InAct", "Action: " + (ub->action.empty() ? std::string("(none)") : ub->action), 900, 220, 16, th.ink);
                 addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 244, 16, th.ink);
                 addLbl("InTex", "Texture: " + (ub->texture.empty() ? std::string("(none)") : ub->texture), 900, 268, 16, th.ink);
                 addLbl("InGrp", "Group: " + (ub->group.empty() ? std::string("(none)") : ub->group), 900, 292, 16, th.ink);
-                const char* nl[5] = { "X","Y","W","H","R" };
-                const char* nk[5] = { "bx","by","bw","bh","bang" };
-                for (int k = 0; k < 5; ++k) {
+                const char* nl[6] = { "X","Y","W","H","R","A" };
+                const char* nk[6] = { "bx","by","bw","bh","bang","balpha" };
+                for (int k = 0; k < 6; ++k) {
                     UiButton b; b.touch.id = std::string("numbtn")+std::to_string(k);
-                    b.touch.rect = Rect{900 + (float)k * 50, 320, 46, 28};
+                    b.touch.rect = Rect{900 + (float)k * 46, 320, 44, 28};
                     b.text = nl[k]; b.action = std::string("num:") + nk[k];
                     b.color = th.button; editorScene_.ui.push_back(b);
                 }
@@ -1099,6 +1098,7 @@ private:
                 else if (pendingNumKind_ == "bw") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.w) : "100";
                 else if (pendingNumKind_ == "bh") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.h) : "50";
                 else if (pendingNumKind_ == "bang") pendingNumCur_ = ub ? std::to_string((int)ub->angle) : "0";
+                else if (pendingNumKind_ == "balpha") pendingNumCur_ = ub ? std::to_string((int)(ub->alpha * 100)) : "100";
             }
             else if (b.action == "ed_scr" && !lk) { if (!sel.empty()) { attachScript(sel); changed = true; } }
             else if (b.action == "ed_clone" && !lk) { pushUndo(); if (!sel.empty()) { editor_->cloneSelected(sel + "_copy"); changed = true; } }
@@ -1245,6 +1245,7 @@ private:
                 else if (pendingNumKind_ == "bw") b->touch.rect.w = v;
                 else if (pendingNumKind_ == "bh") b->touch.rect.h = v;
                 else if (pendingNumKind_ == "bang") b->angle = v;
+                else if (pendingNumKind_ == "balpha") { float a = v / 100.0f; if (a < 0) a = 0; if (a > 1) a = 1; b->alpha = a; }
             }
         }
         if (hn || ht || ha || hnum) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
@@ -1264,7 +1265,7 @@ private:
             float bcy = CY + (b.touch.rect.y + b.touch.rect.h/2 - sc.camY - 360)*S;
             if (bcx < VX0 || bcx > VX0+VW || bcy < VY0 || bcy > VY0+VH) continue;
             float bw = b.touch.rect.w*S, bh = b.touch.rect.h*S;
-            out += "DRAW button|" + b.text + "|" + std::to_string((int)(bcx-bw/2)) + "|" + std::to_string((int)(bcy-bh/2)) + "|" + std::to_string((int)bw) + "|" + std::to_string((int)bh) + "|" + colorToHex(b.color) + "|" + std::to_string(b.angle) + "|" + resolveAssetPath(b.texture) + "\n";
+            out += "DRAW button|" + b.text + "|" + std::to_string((int)(bcx-bw/2)) + "|" + std::to_string((int)(bcy-bh/2)) + "|" + std::to_string((int)bw) + "|" + std::to_string((int)bh) + "|" + colorToHexA(withAlpha(b.color, b.alpha)) + "|" + std::to_string(b.angle) + "|" + resolveAssetPath(b.texture) + "\n";
         }
         Node* selN = editor_ ? editor_->selected() : nullptr;
         Node2D* g = (selN && (editor_->selectedUi().empty())) ? dynamic_cast<Node2D*>(selN) : nullptr;
@@ -1294,7 +1295,6 @@ private:
                 out += "DRAW rect|" + std::to_string((int)(cx-8*Z)) + "|" + std::to_string((int)(cy+hh+16*Z)) + "|16|16|#4CC9F0|0\n";
             }
         }
-        // BTN-ROT: кольцо поворота вокруг выбранной кнопки
         {
             std::string selUi2 = editor_ ? editor_->selectedUi() : std::string("");
             UiButton* gb2 = selUi2.empty() ? nullptr : editor_->findUi(selUi2);
