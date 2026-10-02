@@ -227,15 +227,6 @@ private:
         if (!sc || !sc->root) return false;
         return nodeWorldRec(sc->root.get(), name, 0, 0, 0, 1, 1, wx, wy, wr, wsx, wsy);
     }
-    void parentXf(Node* n, const std::string& name, float cx, float cy, float sx, float sy, float& ox, float& oy, float& psx, float& psy, bool& found) {
-        if (found) return;
-        if (n->name == name) { ox = cx; oy = cy; psx = sx; psy = sy; found = true; return; }
-        for (auto& ch : n->getChildren()) {
-            Node2D* c2 = dynamic_cast<Node2D*>(ch.get());
-            if (c2) parentXf(ch.get(), name, cx + c2->position.x * sx, cy + c2->position.y * sy, sx * c2->scale.x, sy * c2->scale.y, ox, oy, psx, psy, found);
-            else parentXf(ch.get(), name, cx, cy, sx, sy, ox, oy, psx, psy, found);
-        }
-    }
     void startDragParent(Scene* es, const std::string& name) {
         dragOX_ = 0; dragOY_ = 0; dragPSX_ = 1; dragPSY_ = 1;
         if (es->root) { bool f = false; parentXf(es->root.get(), name, 0, 0, 1, 1, dragOX_, dragOY_, dragPSX_, dragPSY_, f); }
@@ -244,6 +235,21 @@ private:
     void moveGroupButtons(Scene* es, const std::string& group, float dx, float dy) {
         for (auto& b : es->ui) if (b.group == group) { b.touch.rect.x += dx; b.touch.rect.y += dy; }
     }
+    void parentXf(Node* n, const std::string& name, float cx, float cy, float sx, float sy, float& ox, float& oy, float& psx, float& psy, bool& found) {
+        if (found) return;
+        if (n->name == name) { ox = cx; oy = cy; psx = sx; psy = sy; found = true; return; }
+        float ncx = cx, ncy = cy, nsx = sx, nsy = sy;
+        Node2D* n2 = dynamic_cast<Node2D*>(n);
+        if (n2) {
+            float cr = std::cos(n2->rotation), sr = std::sin(n2->rotation);
+            ncx = cx + (n2->position.x * sx) * cr - (n2->position.y * sy) * sr;
+            ncy = cy + (n2->position.x * sx) * sr + (n2->position.y * sy) * cr;
+            nsx = sx * n2->scale.x; nsy = sy * n2->scale.y;
+        }
+        for (auto& ch : n->getChildren()) parentXf(ch.get(), name, ncx, ncy, nsx, nsy, ox, oy, psx, psy, found);
+    }
+
+
     void attachChildTo(const std::string& child, const std::string& parent) {
         if (!editor_ || !editor_->scene()) return;
         Scene* sc = editor_->scene();
