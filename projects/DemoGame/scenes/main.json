@@ -1,21 +1,19 @@
 {
   "name": "Main",
   "gravity": 0,
+  "bg": "#16213E",
   "nodes": [
-    { "type": "Label", "name": "TitleLabel", "text": "Demo Game {coins}", "x": 40, "y": 150, "font_size": 34 },
-    { "type": "Sprite2D", "name": "Hero", "texture": "assets/hero.png", "x": 560, "y": 230, "w": 140, "h": 140 },
-    { "type": "Player", "name": "Player", "x": 640, "y": 430, "speed": 320 },
-    { "type": "Enemy", "name": "Enemy1", "x": 950, "y": 300, "speed": 95 },
-    { "type": "Coin", "name": "Coin1", "x": 300, "y": 320, "radius": 28 },
-    { "type": "Coin", "name": "Coin2", "x": 1020, "y": 470, "radius": 28 },
-    { "type": "Node2D", "name": "ScriptBox", "x": 200, "y": 520, "shape": "square", "color": "#FF7F50", "w": 40, "h": 40 },
-    { "type": "Camera2D", "name": "Camera", "follow": "Player" }
+    { "type": "Label", "name": "Title", "x": 640, "y": 70, "text": "SukaEngine Demo 2", "font_size": 34, "color": "#F4EDE4" },
+    { "type": "Label", "name": "Hint", "x": 640, "y": 112, "text": "tap red box / gem / buttons", "font_size": 18, "color": "#87CEEB" },
+    { "type": "Node2D", "name": "Box", "x": 420, "y": 320, "w": 90, "h": 90, "shape": "square", "color": "#D62828", "action": "call:boxTap" },
+    { "type": "Label", "name": "Counter", "x": 420, "y": 402, "text": "taps: {taps}", "font_size": 22, "color": "#FCBF49" },
+    { "type": "Light2D", "name": "Lamp", "x": 820, "y": 300, "radius": 170, "color": "#FFD700" },
+    { "type": "Node2D", "name": "Gem", "x": 820, "y": 300, "w": 46, "h": 46, "shape": "diamond", "color": "#2EC4B6", "action": "call:gemTap" },
+    { "type": "Node2D", "name": "Spinner", "x": 640, "y": 520, "w": 120, "h": 16, "shape": "square", "color": "#F4EDE4" }
   ],
   "ui": [
-    { "id": "pause",  "x": 20,   "y": 20,  "w": 130, "h": 80,  "text": "II" },
-    { "id": "plat",   "x": 20,   "y": 120, "w": 150, "h": 80,  "text": "PLAT", "action": "change_scene:scenes/platform.json" },
-    { "id": "tapcoin","x": 700,  "y": 580, "w": 160, "h": 110, "text": "+1", "action": "add_var:coins:1" },
-    { "id": "attack", "x": 900,  "y": 560, "w": 160, "h": 130, "text": "ATK" },
-    { "id": "jump",   "x": 1090, "y": 560, "w": 170, "h": 130, "text": "JUMP" }
+    { "id": "go",   "x": 1050, "y": 600, "w": 160, "h": 70, "text": "GO",   "action": "call:go", "color": "#2EC4B6" },
+    { "id": "spin", "x": 850,  "y": 600, "w": 160, "h": 70, "text": "SPIN", "action": "set_var:spinning:1", "color": "#FCBF49" },
+    { "id": "stop", "x": 650,  "y": 600, "w": 160, "h": 70, "text": "STOP", "action": "set_var:spinning:0", "color": "#D62828" }
   ]
 }
