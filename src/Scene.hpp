@@ -65,7 +65,6 @@ private:
     }
 };
 
-// SPLIT-FIX: разбор верхнеуровневых {...} с учётом вложенности и строк
 inline std::vector<std::string> splitTopObjects(const std::string& arr) {
     std::vector<std::string> out;
     int depth = 0; bool inStr = false; bool esc = false; bool have = false; size_t start = 0;
@@ -182,6 +181,7 @@ public:
                 float btnAngle = 0; if (jsonGetNumber(obj, "angle", btnAngle)) button.angle = btnAngle;
                 jsonGetString(obj, "texture", button.texture);
                 jsonGetString(obj, "group", button.group);
+                float balpha = 1.0f; if (jsonGetNumber(obj, "alpha", balpha)) button.alpha = balpha;   // BTN-ALPHA
                 float x = 0, y = 0, w = 0, h = 0;
                 jsonGetNumber(obj, "x", x); jsonGetNumber(obj, "y", y);
                 jsonGetNumber(obj, "w", w); jsonGetNumber(obj, "h", h);
