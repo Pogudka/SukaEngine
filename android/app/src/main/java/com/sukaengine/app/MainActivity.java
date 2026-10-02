@@ -16,10 +16,15 @@ import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.text.InputType;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.app.AlertDialog;
 
@@ -37,7 +42,7 @@ public class MainActivity extends Activity {
     private static final String GAME_DIR = "DemoGame";
     private static final float LOGIC_W = 1280f;
     private static final float LOGIC_H = 720f;
-    private static final String[] FALLBACK_ROOT = { "DemoGame","Game1","Game2","Game3","Game4","fonts","sounds" };
+    private static final String[] FALLBACK_ROOT = { "DemoGame","fonts","sounds" };
 
     private static volatile boolean g_initOk = false;
     private static volatile int g_fileCount = -1;
@@ -115,8 +120,15 @@ public class MainActivity extends Activity {
                     else nativeSetNumber(v);
                     g_dialog = false;
                 })
-                .setNegativeButton("Cancel", (d, w) -> g_dialog = false)
-                .setOnCancelListener(d -> g_dialog = false)
+                .setNegativeButton("Cancel", (d, w) -> {
+                    // CANCEL-FIX: пустое имя = отмена создания (движок чистит pendingName_)
+                    if (mode == 1) nativeSetName("");
+                    g_dialog = false;
+                })
+                .setOnCancelListener(d -> {
+                    if (mode == 1) nativeSetName("");
+                    g_dialog = false;
+                })
                 .show();
         });
     }
@@ -129,6 +141,8 @@ public class MainActivity extends Activity {
     native void nativeSetName(String text);
     native void nativeSetAction(String text);
     native void nativeSetNumber(String text);
+    native void nativeScriptText(String text);
+    native void nativeScriptKey(int key);
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
@@ -136,12 +150,49 @@ public class MainActivity extends Activity {
         private final Map<String, Bitmap> bitmaps = new HashMap<>();
         private Typeface typeface;
         private final String root;
+        private final InputMethodManager imm;
 
         GameView(Context c, String r) {
             super(c); root = r; paint.setAntiAlias(true); getHolder().addCallback(this);
+            imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            setFocusable(true); setFocusableInTouchMode(true);
             File f = new File(root + "/assets/fonts/Ubuntu-Regular.ttf");
             if (f.exists()) typeface = Typeface.createFromFile(f);
         }
+
+        // IME-FIX: клавиатура печатает прямо в редактор скриптов
+        @Override public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+            outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE;
+            outAttrs.imeOptions |= EditorInfo.IME_FLAG_NO_EXTRACT_UI;
+            return new BaseInputConnection(this, false) {
+                @Override public boolean commitText(CharSequence text, int newCursorPosition) {
+                    nativeScriptText(text.toString());
+                    return true;
+                }
+                @Override public boolean deleteSurroundingText(int before, int after) {
+                    for (int i = 0; i < before; ++i) nativeScriptKey(67);
+                    return true;
+                }
+                @Override public boolean sendKeyEvent(KeyEvent event) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                        int c = event.getKeyCode();
+                        if (c == KeyEvent.KEYCODE_DEL)        { nativeScriptKey(67); return true; }
+                        if (c == KeyEvent.KEYCODE_ENTER)      { nativeScriptKey(66); return true; }
+                        if (c == KeyEvent.KEYCODE_DPAD_LEFT)  { nativeScriptKey(21); return true; }
+                        if (c == KeyEvent.KEYCODE_DPAD_RIGHT) { nativeScriptKey(22); return true; }
+                    }
+                    return super.sendKeyEvent(event);
+                }
+            };
+        }
+
+        private void requestIme(final boolean on) {
+            post(() -> {
+                if (on) { requestFocus(); imm.showSoftInput(GameView.this, InputMethodManager.SHOW_IMPLICIT); }
+                else imm.hideSoftInputFromWindow(getWindowToken(), 0);
+            });
+        }
+
         @Override public void surfaceCreated(SurfaceHolder h) { thread = new Thread(this); thread.start(); }
         @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) { }
         @Override public void surfaceDestroyed(SurfaceHolder h) { try { if (thread != null) thread.join(); } catch (Exception e) { } }
@@ -153,6 +204,9 @@ public class MainActivity extends Activity {
                 g_stepLen = frame.length();
                 g_stepHead = frame.replace("\n", "|");
                 if (g_stepHead.length() > 70) g_stepHead = g_stepHead.substring(0, 70);
+
+                if (frame.contains("IME_ON"))  requestIme(true);
+                if (frame.contains("IME_OFF")) requestIme(false);
 
                 int rt = frame.indexOf("REQ_TEXT|");
                 int rn = frame.indexOf("REQ_NAME|");
@@ -175,7 +229,7 @@ public class MainActivity extends Activity {
                 if (rw > 0 && rh > 0) { c.save(); c.scale(rw / LOGIC_W, rh / LOGIC_H); for (String line : frame.split("\n")) drawLine(c, line); c.restore(); }
                 else { for (String line : frame.split("\n")) drawLine(c, line); }
 
-                boolean editor = frame.contains("Inspector") || frame.contains("FileSystem");
+                boolean editor = frame.contains("Inspector") || frame.contains("FileSystem") || frame.contains("SCRIPTS");
                 boolean hubOrMenu = frame.contains("PROJECTS") || frame.contains("START") || frame.contains("Play")
                                  || frame.contains("NEW") || frame.contains("Theme") || frame.contains("MENU");
                 if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
@@ -284,17 +338,10 @@ public class MainActivity extends Activity {
                     String tex = p.length > 8 ? p[8] : "";
 
                     c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang);
-
                     if (!tex.isEmpty()) {
-                        // TEX-ONLY: текстура заменяет фон и текст кнопки
                         Bitmap bm = loadBitmap(tex);
-                        if (bm != null) {
-                            c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint);
-                            c.restore();
-                            return;
-                        }
+                        if (bm != null) { c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint); c.restore(); return; }
                     }
-
                     paint.setColor(fill);
                     c.drawRoundRect(new RectF(-w/2, -h/2, w/2, h/2), 12f, 12f, paint);
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
@@ -341,4 +388,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                                   }
+                }
