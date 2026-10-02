@@ -26,7 +26,8 @@ public:
         if (scene.root) for (const auto& ch : scene.root->getChildren()) parts.push_back(nodeJson(*ch, 4));
         for (size_t i = 0; i < parts.size(); ++i) f << parts[i] << (i + 1 < parts.size() ? ",\n" : "\n");
 
-        f << "  ],\n  \"ui\": [\n";
+        f << "  ],\n";
+        f << "  \"ui\": [\n";
 
         std::vector<std::string> uiparts;
         for (const auto& b : scene.ui) {
@@ -42,13 +43,13 @@ public:
             s += "\"angle\": " + std::to_string(b.angle);
             if (!b.texture.empty()) s += ", \"texture\": \"" + b.texture + "\"";
             if (!b.group.empty()) s += ", \"group\": \"" + b.group + "\"";
-            s += ", \"alpha\": " + std::to_string(b.alpha);   // ALPHA-FIX
             s += " }";
             uiparts.push_back(s);
         }
         for (size_t i = 0; i < uiparts.size(); ++i) f << uiparts[i] << (i + 1 < uiparts.size() ? ",\n" : "\n");
 
-        f << "  ]\n}\n";
+        f << "  ]\n";
+        f << "}\n";
         return true;
     }
 
@@ -59,6 +60,11 @@ private:
         std::string s = pad + "{ ";
         s += std::string("\"type\": \"") + n.typeName() + "\", ";
         s += "\"name\": \"" + n.name + "\"";
+        
+        // LOCK-FIX + OPACITY-FIX: запись locked и opacity
+        s += ", \"locked\": " + std::string(n.locked ? "true" : "false");
+        if (n2) s += ", \"opacity\": " + std::to_string(n2->opacity);
+        
         if (n2) {
             s += ", \"x\": " + std::to_string((int)n2->position.x);
             s += ", \"y\": " + std::to_string((int)n2->position.y);
@@ -81,12 +87,6 @@ private:
         else if (t == "Coin") s += ", \"radius\": " + std::to_string((int)static_cast<Coin*>(n2)->radius);
         else if (t == "Camera2D") s += ", \"follow\": \"" + static_cast<Camera2D*>(n2)->followName + "\"";
         else if (t == "Light2D") { Light2D* li = static_cast<Light2D*>(n2); s += ", \"radius\": " + std::to_string((int)li->radius); s += ", \"intensity\": " + std::to_string(li->intensity); }
-
-        // LOCK/ALPHA-FIX: пишем locked и alpha
-        if (n2) {
-            s += ", \"locked\": " + std::string(n2->locked ? "1" : "0");
-            s += ", \"alpha\": " + std::to_string(n2->alpha);
-        }
         s += " }";
         return s;
     }
@@ -101,8 +101,10 @@ public:
 
     void select(const std::string& name) {
         if (!scene_ || !scene_->root) return;
-        selectedUi_.clear(); selected_ = scene_->root->findNode(name);
+        selectedUi_.clear();
+        selected_ = scene_->root->findNode(name);
     }
+
     std::string selectedUi() const { return selectedUi_; }
     void selectUi(const std::string& id) { selected_ = nullptr; selectedUi_ = id; }
     UiButton* findUi(const std::string& id) {
@@ -121,13 +123,16 @@ public:
         for (auto it = scene_->ui.begin(); it != scene_->ui.end(); ++it)
             if (it->touch.id == id) { if (selectedUi_ == id) selectedUi_.clear(); scene_->ui.erase(it); return; }
     }
+
     Node2D* cloneSelected(const std::string& newName) {
         if (!scene_ || !scene_->root || !selected_) return nullptr;
-        std::unique_ptr<Node> cp = selected_->cloneNode(); cp->name = newName;
+        std::unique_ptr<Node> cp = selected_->cloneNode();
+        cp->name = newName;
         Node* raw = cp.get();
         scene_->root->addChild(std::move(cp));
         return dynamic_cast<Node2D*>(raw);
     }
+
     void moveSelected(float dx, float dy) {
         Node2D* n2 = selected_ ? dynamic_cast<Node2D*>(selected_) : nullptr;
         if (!n2) return;
@@ -155,6 +160,7 @@ public:
         scene_->root->addChild(std::move(n));
         return raw;
     }
+
     void deleteNode(const std::string& name) {
         if (!scene_ || !scene_->root) return;
         Node* n = scene_->root->findNode(name);
@@ -163,6 +169,7 @@ public:
         n->dead = true;
         scene_->root->prune();
     }
+
     Node2D* find2d(const std::string& name) {
         if (!scene_ || !scene_->root) return nullptr;
         return dynamic_cast<Node2D*>(scene_->root->findNode(name));
@@ -177,8 +184,6 @@ public:
         std::function<void(Node&, int)> walk = [&](Node& n, int depth) {
             std::string s(depth * 2, ' ');
             s += "- " + std::string(n.typeName()) + " '" + n.name + "'";
-            Node2D* n2 = dynamic_cast<Node2D*>(&n);
-            if (n2 && n2->locked) s += " [LOCK]";
             if (&n == selected_) s += " [*]";
             out.push_back(s);
             for (const auto& ch : n.getChildren()) walk(*ch, depth + 1);
@@ -193,18 +198,22 @@ public:
         out.push_back("name: " + selected_->name);
         out.push_back("type: " + std::string(selected_->typeName()));
         if (n2) {
-            out.push_back("locked: " + std::string(n2->locked ? "yes" : "no"));
-            out.push_back("alpha: " + std::to_string((int)(n2->alpha * 100)) + "%");
             out.push_back("pos: (" + std::to_string((int)n2->position.x) + ", " + std::to_string((int)n2->position.y) + ")");
             if (n2->hasAppearance()) { out.push_back("shape: " + n2->shape); out.push_back("color: " + colorToHex(n2->color)); }
         }
         return out;
     }
     std::vector<std::string> sceneViewLines() const { return {}; }
-    bool save(const std::string& path) { if (!scene_) return false; return SceneWriter::write(*scene_, path); }
+
+    bool save(const std::string& path) {
+        if (!scene_) return false;
+        return SceneWriter::write(*scene_, path);
+    }
 
 private:
-    Scene* scene_ = nullptr; Node* selected_ = nullptr; std::string selectedUi_;
+    Scene* scene_ = nullptr;
+    Node* selected_ = nullptr;
+    std::string selectedUi_;
 };
 
 } // namespace suka
