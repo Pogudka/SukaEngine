@@ -67,7 +67,6 @@ inline int utf8ByteToCp(const std::string& s, int bytePos) {
     while (p < bytePos && p < (int)s.size()) { p = utf8Next(s, p); ++c; }
     return c;
 }
-// RGB-FIX: цвет <-> "r,g,b"
 inline std::string rgbStr(unsigned c) {
     return std::to_string((c >> 24) & 255) + "," + std::to_string((c >> 16) & 255) + "," + std::to_string((c >> 8) & 255);
 }
@@ -192,6 +191,24 @@ public:
                 pickParent_ = false; pickChild_.clear();
                 buildEditorPanels(); input_.setUi(&editorScene_.ui);
                 return;
+            }
+
+            // BTN-ROT: кольцо поворота для выбранной UI-кнопки
+            UiButton* gb = (!editor_->selectedUi().empty()) ? editor_->findUi(editor_->selectedUi()) : nullptr;
+            if (gb && es) {
+                float bcx, bcy; proj(*es, gb->touch.rect.x + gb->touch.rect.w/2, gb->touch.rect.y + gb->touch.rect.h/2, bcx, bcy);
+                if (t.action == RawTouch::Action::Down) {
+                    float dx = x - bcx, dy = y - bcy;
+                    float dist = std::sqrt(dx*dx + dy*dy);
+                    float R = 70.0f * Z;
+                    if (manip_ == Manip::Rotate && std::fabs(dist - R) < 26.0f * Z) {
+                        gizmoRotUi_ = true; gizmoStartAngle_ = std::atan2(dy, dx); gizmoStartRot_ = gb->angle; return;
+                    }
+                } else if (t.action == RawTouch::Action::Move && gizmoRotUi_) {
+                    float dx = x - bcx, dy = y - bcy;
+                    gb->angle = gizmoStartRot_ + (std::atan2(dy, dx) - gizmoStartAngle_) * 57.2957795f;
+                    return;
+                } else if (t.action == RawTouch::Action::Up) { gizmoRotUi_ = false; }
             }
 
             Node2D* g = (editor_ && editor_->selectedUi().empty()) ?
@@ -780,11 +797,11 @@ private:
                 addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 244, 16, th.ink);
                 addLbl("InTex", "Texture: " + (ub->texture.empty() ? std::string("(none)") : ub->texture), 900, 268, 16, th.ink);
                 addLbl("InGrp", "Group: " + (ub->group.empty() ? std::string("(none)") : ub->group), 900, 292, 16, th.ink);
-                const char* nl[4] = { "X","Y","W","H" };
-                const char* nk[4] = { "bx","by","bw","bh" };
-                for (int k = 0; k < 4; ++k) {
+                const char* nl[5] = { "X","Y","W","H","R" };
+                const char* nk[5] = { "bx","by","bw","bh","bang" };
+                for (int k = 0; k < 5; ++k) {
                     UiButton b; b.touch.id = std::string("numbtn")+std::to_string(k);
-                    b.touch.rect = Rect{900 + (float)k * 62, 320, 58, 28};
+                    b.touch.rect = Rect{900 + (float)k * 50, 320, 46, 28};
                     b.text = nl[k]; b.action = std::string("num:") + nk[k];
                     b.color = th.button; editorScene_.ui.push_back(b);
                 }
@@ -1078,6 +1095,7 @@ private:
                 else if (pendingNumKind_ == "by") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.y) : "0";
                 else if (pendingNumKind_ == "bw") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.w) : "100";
                 else if (pendingNumKind_ == "bh") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.h) : "50";
+                else if (pendingNumKind_ == "bang") pendingNumCur_ = ub ? std::to_string((int)ub->angle) : "0";
             }
             else if (b.action == "ed_scr" && !lk) { if (!sel.empty()) { attachScript(sel); changed = true; } }
             else if (b.action == "ed_clone" && !lk) { pushUndo(); if (!sel.empty()) { editor_->cloneSelected(sel + "_copy"); changed = true; } }
@@ -1223,6 +1241,7 @@ private:
                 else if (pendingNumKind_ == "by") b->touch.rect.y = v;
                 else if (pendingNumKind_ == "bw") b->touch.rect.w = v;
                 else if (pendingNumKind_ == "bh") b->touch.rect.h = v;
+                else if (pendingNumKind_ == "bang") b->angle = v;
             }
         }
         if (hn || ht || ha || hnum) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
@@ -1270,6 +1289,22 @@ private:
                 out += "DRAW rect|" + std::to_string((int)(cx+hw+16*Z)) + "|" + std::to_string((int)(cy-8*Z)) + "|16|16|#4CC9F0|0\n";
                 out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24*Z)) + "|#4CC9F0|0\n";
                 out += "DRAW rect|" + std::to_string((int)(cx-8*Z)) + "|" + std::to_string((int)(cy+hh+16*Z)) + "|16|16|#4CC9F0|0\n";
+            }
+        }
+        // BTN-ROT: кольцо поворота вокруг выбранной кнопки
+        {
+            std::string selUi2 = editor_ ? editor_->selectedUi() : std::string("");
+            UiButton* gb2 = selUi2.empty() ? nullptr : editor_->findUi(selUi2);
+            if (gb2 && manip_ == Manip::Rotate) {
+                float bcx = CX + (gb2->touch.rect.x + gb2->touch.rect.w/2 - sc.camX - 640)*S;
+                float bcy = CY + (gb2->touch.rect.y + gb2->touch.rect.h/2 - sc.camY - 360)*S;
+                float Z = edZoom_;
+                for (int k = 0; k < 24; ++k) {
+                    float a = k * 6.28318f / 24.0f;
+                    float px = bcx + std::cos(a) * 70*Z, py = bcy + std::sin(a) * 70*Z;
+                    out += "DRAW rect|" + std::to_string((int)(px-3)) + "|" + std::to_string((int)(py-3)) + "|6|6|#FF8800|0\n";
+                }
+                out += "DRAW text|ang " + std::to_string((int)gb2->angle) + "|" + std::to_string((int)(bcx+80)) + "|" + std::to_string((int)(bcy-10)) + "|14|#FF8800|0\n";
             }
         }
         if (pickParent_ && !pickChild_.empty()) {
@@ -1357,7 +1392,7 @@ private:
     int pendingKind_ = 0;
     int pendingRgb_ = 0;
     std::string pendingNumKind_, pendingNumCur_;
-    bool gizmoRot_ = false, gizmoSclX_ = false, gizmoSclY_ = false; int lockAxis_ = 0;
+    bool gizmoRot_ = false, gizmoSclX_ = false, gizmoSclY_ = false; bool gizmoRotUi_ = false; int lockAxis_ = 0;
     float gizmoStartAngle_ = 0, gizmoStartRot_ = 0, gizmoStartDist_ = 1, gizmoStartSX_ = 1, gizmoStartSY_ = 1;
     bool pickParent_ = false; std::string pickChild_;
     std::string pendingType_, pendingShape_, pendingActionCur_;
