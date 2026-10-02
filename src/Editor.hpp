@@ -64,6 +64,8 @@ private:
             s += ", \"rotation\": " + std::to_string(n2->rotation * 57.2957795f);
             s += ", \"scale_x\": " + std::to_string(n2->scale.x);
             s += ", \"scale_y\": " + std::to_string(n2->scale.y);
+            // ACTION-FIX: действие узла теперь сохраняется
+            if (!n2->action.empty()) s += ", \"action\": \"" + n2->action + "\"";
             if (n2->hasAppearance()) {
                 s += ", \"shape\": \"" + n2->shape + "\"";
                 s += ", \"color\": \"" + colorToHex(n2->color) + "\"";
