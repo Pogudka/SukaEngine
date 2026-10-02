@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdlib>
 
+#include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -253,8 +254,7 @@ inline bool setProjectSaveFlag(const std::string& root, bool on) {
     return true;
 }
 
-template <class T>
-inline std::string uniqueProjectDir(const std::string& base, const std::vector<T>& games) {
+inline std::string uniqueProjectDir(const std::string& base, const std::vector<ProjectEntry>& games) {
     std::string b = base.empty() ? std::string("Project") : base;
     std::string dir = b;
     int suffix = 2;
