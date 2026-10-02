@@ -100,7 +100,6 @@ public class MainActivity extends Activity {
         } catch (Exception e) { }
     }
 
-    // mode: 0=text, 1=name, 2=action, 3=number
     private void openDialog(final String title, final String current, final int mode) {
         g_dialog = true;
         runOnUiThread(() -> {
@@ -121,7 +120,6 @@ public class MainActivity extends Activity {
                     g_dialog = false;
                 })
                 .setNegativeButton("Cancel", (d, w) -> {
-                    // CANCEL-FIX: пустое имя = отмена создания (движок чистит pendingName_)
                     if (mode == 1) nativeSetName("");
                     g_dialog = false;
                 })
@@ -142,6 +140,8 @@ public class MainActivity extends Activity {
     native void nativeSetAction(String text);
     native void nativeSetNumber(String text);
     native void nativeScriptText(String text);
+    native void nativeScriptCompose(String text);
+    native void nativeScriptFinish();
     native void nativeScriptKey(int key);
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
@@ -160,13 +160,21 @@ public class MainActivity extends Activity {
             if (f.exists()) typeface = Typeface.createFromFile(f);
         }
 
-        // IME-FIX: клавиатура печатает прямо в редактор скриптов
+        // COMPOSE-FIX: клавиатура шлёт набор по мере ввода, а не пачкой по пробелу
         @Override public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE;
             outAttrs.imeOptions |= EditorInfo.IME_FLAG_NO_EXTRACT_UI;
             return new BaseInputConnection(this, false) {
                 @Override public boolean commitText(CharSequence text, int newCursorPosition) {
                     nativeScriptText(text.toString());
+                    return true;
+                }
+                @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
+                    nativeScriptCompose(text.toString());
+                    return true;
+                }
+                @Override public boolean finishComposingText() {
+                    nativeScriptFinish();
                     return true;
                 }
                 @Override public boolean deleteSurroundingText(int before, int after) {
@@ -388,4 +396,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                }
+                    }
