@@ -93,20 +93,30 @@ public:
 
         if (appMode_ == AppMode::Editor && !showCreate_ && !showBg_) {
             Scene* es = editor_ ? editor_->scene() : nullptr;
+
+            // GROUP-FIX: выбор родителя обрабатывается ПЕРВЫМ, независимо от типа выделения
+            if (t.action == RawTouch::Action::Down && pickParent_ && !pickChild_.empty() && es && es->root) {
+                float wx, wy; unproj(*es, x, y, wx, wy);
+                std::string hit = hitTest(es->root.get(), wx, wy);
+                if (!hit.empty() && hit != pickChild_) {
+                    attachChildTo(pickChild_, hit);
+                    lastMsg_ = "attached " + pickChild_ + " -> " + hit;
+                    if (pickChild_.rfind("UI:", 0) == 0) editor_->selectUi(pickChild_.substr(3));
+                    else editor_->select(pickChild_);
+                } else {
+                    lastMsg_ = hit.empty() ? "no target under tap" : "cannot attach to self";
+                }
+                pickParent_ = false; pickChild_.clear();
+                buildEditorPanels(); input_.setUi(&editorScene_.ui);
+                return;
+            }
+
             Node2D* g = (editor_ && editor_->selectedUi().empty()) ?
                         (editor_->selected() ? dynamic_cast<Node2D*>(editor_->selected()) : nullptr) : nullptr;
 
             if (g && es) {
                 float scx, scy; proj(*es, g->position.x, g->position.y, scx, scy);
                 if (t.action == RawTouch::Action::Down) {
-                    if (pickParent_ && !pickChild_.empty()) {
-                        float wx, wy; unproj(*es, x, y, wx, wy);
-                        std::string hit = hitTest(es->root.get(), wx, wy);
-                        if (!hit.empty() && hit != pickChild_) attachChildTo(pickChild_, hit);
-                        pickParent_ = false; pickChild_.clear();
-                        buildEditorPanels(); input_.setUi(&editorScene_.ui);
-                        return;
-                    }
                     float dx = x - scx, dy = y - scy;
                     float dist = std::sqrt(dx*dx + dy*dy);
                     if (manip_ == Manip::Rotate) {
@@ -156,7 +166,7 @@ public:
                     else { nx = wx; ny = wy; }
                     float dlx = (nx - oldX) / dragPSX_, dly = (ny - oldY) / dragPSY_;
                     dragNode_->position.x += dlx; dragNode_->position.y += dly;
-                    moveGroupButtons(es, dragNode_->name, nx - oldX, ny - oldY);   // GROUP: кнопки едут с группой
+                    moveGroupButtons(es, dragNode_->name, nx - oldX, ny - oldY);
                 }
             } else if (t.action == RawTouch::Action::Up) { dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; lockAxis_ = 0; }
         }
@@ -201,7 +211,6 @@ private:
         return "";
     }
 
-    // ---- мировая трансформация родителя (для честных хитбоксов и drag) ----
     void parentXf(Node* n, const std::string& name, float cx, float cy, float sx, float sy,
                   float& ox, float& oy, float& psx, float& psy, bool& found) {
         if (found) return;
@@ -224,7 +233,7 @@ private:
     void attachChildTo(const std::string& child, const std::string& parent) {
         if (!editor_ || !editor_->scene()) return;
         Scene* sc = editor_->scene();
-        if (child.rfind("UI:", 0) == 0) {          // GROUP: кнопка в группу
+        if (child.rfind("UI:", 0) == 0) {
             UiButton* b = editor_->findUi(child.substr(3));
             if (b) b->group = parent;
             return;
@@ -408,7 +417,7 @@ private:
             if (!sceneMgr_->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
         showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
-        fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; pickParent_ = false;
+        fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -434,7 +443,6 @@ private:
             editorScene_.ui.push_back(b);
         }
 
-        // TREE-FIX: строки с тире; кнопки группы выводятся дочерними под своим узлом
         std::vector<HierRow> hier;
         if (editor_ && editor_->scene() && editor_->scene()->root) collectHier(*editor_->scene()->root, 0, hier);
         struct Row { std::string text, action; bool sel; };
@@ -643,22 +651,23 @@ private:
             else if (b.action == "ed_scr") { if (!sel.empty()) { attachScript(sel); changed = true; } }
             else if (b.action == "ed_clone") { if (!sel.empty()) { editor_->cloneSelected(sel + "_copy"); changed = true; } }
             else if (b.action == "ed_parent") {
-                if (!selUi.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? ("UI:" + selUi) : std::string(""); changed = true; }
-                else if (!sel.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? sel : std::string(""); changed = true; }
+                if (!selUi.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? ("UI:" + selUi) : std::string(""); lastMsg_ = pickParent_ ? ("pick parent for " + pickChild_) : "pick off"; changed = true; }
+                else if (!sel.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? sel : std::string(""); lastMsg_ = pickParent_ ? ("pick parent for " + pickChild_) : "pick off"; changed = true; }
+                else lastMsg_ = "select child first";
             }
             else if (b.action == "ed_unparent") {
-                if (!selUi.empty()) { detachChild("UI:" + selUi); changed = true; }
-                else if (!sel.empty()) { detachChild(sel); changed = true; }
+                if (!selUi.empty()) { detachChild("UI:" + selUi); lastMsg_ = "detached " + selUi; changed = true; }
+                else if (!sel.empty()) { detachChild(sel); lastMsg_ = "detached " + sel; changed = true; }
             }
             else if (b.action.rfind("ed_selectui:", 0) == 0) {
                 std::string id = b.action.substr(12);
-                if (pickParent_ && !pickChild_.empty() && pickChild_ != id) { attachChildTo(pickChild_, id); pickParent_ = false; pickChild_.clear(); }
+                if (pickParent_ && !pickChild_.empty() && pickChild_ != id && pickChild_ != ("UI:" + id)) { attachChildTo(pickChild_, id); lastMsg_ = "attached " + pickChild_ + " -> " + id; pickParent_ = false; pickChild_.clear(); }
                 else editor_->selectUi(id);
                 changed = true;
             }
             else if (b.action.rfind("ed_select:", 0) == 0) {
                 std::string nm = b.action.substr(10);
-                if (pickParent_ && !pickChild_.empty() && nm != pickChild_) { attachChildTo(pickChild_, nm); pickParent_ = false; pickChild_.clear(); }
+                if (pickParent_ && !pickChild_.empty() && nm != pickChild_) { attachChildTo(pickChild_, nm); lastMsg_ = "attached " + pickChild_ + " -> " + nm; pickParent_ = false; pickChild_.clear(); }
                 else editor_->select(nm);
                 changed = true;
             }
@@ -688,7 +697,7 @@ private:
                     if (manip_ == Manip::Move) {
                         float dx=(d=="l")?-16:(d=="r")?16:0; float dy=(d=="u")?-16:(d=="d")?16:0;
                         editor_->moveSelected(dx, dy);
-                        if (editor_->scene()) moveGroupButtons(editor_->scene(), sel, dx, dy);   // GROUP
+                        if (editor_->scene()) moveGroupButtons(editor_->scene(), sel, dx, dy);
                     }
                     else if (manip_ == Manip::Rotate && n) { float dr=(d=="l")?-15.0f:(d=="r")?15.0f:0.0f; n->rotation += dr * 3.14159265f / 180.0f; }
                     else if (manip_ == Manip::Scale && n) { float f=(d=="u")?1.1f:(d=="d")?(1.0f/1.1f):1.0f; n->scale.x*=f; n->scale.y*=f; }
@@ -699,7 +708,7 @@ private:
                 if (ub) { editor_->deleteUi(selUi); ub = nullptr; changed = true; }
                 else if (!sel.empty()) { editor_->deleteNode(sel); sel.clear(); changed = true; }
             }
-            else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/scenes/main.json"); }
+            else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/scenes/main.json"); lastMsg_ = "saved"; }
             else if (b.action == "ed_back") { appMode_ = AppMode::Hub; rebuildHub(); return; }
         }
         if (changed) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
@@ -719,6 +728,7 @@ private:
                 editor_->addNode(pendingType_, nm, 640, 360);
                 if (!pendingShape_.empty()) editor_->setShape(nm, pendingShape_);
                 editor_->select(nm);
+                lastMsg_ = "created " + nm;
             }
             pendingName_ = false; showCreate_ = false;
         }
@@ -772,7 +782,6 @@ private:
             float cx = CX + (g->position.x - sc.camX - 640)*S;
             float cy = CY + (g->position.y - sc.camY - 360)*S;
             if (manip_ == Manip::Move) {
-                // ARROW-FIX: красная вправо, зелёная вниз (наконечники повёрнуты)
                 out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-2)) + "|56|4|#D62828|0\n";
                 out += "DRAW shape|triangle|" + std::to_string((int)(cx+50)) + "|" + std::to_string((int)(cy-8)) + "|16|14|#D62828|90\n";
                 out += "DRAW rect|" + std::to_string((int)(cx-2)) + "|" + std::to_string((int)cy) + "|4|56|#40C040|0\n";
@@ -794,6 +803,9 @@ private:
         if (pickParent_ && !pickChild_.empty()) {
             out += "DRAW rect|300|64|592|26|#FF8800|0\n";
             out += "DRAW text|PARENT FOR: " + pickChild_ + "  ->  tap object or row|306|68|16|#1A1A2E|0\n";
+        }
+        if (!lastMsg_.empty()) {
+            out += "DRAW text|" + lastMsg_ + "|306|580|14|#FFD700|0\n";
         }
     }
     void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH, float camX, float camY, std::string& out) {
@@ -823,7 +835,6 @@ private:
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
                 if (tn == "Label") {
-                    // TEXT-SCALE-FIX: шрифт растёт вместе со scale
                     int fs = (int)(14 * ((d->scale.x + d->scale.y) * 0.5f));
                     if (fs < 6) fs = 6;
                     out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
@@ -861,6 +872,7 @@ private:
     bool pickParent_ = false; std::string pickChild_;
     std::string pendingType_, pendingShape_, pendingActionCur_;
     std::string pendingNodeAction_;
+    std::string lastMsg_;
     float pinchMX_ = 0, pinchMY_ = 0;
     float dragOX_ = 0, dragOY_ = 0, dragPSX_ = 1, dragPSY_ = 1;
     int hierScroll_ = 0;
