@@ -795,6 +795,76 @@ private:
         scripted_.insert(name);
     }
 
+    void saveVars() {
+        if (project_.rootPath.empty()) {
+            return;
+        }
+
+        std::ofstream f(project_.rootPath + "/save.vars");
+
+        if (!f.good()) {
+            return;
+        }
+
+        f << "__score__=" << ctx_.score << "\n";
+
+        for (const auto& kv : ctx_.vars) {
+            f << kv.first << "=" << kv.second << "\n";
+        }
+
+        f.close();
+    }
+
+    void loadVars() {
+        if (project_.rootPath.empty()) {
+            return;
+        }
+
+        std::string path = project_.rootPath + "/save.vars";
+
+        if (!fileExists(path)) {
+            return;
+        }
+
+        std::string s = readFile(path);
+        size_t pos = 0;
+
+        while (pos <= s.size()) {
+            size_t nl = s.find('\n', pos);
+            std::string line;
+
+            if (nl == std::string::npos) {
+                line = s.substr(pos);
+                pos = s.size() + 1;
+            } else {
+                line = s.substr(pos, nl - pos);
+                pos = nl + 1;
+            }
+
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+
+            if (line.empty()) {
+                continue;
+            }
+
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) {
+                continue;
+            }
+
+            std::string k = line.substr(0, eq);
+            double v = atof(line.substr(eq + 1).c_str());
+
+            if (k == "__score__") {
+                ctx_.score = (int)v;
+            } else if (!k.empty()) {
+                ctx_.vars[k] = v;
+            }
+        }
+    }
+
     void clearDialogResults() {
         std::lock_guard<std::mutex> lk(dlgMtx_);
 
@@ -1182,13 +1252,17 @@ private:
             pendingHubRename_ = false;
             pendingNewProject_ = false;
 
-            enterGame(a.dir);
+            if (!enterGame(a.dir)) {
+                rebuildHub();
+            }
         } else if (a.kind == 2) {
             confirmDeleteDir_.clear();
             pendingHubRename_ = false;
             pendingNewProject_ = false;
 
-            enterEditor(a.dir);
+            if (!enterEditor(a.dir)) {
+                rebuildHub();
+            }
         }
 
         if (appMode_ == AppMode::Hub) {
@@ -1211,29 +1285,32 @@ private:
             return false;
         }
 
-        project_ = pi;
-        g_projectRoot = project_.rootPath;
+        std::string root = pi.rootPath;
+        std::string font = root + "/" + pi.defaultFont;
 
-        fontPath_ = pi.rootPath + "/" + pi.defaultFont;
-
-        if (!fileExists(fontPath_)) {
-            fontPath_ = std::string(PROJECT_ROOT) + "/assets/fonts/Ubuntu-Regular.ttf";
+        if (!fileExists(font)) {
+            font = std::string(PROJECT_ROOT) + "/assets/fonts/Ubuntu-Regular.ttf";
         }
 
-        sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
+        auto mgr = std::make_unique<SceneManager>(root, font);
 
-        if (!sceneMgr_->restartScene(pi.mainScene, resources_)) {
+        if (!mgr->restartScene(pi.mainScene, resources_)) {
             return false;
         }
 
-        scripts_.load(pi.rootPath);
+        project_ = pi;
+        g_projectRoot = project_.rootPath;
+        fontPath_ = font;
+        sceneMgr_ = std::move(mgr);
+
+        scripts_.load(root);
 
         ctx_ = Context();
         g_luaLog.clear();
 
         dbg_ = false;
 
-        saveVarsEnabled_ = projectWantsSave(pi.rootPath);
+        saveVarsEnabled_ = projectWantsSave(root);
         pendingLoadVars_ = saveVarsEnabled_;
         saveTimer_ = 0.0f;
 
@@ -1294,7 +1371,7 @@ private:
 
         if (pendingLoadVars_) {
             if (saveVarsEnabled_) {
-                loadVarsFromFile(project_.rootPath, ctx_);
+                loadVars();
             }
 
             pendingLoadVars_ = false;
@@ -1304,7 +1381,7 @@ private:
             saveTimer_ += 1.0f / 60.0f;
 
             if (saveTimer_ >= 1.0f) {
-                saveVarsToFile(project_.rootPath, ctx_);
+                saveVars();
                 saveTimer_ = 0.0f;
             }
         }
@@ -1373,7 +1450,7 @@ private:
 
         if (act.rfind(pHub, 0) == 0) {
             if (saveVarsEnabled_) {
-                saveVarsToFile(project_.rootPath, ctx_);
+                saveVars();
             }
 
             appMode_ = AppMode::Hub;
@@ -1430,25 +1507,28 @@ private:
             return false;
         }
 
-        project_ = pi;
-        g_projectRoot = project_.rootPath;
+        std::string root = pi.rootPath;
+        std::string font = root + "/" + pi.defaultFont;
 
-        fontPath_ = pi.rootPath + "/" + pi.defaultFont;
-
-        if (!fileExists(fontPath_)) {
-            fontPath_ = std::string(PROJECT_ROOT) + "/assets/fonts/Ubuntu-Regular.ttf";
+        if (!fileExists(font)) {
+            font = std::string(PROJECT_ROOT) + "/assets/fonts/Ubuntu-Regular.ttf";
         }
 
-        sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
+        auto mgr = std::make_unique<SceneManager>(root, font);
 
-        if (!sceneMgr_->restartScene("scenes/main.json", resources_)) {
-            if (!sceneMgr_->restartScene(pi.mainScene, resources_)) {
+        if (!mgr->restartScene("scenes/main.json", resources_)) {
+            if (!mgr->restartScene(pi.mainScene, resources_)) {
                 appMode_ = AppMode::Hub;
                 rebuildHub();
 
                 return false;
             }
         }
+
+        project_ = pi;
+        g_projectRoot = project_.rootPath;
+        fontPath_ = font;
+        sceneMgr_ = std::move(mgr);
 
         editor_ = std::make_unique<Editor>();
         editor_->attach(sceneMgr_->current());
@@ -1631,10 +1711,10 @@ private:
         bool lk = (s2 != nullptr) && s2->locked;
 
         if (act == "col_rgb") {
-            if (!lk && (ub || s2)) {
+            if (!lk) {
                 pendingRgb_ = 1;
                 pendingText_ = true;
-                pendingTextCur_ = ub ? rgbStr(ub->color) : rgbStr(s2->color);
+                pendingTextCur_ = ub ? rgbStr(ub->color) : (s2 ? rgbStr(s2->color) : std::string("255,255,255"));
             }
 
             return 0;
@@ -1891,16 +1971,16 @@ private:
         }
 
         if (act == "edit_action") {
-            if (!lk && (ub || s2)) {
+            if (!lk) {
                 pendingAction_ = true;
-                pendingActionCur_ = ub ? ub->action : s2->action;
+                pendingActionCur_ = ub ? ub->action : (s2 ? s2->action : std::string(""));
             }
 
             return 0;
         }
 
         if (act.rfind("num:", 0) == 0) {
-            if (!lk && (ub || s2)) {
+            if (!lk) {
                 pendingNum_ = true;
                 pendingNumKind_ = act.substr(4);
 
@@ -1917,6 +1997,7 @@ private:
                 else if (pendingNumKind_ == "bh") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.h) : "50";
                 else if (pendingNumKind_ == "bang") pendingNumCur_ = ub ? std::to_string((int)ub->angle) : "0";
                 else if (pendingNumKind_ == "balpha") pendingNumCur_ = ub ? std::to_string((int)(ub->alpha * 100)) : "100";
+                else pendingNumCur_ = "0";
             }
 
             return 0;
@@ -2285,6 +2366,11 @@ private:
             if (pendingKind_ == 2) {
                 if (!nm.empty()) {
                     std::string safe = sanitizeProjectDirName(nm);
+
+                    if (safe.size() >= 4 && safe.compare(safe.size() - 4, 4, ".lua") == 0) {
+                        safe = safe.substr(0, safe.size() - 4);
+                    }
+
                     if (safe.empty()) safe = "script";
 
                     std::string rel = "scripts/" + safe + ".lua";
