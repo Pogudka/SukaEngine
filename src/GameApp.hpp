@@ -585,6 +585,9 @@ private:
         sceneMgr_ = std::make_unique<SceneManager>(pi.rootPath, fontPath_);
         if (!sceneMgr_->restartScene(pi.mainScene, resources_)) return false;
         scripts_.load(pi.rootPath);
+        ctx_ = Context();          // PROJ-FIX: переменные/счёт не перетекают между проектами
+        g_luaLog.clear();          // PROJ-FIX: лог Lua начинается заново
+        dbg_ = false;              // PROJ-FIX: DBG не липнет между проектами
         Scene* sc = sceneMgr_->current();
         UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
         UiButton dbg; dbg.touch.id = "dbg"; dbg.touch.rect = Rect{1080, 10, 90, 70}; dbg.text = "DBG"; dbg.action = "dbg:"; dbg.color = parseColor("#808080"); sc->ui.push_back(dbg);
