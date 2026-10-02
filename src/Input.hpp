@@ -72,7 +72,7 @@ struct UiButton {
     std::string text, action, texture, group;
     unsigned int color = 0xFF3A3A4A;
     float angle = 0.0f;
-    float alpha = 1.0f;     // ALPHA-FIX: прозрачность кнопки 0.0..1.0
+    float alpha = 1.0f;   // BTN-ALPHA (B3)
 };
 
 class InputManager {
