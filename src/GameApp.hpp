@@ -9,6 +9,7 @@
 #include <cmath>
 #include <mutex>
 #include <chrono>
+#include <fstream>
 
 #include "Core.hpp"
 #include "Project.hpp"
@@ -32,6 +33,16 @@ inline unsigned dimColor(unsigned c, float k) {
     if (r > 255) r = 255; if (g > 255) g = 255; if (b > 255) b = 255;
     return (r << 24) | (g << 16) | (b << 8) | a;
 }
+inline std::string sanitizeLine(const std::string& s) {
+    std::string o;
+    for (char c : s) {
+        if (c == '|') o += '/';
+        else if (c == '\t') o += "  ";
+        else if ((unsigned char)c < 32) o += ' ';
+        else o += c;
+    }
+    return o;
+}
 
 class GameApp {
 public:
@@ -54,17 +65,18 @@ public:
     void submitName(const std::string& t)   { std::lock_guard<std::mutex> lk(dlgMtx_); nameRes_ = t;   hasName_ = true; }
     void submitAction(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); actionRes_ = t; hasAction_ = true; }
     void submitNumber(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); numRes_ = t;    hasNum_ = true; }
+    // IME-FIX: поток символов/клавиш с клавиатуры в редактор скриптов
+    void submitScriptText(const std::string& t) { std::lock_guard<std::mutex> lk(imeMtx_); imeTextQ_.push_back(t); }
+    void submitScriptKey(int k)                 { std::lock_guard<std::mutex> lk(imeMtx_); imeKeyQ_.push_back(k); }
 
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
-        if (appMode_ != AppMode::Editor || showCreate_ || showBg_) return;
+        if (appMode_ != AppMode::Editor || scriptMode_ || showCreate_ || showBg_) return;
         Scene* es = editor_ ? editor_->scene() : nullptr;
         if (!es) return;
         float mx = (x0 + x1) / 2.0f, my = (y0 + y1) / 2.0f;
         float dist = std::sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
         if (phase == 1) {
-            pinching_ = true;
-            pinchDist0_ = dist;
-            pinchZoom0_ = edZoom_;
+            pinching_ = true; pinchDist0_ = dist; pinchZoom0_ = edZoom_;
             float S = 0.46875f * edZoom_;
             pinchAX_ = 640 + es->camX + (mx - 596) / S;
             pinchAY_ = 360 + es->camY + (my - 310) / S;
@@ -103,7 +115,7 @@ public:
             }
         }
 
-        if (appMode_ == AppMode::Editor && !showCreate_ && !showBg_) {
+        if (appMode_ == AppMode::Editor && !scriptMode_ && !showCreate_ && !showBg_) {
             Scene* es = editor_ ? editor_->scene() : nullptr;
             float Z = edZoom_;
 
@@ -128,7 +140,6 @@ public:
                 float gwx, gwy, gwr, gsx, gsy;
                 if (!nodeWorld(es, g->name, gwx, gwy, gwr, gsx, gsy)) { gwx = g->position.x; gwy = g->position.y; gsx = gsy = 1; }
                 float scx, scy; proj(*es, gwx, gwy, scx, scy);
-
                 if (t.action == RawTouch::Action::Down) {
                     if (!g->locked) {
                         float dx = x - scx, dy = y - scy;
@@ -331,6 +342,81 @@ private:
         loadSnap(rel); lastMsg_ = "redo";
     }
 
+    // ---------- SCRIPT EDITOR (B2) ----------
+    void loadScript(const std::string& rel) {
+        scriptPath_ = rel;
+        std::string s = readFile(project_.rootPath + "/" + rel);
+        scriptLines_.clear();
+        std::string cur;
+        for (char c : s) { if (c == '\n') { scriptLines_.push_back(cur); cur.clear(); } else cur += c; }
+        scriptLines_.push_back(cur);
+        if (scriptLines_.empty()) scriptLines_.push_back("");
+        curLine_ = 0; curCol_ = 0; scriptScroll_ = 0;
+    }
+    void saveScript() {
+        if (scriptPath_.empty()) return;
+        std::ofstream f(project_.rootPath + "/" + scriptPath_);
+        for (size_t i = 0; i < scriptLines_.size(); ++i) { f << scriptLines_[i]; if (i + 1 < scriptLines_.size()) f << "\n"; }
+        f.close();
+        scripts_.load(project_.rootPath);
+        lastMsg_ = "script saved: " + scriptPath_;
+    }
+    void scTypeChar(char c) {
+        if (curLine_ >= (int)scriptLines_.size()) scriptLines_.push_back("");
+        std::string& L = scriptLines_[curLine_];
+        if (c == '\n') {
+            std::string tail = L.substr(curCol_ < (int)L.size() ? curCol_ : L.size());
+            L = L.substr(0, curCol_);
+            scriptLines_.insert(scriptLines_.begin() + curLine_ + 1, tail);
+            curLine_++; curCol_ = 0;
+        } else {
+            if (curCol_ > (int)L.size()) curCol_ = (int)L.size();
+            L.insert(L.begin() + curCol_, c);
+            curCol_++;
+        }
+        scClampView();
+    }
+    void scBackspace() {
+        if (curLine_ >= (int)scriptLines_.size()) return;
+        std::string& L = scriptLines_[curLine_];
+        if (curCol_ > 0) { L.erase(L.begin() + curCol_ - 1); curCol_--; }
+        else if (curLine_ > 0) {
+            size_t prevLen = scriptLines_[curLine_ - 1].size();
+            scriptLines_[curLine_ - 1] += L;
+            scriptLines_.erase(scriptLines_.begin() + curLine_);
+            curLine_--; curCol_ = (int)prevLen;
+        }
+        scClampView();
+    }
+    void scMove(int d) {
+        curCol_ += d;
+        if (curLine_ < 0) curLine_ = 0;
+        if (curLine_ >= (int)scriptLines_.size()) curLine_ = (int)scriptLines_.size() - 1;
+        std::string& L = scriptLines_[curLine_];
+        if (curCol_ < 0) { if (curLine_ > 0) { curLine_--; curCol_ = (int)scriptLines_[curLine_].size(); } else curCol_ = 0; }
+        if (curCol_ > (int)L.size()) { if (curLine_ + 1 < (int)scriptLines_.size()) { curLine_++; curCol_ = 0; } else curCol_ = (int)L.size(); }
+        scClampView();
+    }
+    void scClampView() {
+        const int LINES = 24;
+        if (curLine_ < scriptScroll_) scriptScroll_ = curLine_;
+        if (curLine_ >= scriptScroll_ + LINES) scriptScroll_ = curLine_ - LINES + 1;
+        if (scriptScroll_ < 0) scriptScroll_ = 0;
+    }
+    void imeApply() {
+        std::vector<std::string> tq; std::vector<int> kq;
+        { std::lock_guard<std::mutex> lk(imeMtx_); tq.swap(imeTextQ_); kq.swap(imeKeyQ_); }
+        if (tq.empty() && kq.empty()) return;
+        for (auto& s : tq) for (char c : s) scTypeChar(c);
+        for (int k : kq) {
+            if (k == 67) scBackspace();
+            else if (k == 66) scTypeChar('\n');
+            else if (k == 21) scMove(-1);
+            else if (k == 22) scMove(1);
+        }
+        imeChanged_ = true;
+    }
+
     // ---------------- HUB ----------------
     void rebuildHub() { hubState_.games = ProjectList::scan(); hubScene_ = buildHubLandscape(); input_.setUi(&hubScene_.ui); }
     Scene buildHubLandscape() {
@@ -411,7 +497,6 @@ private:
             lastDraws_ = 0; for (size_t i = 0; i + 4 < out.size(); ++i) if (out[i]=='D' && out[i+1]=='R' && out[i+2]=='A' && out[i+3]=='W') ++lastDraws_;
             out += "DRAW text|fps " + std::to_string((int)fps_) + "  nodes " + std::to_string(nodeCount_) + "  draws " + std::to_string(lastDraws_) + "|20|100|18|#FFD700|0\n";
             out += "DRAW text|vars " + std::to_string((int)ctx_.vars.size()) + "  score " + std::to_string(ctx_.score) + "|20|124|18|#FFD700|0\n";
-            // LOG-FIX: последние строки Lua в игре
             size_t ln = g_luaLog.size(); int show = ln > 4 ? 4 : (int)ln;
             for (int i = 0; i < show; ++i)
                 out += "DRAW text|" + g_luaLog[ln - show + i] + "|20|" + std::to_string(148 + i*20) + "|16|#87CEEB|0\n";
@@ -487,6 +572,7 @@ private:
         showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
+        scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear();
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -531,10 +617,17 @@ private:
         auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
             auto l = std::make_unique<Label>(); l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y}; editorScene_.root->addChild(std::move(l));
         };
+        // SCRIPT-FIX: вкладки Scene / Scripts — кнопки
+        { UiButton b; b.touch.id="tab_scene"; b.touch.rect=Rect{10,4,80,26}; b.text="Scene"; b.action="tab_scene"; b.color=scriptMode_?th.button:GODOT_ORANGE; editorScene_.ui.push_back(b); }
+        addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink);
+        { UiButton b; b.touch.id="tab_scripts"; b.touch.rect=Rect{200,4,90,26}; b.text="Scripts"; b.action="tab_scripts"; b.color=scriptMode_?GODOT_ORANGE:th.button; editorScene_.ui.push_back(b); }
+        addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
+
+        if (scriptMode_) { buildScriptPanels(th); return; }
+
         auto fsBg = std::make_unique<Node2D>(); fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = dimColor(th.bg, 0.6f); fsBg->w = 284; fsBg->h = 320; fsBg->position = Vec2{150, 536}; editorScene_.root->addChild(std::move(fsBg));
-        addLbl("TabScene", "Scene", 20, 8, 20, GODOT_ORANGE); addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink); addLbl("TabScr", "Script", 210, 8, 20, th.ink); addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
         addLbl("DHdr", "Scene", 10, 40, 18, th.ink); addLbl("IHdr", "Inspector", 900, 40, 18, th.ink);
-        addLbl("ZoomLbl", "zoom " + std::to_string((int)(edZoom_ * 100)) + "%", 300, 8, 16, th.ink);
+        addLbl("ZoomLbl", "zoom " + std::to_string((int)(edZoom_ * 100)) + "%", 380, 8, 16, th.ink);
 
         const char* mlab[3] = { "POS","ROT","SCL" };
         Manip mval[3] = { Manip::Move, Manip::Rotate, Manip::Scale };
@@ -631,7 +724,6 @@ private:
             } else addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
         }
 
-        // LOG-FIX: последние 5 строк Lua-лога под инспектором
         {
             size_t ln = g_luaLog.size();
             int show = ln > 5 ? 5 : (int)ln;
@@ -687,7 +779,6 @@ private:
             UiButton cl; cl.touch.id = "bgclr"; cl.touch.rect = Rect{300+6*84, 560, 80, 40}; cl.text = "CLR"; cl.action = "bg_clear"; cl.color = th.button; editorScene_.ui.push_back(cl);
         }
 
-        // FILES-FIX: прокрутка как у дерева Scene
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
         { UiButton b; b.touch.id="fsu"; b.touch.rect=Rect{248,382,20,22}; b.text="^"; b.action="fscroll_up"; b.color=th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="fsd"; b.touch.rect=Rect{270,382,20,22}; b.text="v"; b.action="fscroll_dn"; b.color=th.button; editorScene_.ui.push_back(b); }
@@ -696,6 +787,7 @@ private:
         if (!fsPath_.empty()) frows.push_back({ "..", "fs_up", th.button });
         std::string abs = project_.rootPath + "/" + fsPath_;
         for (const auto& it : FileBrowser::list(abs)) {
+            if (it.name.rfind("snap_", 0) == 0) continue;   // SNAP-FIX: не показываем снапшоты
             FsRow r;
             r.text = (it.isDir ? "/ " : "  ") + it.name;
             r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + fsPath_ + it.name);
@@ -717,6 +809,68 @@ private:
         }
     }
 
+    // ---------- layout редактора скриптов ----------
+    void buildScriptPanels(Theme& th) {
+        const unsigned GODOT_ORANGE = 0xFF8800FFu;
+        auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
+            auto l = std::make_unique<Label>(); l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y}; editorScene_.root->addChild(std::move(l));
+        };
+        const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
+        addLbl("ScHdr", "SCRIPTS", 10, 40, 18, th.ink);
+        std::vector<FileEntry> ls = FileBrowser::list(project_.rootPath + "/scripts");
+        int li = 0;
+        for (auto& it : ls) {
+            if (it.isDir) continue;
+            if (it.name.size() < 4 || it.name.compare(it.name.size()-4, 4, ".lua") != 0) continue;
+            if (li >= 11) break;
+            UiButton b; b.touch.id = "scf" + std::to_string(li);
+            b.touch.rect = Rect{8, 64 + (float)li * 28, 284, 26};
+            b.text = "  " + it.name; b.action = "scrfile:" + it.name;
+            b.color = (scriptPath_ == "scripts/" + it.name) ? GODOT_ORANGE : th.button;
+            editorScene_.ui.push_back(b); ++li;
+        }
+        { UiButton b; b.touch.id="scnew"; b.touch.rect=Rect{8, 64 + (float)li * 28, 284, 26}; b.text="+ NEW SCRIPT"; b.action="snew"; b.color=th.accent; editorScene_.ui.push_back(b); }
+
+        auto edbg = std::make_unique<Node2D>(); edbg->name = "__scbg"; edbg->shape = "square";
+        edbg->color = 0x101018FF; edbg->w = VW; edbg->h = VH;
+        edbg->position = Vec2{VX0 + VW/2, VY0 + VH/2};
+        editorScene_.root->addChild(std::move(edbg));
+
+        { UiButton b; b.touch.id="ssave"; b.touch.rect=Rect{300,34,80,26}; b.text="SAVE"; b.action="ssave"; b.color=parseColor("#2E7D32"); editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="sclose"; b.touch.rect=Rect{384,34,80,26}; b.text="SCENE"; b.action="tab_scene"; b.color=GODOT_ORANGE; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="scu"; b.touch.rect=Rect{860,70,26,26}; b.text="^"; b.action="scup"; b.color=th.button; editorScene_.ui.push_back(b); }
+        { UiButton b; b.touch.id="scd"; b.touch.rect=Rect{860,100,26,26}; b.text="v"; b.action="scdn"; b.color=th.button; editorScene_.ui.push_back(b); }
+
+        const int LINES = 24; const float LH = 19;
+        int smax = (int)scriptLines_.size() > LINES ? (int)scriptLines_.size() - LINES : 0;
+        if (scriptScroll_ < 0) scriptScroll_ = 0;
+        if (scriptScroll_ > smax) scriptScroll_ = smax;
+        for (int i = scriptScroll_; i < (int)scriptLines_.size() && i < scriptScroll_ + LINES; ++i) {
+            float y = 70 + (float)(i - scriptScroll_) * LH;
+            std::string num = std::to_string(i + 1);
+            while (num.size() < 3) num = " " + num;
+            std::string nmN = "ScN" + std::to_string(i);
+            addLbl(nmN.c_str(), num, 306, y, 14, parseColor("#667089"));
+            std::string txt = sanitizeLine(scriptLines_[i]);
+            if (txt.size() > 68) txt = txt.substr(0, 68);
+            std::string nmC = "ScC" + std::to_string(i);
+            addLbl(nmC.c_str(), txt, 340, y, 14, i == curLine_ ? parseColor("#FFD700") : parseColor("#D8E0F0"));
+        }
+        if (curLine_ >= scriptScroll_ && curLine_ < scriptScroll_ + LINES) {
+            auto cur = std::make_unique<Node2D>(); cur->name = "__sccur"; cur->shape = "square";
+            cur->color = 0x4CC9F0FF; cur->w = 8; cur->h = 16;
+            float cxp = 340 + curCol_ * 7.2f;
+            float cyp = 70 + (float)(curLine_ - scriptScroll_) * LH + 8;
+            cur->position = Vec2{cxp + 4, cyp};
+            editorScene_.root->addChild(std::move(cur));
+        }
+
+        addLbl("ScInfo", scriptPath_.empty() ? "(no script)" : scriptPath_, 900, 64, 16, GODOT_ORANGE);
+        addLbl("ScInfo2", "lines " + std::to_string((int)scriptLines_.size()) + "   cur " + std::to_string(curLine_+1) + ":" + std::to_string(curCol_), 900, 88, 14, th.ink);
+        addLbl("ScInfo3", "keyboard types into this window", 900, 110, 14, th.ink);
+        addLbl("ScInfo4", "SAVE writes file + reloads scripts", 900, 132, 14, th.ink);
+    }
+
     void processEditorActions() {
         if (!editor_) return;
         Node* sn = editor_->selected(); std::string sel = sn ? sn->name : std::string{};
@@ -727,7 +881,24 @@ private:
         bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
-            if (b.action == "fscroll_up") { fsScroll_ -= 3; changed = true; }
+            if (b.action == "tab_scripts") {
+                if (!scriptMode_) {
+                    scriptMode_ = true;
+                    if (scriptPath_.empty()) loadScript("scripts/main.lua");
+                    imeWantOn_ = true;
+                    changed = true;
+                }
+            }
+            else if (b.action == "tab_scene") {
+                if (scriptMode_) { scriptMode_ = false; imeWantOff_ = true; changed = true; }
+            }
+            else if (b.action.rfind("scrfile:", 0) == 0) { loadScript("scripts/" + b.action.substr(8)); imeChanged_ = true; changed = true; }
+            else if (b.action == "ssave") { saveScript(); changed = true; }
+            else if (b.action == "scup") { scriptScroll_ -= 3; imeChanged_ = true; changed = true; }
+            else if (b.action == "scdn") { scriptScroll_ += 3; imeChanged_ = true; changed = true; }
+            else if (b.action == "snew") { pendingName_ = true; pendingKind_ = 2; changed = true; }
+            else if (scriptMode_) { continue; }   // в режиме скриптов остальные действия не работают
+            else if (b.action == "fscroll_up") { fsScroll_ -= 3; changed = true; }
             else if (b.action == "fscroll_dn") { fsScroll_ += 3; changed = true; }
             else if (b.action == "ed_lock") {
                 if (s2) { pushUndo(); s2->locked = !s2->locked; lastMsg_ = s2->locked ? "locked " + sel : "unlocked " + sel; changed = true; }
@@ -870,7 +1041,7 @@ private:
                 else if (!sel.empty()) { editor_->deleteNode(sel); sel.clear(); s2 = nullptr; changed = true; }
             }
             else if (b.action == "ed_save") { editor_->save(project_.rootPath + "/scenes/main.json"); lastMsg_ = "saved"; }
-            else if (b.action == "ed_back") { appMode_ = AppMode::Hub; rebuildHub(); return; }
+            else if (b.action == "ed_back") { if (scriptMode_) { scriptMode_ = false; imeWantOff_ = true; } appMode_ = AppMode::Hub; rebuildHub(); return; }
         }
         if (changed) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
     }
@@ -885,16 +1056,27 @@ private:
         }
         if (!editor_) return;
         if (hn) {
-            pushUndo();
-            if (!nm.empty() && pendingKind_ == 0) {
-                editor_->addNode(pendingType_, nm, 640, 360);
-                if (!pendingShape_.empty()) editor_->setShape(nm, pendingShape_);
-                editor_->select(nm);
-                lastMsg_ = "created " + nm;
-            } else if (!nm.empty() && pendingKind_ == 1) {
-                editor_->addUi(nm, nm, 580, 335, 120, 50, std::string(""), parseColor("#808080"));
-                editor_->selectUi(nm);
-                lastMsg_ = "created button " + nm;
+            if (pendingKind_ == 2) {
+                if (!nm.empty()) {
+                    std::string rel = "scripts/" + nm + ".lua";
+                    std::ofstream f(project_.rootPath + "/" + rel);
+                    f << "-- " << nm << "\nfunction on_start()\nend\n\nfunction on_update(dt)\nend\n";
+                    f.close();
+                    loadScript(rel);
+                    lastMsg_ = "script created: " + rel;
+                }
+            } else {
+                pushUndo();
+                if (!nm.empty() && pendingKind_ == 0) {
+                    editor_->addNode(pendingType_, nm, 640, 360);
+                    if (!pendingShape_.empty()) editor_->setShape(nm, pendingShape_);
+                    editor_->select(nm);
+                    lastMsg_ = "created " + nm;
+                } else if (!nm.empty() && pendingKind_ == 1) {
+                    editor_->addUi(nm, nm, 580, 335, 120, 50, std::string(""), parseColor("#808080"));
+                    editor_->selectUi(nm);
+                    lastMsg_ = "created button " + nm;
+                }
             }
             pendingName_ = false; showCreate_ = false;
         }
@@ -994,18 +1176,15 @@ private:
         if (!n) return;
         Node2D* n2d = dynamic_cast<Node2D*>(const_cast<Node*>(n));
         if (!n2d) { for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, ox, oy, orot, osx, osy, out); return; }
-
         float cr = std::cos(orot), sr = std::sin(orot);
         float wx = ox + (n2d->position.x * osx) * cr - (n2d->position.y * osy) * sr;
         float wy = oy + (n2d->position.x * osx) * sr + (n2d->position.y * osy) * cr;
         float wrot = orot + n2d->rotation;
         float wsx = osx * n2d->scale.x, wsy = osy * n2d->scale.y;
-
         std::string tn = std::string(n2d->typeName());
         float sx = CX + (wx - camX - 640)*S, sy = CY + (wy - camY - 360)*S;
         float ang = wrot * 57.2957795f;
         unsigned colA = withAlpha(n2d->color, n2d->alpha);
-
         if (tn == "Camera2D") {
             if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
                 out += "DRAW rect|" + std::to_string((int)(sx-14)) + "|" + std::to_string((int)(sy-10)) + "|28|20|#FFD700|0\n";
@@ -1046,9 +1225,13 @@ private:
     std::string stepEditor() {
         if (!editor_ || !editor_->scene()) { appMode_ = AppMode::Hub; rebuildHub(); return ""; }
         consumeDialogResults();
+        if (scriptMode_) imeApply();
         gameBackend_.begin(); Renderer gr(gameBackend_); gr.render(editorScene_, &ctx_); std::string out = gameBackend_.str();
-        emitViewport(*editor_->scene(), out);
+        if (!scriptMode_) emitViewport(*editor_->scene(), out);
         processEditorActions();
+        if (scriptMode_ && imeChanged_) { buildEditorPanels(); input_.setUi(&editorScene_.ui); imeChanged_ = false; }
+        if (imeWantOn_)  { out += "IME_ON\n";  imeWantOn_ = false; }
+        if (imeWantOff_) { out += "IME_OFF\n"; imeWantOff_ = false; }
         if (pendingText_ && appMode_ == AppMode::Editor) { out += "REQ_TEXT|" + pendingTextCur_ + "\n"; pendingText_ = false; }
         if (pendingName_ && appMode_ == AppMode::Editor) { out += "REQ_NAME|Object\n"; }
         if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
@@ -1079,6 +1262,10 @@ private:
     std::vector<std::string> undoStack_, redoStack_; int snapCounter_ = 0;
     std::unique_ptr<Node> clipboard_; int clipCounter_ = 0;
     bool dbg_ = false; float fps_ = 0; long long lastMs_ = 0; int nodeCount_ = 0, lastDraws_ = 0;
+    bool scriptMode_ = false; std::string scriptPath_;
+    std::vector<std::string> scriptLines_; int curLine_ = 0, curCol_ = 0, scriptScroll_ = 0;
+    bool imeWantOn_ = false, imeWantOff_ = false, imeChanged_ = false;
+    std::mutex imeMtx_; std::vector<std::string> imeTextQ_; std::vector<int> imeKeyQ_;
     Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     std::mutex dlgMtx_;
