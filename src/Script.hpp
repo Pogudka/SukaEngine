@@ -7,28 +7,76 @@
 #include <cstring>
 #include <cmath>
 
-extern "C" {
-#include <lua.h>
-#include <lauxlib.h>
-#include <lualib.h>
-}
-
 #include "Core.hpp"
 #include "Scene.hpp"
 #include "Resources.hpp"
 #include "Tween.hpp"
 
+// -----------------------------------------------------------------------------
+// Auto-detect Lua headers.
+//
+// If Lua is not available, ScriptSystem becomes a safe stub:
+// - scripts do nothing;
+// - build still works;
+// - Tween engine still works internally.
+//
+// If Lua headers are found, real Lua bindings are enabled.
+// -----------------------------------------------------------------------------
+
+#if defined(SUKA_NO_LUA)
+# define SUKA_HAS_LUA 0
+#elif defined(__has_include)
+# if __has_include(<lua.h>) && __has_include(<lauxlib.h>) && __has_include(<lualib.h>)
+#  define SUKA_HAS_LUA 1
+#  define SUKA_LUA_INCLUDE_SYSTEM 1
+# elif __has_include("lua/lua.h") && __has_include("lua/lauxlib.h") && __has_include("lua/lualib.h")
+#  define SUKA_HAS_LUA 1
+#  define SUKA_LUA_INCLUDE_SUBDIR 1
+# elif __has_include("../third_party/lua/lua.h") &&
+       __has_include("../third_party/lua/lauxlib.h") &&
+       __has_include("../third_party/lua/lualib.h")
+#  define SUKA_HAS_LUA 1
+#  define SUKA_LUA_INCLUDE_THIRD_PARTY 1
+# else
+#  define SUKA_HAS_LUA 0
+# endif
+#else
+# define SUKA_HAS_LUA 0
+#endif
+
+#if SUKA_HAS_LUA
+extern "C" {
+# if defined(SUKA_LUA_INCLUDE_SYSTEM)
+#  include <lua.h>
+#  include <lauxlib.h>
+#  include <lualib.h>
+# elif defined(SUKA_LUA_INCLUDE_SUBDIR)
+#  include "lua/lua.h"
+#  include "lua/lauxlib.h"
+#  include "lua/lualib.h"
+# elif defined(SUKA_LUA_INCLUDE_THIRD_PARTY)
+#  include "../third_party/lua/lua.h"
+#  include "../third_party/lua/lauxlib.h"
+#  include "../third_party/lua/lualib.h"
+# endif
+}
+#endif
+
 namespace suka {
 
 inline std::vector<std::string> g_luaLog;
 
+#if SUKA_HAS_LUA
+
 inline Context* g_scriptCtx = nullptr;
 inline Scene* g_scriptScene = nullptr;
 inline SceneManager* g_scriptMgr = nullptr;
-inline std::map<std::string,double>* g_scriptVars = nullptr;
+inline std::map<std::string, double>* g_scriptVars = nullptr;
 
 static Node2D* scriptFindNode(const char* name) {
-    if (!g_scriptScene || !g_scriptScene->root || !name) return nullptr;
+    if (!g_scriptScene || !g_scriptScene->root || !name) {
+        return nullptr;
+    }
 
     Node* n = g_scriptScene->root->findNode(name);
     return dynamic_cast<Node2D*>(n);
@@ -42,9 +90,11 @@ static int lua_print(lua_State* L) {
         size_t len = 0;
         const char* s = luaL_tolstring(L, i, &len);
 
-        if (i > 1) line += "\t";
-        line += s;
+        if (i > 1) {
+            line += "\t";
+        }
 
+        line += s;
         lua_pop(L, 1);
     }
 
@@ -62,6 +112,7 @@ static int lua_get_var(lua_State* L) {
 
     if (g_scriptVars) {
         auto it = g_scriptVars->find(name);
+
         if (it != g_scriptVars->end()) {
             lua_pushnumber(L, it->second);
             return 1;
@@ -76,7 +127,9 @@ static int lua_set_var(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     double v = luaL_checknumber(L, 2);
 
-    if (g_scriptVars) (*g_scriptVars)[name] = v;
+    if (g_scriptVars) {
+        (*g_scriptVars)[name] = v;
+    }
 
     return 0;
 }
@@ -85,7 +138,9 @@ static int lua_add_var(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     double v = luaL_checknumber(L, 2);
 
-    if (g_scriptVars) (*g_scriptVars)[name] += v;
+    if (g_scriptVars) {
+        (*g_scriptVars)[name] += v;
+    }
 
     return 0;
 }
@@ -98,18 +153,26 @@ static int lua_get_score(lua_State* L) {
 static int lua_add_score(lua_State* L) {
     int v = (int)luaL_checkinteger(L, 1);
 
-    if (g_scriptCtx) g_scriptCtx->score += v;
+    if (g_scriptCtx) {
+        g_scriptCtx->score += v;
+    }
 
     return 0;
 }
 
 static int lua_coin_collected(lua_State* L) {
-    if (g_scriptCtx) g_scriptCtx->coinCollectedThisFrame = true;
+    if (g_scriptCtx) {
+        g_scriptCtx->coinCollectedThisFrame = true;
+    }
+
     return 0;
 }
 
 static int lua_jump_pressed(lua_State* L) {
-    if (g_scriptCtx) g_scriptCtx->jumpPressedThisFrame = true;
+    if (g_scriptCtx) {
+        g_scriptCtx->jumpPressedThisFrame = true;
+    }
+
     return 0;
 }
 
@@ -130,7 +193,9 @@ static int lua_get_node_x(lua_State* L) {
 static int lua_set_node_x(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
 
-    if (n) n->position.x = (float)luaL_checknumber(L, 2);
+    if (n) {
+        n->position.x = (float)luaL_checknumber(L, 2);
+    }
 
     return 0;
 }
@@ -145,7 +210,9 @@ static int lua_get_node_y(lua_State* L) {
 static int lua_set_node_y(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
 
-    if (n) n->position.y = (float)luaL_checknumber(L, 2);
+    if (n) {
+        n->position.y = (float)luaL_checknumber(L, 2);
+    }
 
     return 0;
 }
@@ -160,7 +227,9 @@ static int lua_get_node_rotation(lua_State* L) {
 static int lua_set_node_rotation(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
 
-    if (n) n->rotation = (float)(luaL_checknumber(L, 2) * TWEEN_PI / 180.0);
+    if (n) {
+        n->rotation = (float)(luaL_checknumber(L, 2) * TWEEN_PI / 180.0);
+    }
 
     return 0;
 }
@@ -194,7 +263,9 @@ static int lua_get_node_alpha(lua_State* L) {
 static int lua_set_node_alpha(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
 
-    if (n) n->alpha = (float)luaL_checknumber(L, 2);
+    if (n) {
+        n->alpha = (float)luaL_checknumber(L, 2);
+    }
 
     return 0;
 }
@@ -209,7 +280,9 @@ static int lua_get_node_width(lua_State* L) {
 static int lua_set_node_width(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
 
-    if (n) n->w = (float)luaL_checknumber(L, 2);
+    if (n) {
+        n->w = (float)luaL_checknumber(L, 2);
+    }
 
     return 0;
 }
@@ -224,7 +297,9 @@ static int lua_get_node_height(lua_State* L) {
 static int lua_set_node_height(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
 
-    if (n) n->h = (float)luaL_checknumber(L, 2);
+    if (n) {
+        n->h = (float)luaL_checknumber(L, 2);
+    }
 
     return 0;
 }
@@ -232,7 +307,9 @@ static int lua_set_node_height(lua_State* L) {
 static int lua_change_scene(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
 
-    if (g_scriptMgr) g_scriptMgr->requestChange(path, false);
+    if (g_scriptMgr) {
+        g_scriptMgr->requestChange(path, false);
+    }
 
     return 0;
 }
@@ -240,7 +317,9 @@ static int lua_change_scene(lua_State* L) {
 static int lua_restart_scene(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
 
-    if (g_scriptMgr) g_scriptMgr->requestChange(path, true);
+    if (g_scriptMgr) {
+        g_scriptMgr->requestChange(path, true);
+    }
 
     return 0;
 }
@@ -259,10 +338,21 @@ static int lua_tween_to(lua_State* L) {
 
     int top = lua_gettop(L);
 
-    if (top >= 5 && lua_isstring(L, 5)) easing = lua_tostring(L, 5);
-    if (top >= 6) loop = lua_toboolean(L, 6) != 0;
-    if (top >= 7) yoyo = lua_toboolean(L, 7) != 0;
-    if (top >= 8 && lua_isstring(L, 8)) onComplete = lua_tostring(L, 8);
+    if (top >= 5 && lua_isstring(L, 5)) {
+        easing = lua_tostring(L, 5);
+    }
+
+    if (top >= 6) {
+        loop = lua_toboolean(L, 6) != 0;
+    }
+
+    if (top >= 7) {
+        yoyo = lua_toboolean(L, 7) != 0;
+    }
+
+    if (top >= 8 && lua_isstring(L, 8)) {
+        onComplete = lua_tostring(L, 8);
+    }
 
     int id = g_tweens.add(
         node ? node : "",
@@ -307,7 +397,9 @@ static int lua_tween_is_active(lua_State* L) {
 class ScriptSystem {
 public:
     ~ScriptSystem() {
-        if (L_) lua_close(L_);
+        if (L_) {
+            lua_close(L_);
+        }
     }
 
     void load(const std::string& root) {
@@ -326,8 +418,14 @@ public:
         std::string combined;
 
         for (auto& e : entries) {
-            if (e.isDir) continue;
-            if (e.name.size() < 4 || e.name.compare(e.name.size() - 4, 4, ".lua") != 0) continue;
+            if (e.isDir) {
+                continue;
+            }
+
+            if (e.name.size() < 4 ||
+                e.name.compare(e.name.size() - 4, 4, ".lua") != 0) {
+                continue;
+            }
 
             std::string path = dir + "/" + e.name;
 
@@ -340,7 +438,9 @@ public:
             if (luaL_dostring(L_, combined.c_str()) != LUA_OK) {
                 const char* err = lua_tostring(L_, -1);
 
-                g_luaLog.push_back(std::string("lua load error: ") + (err ? err : "?"));
+                g_luaLog.push_back(
+                    std::string("lua load error: ") + (err ? err : "?")
+                );
 
                 lua_pop(L_, 1);
             }
@@ -354,9 +454,11 @@ public:
         Context& ctx,
         float dt,
         SceneManager& mgr,
-        std::map<std::string,double>& vars
+        std::map<std::string, double>& vars
     ) {
-        if (!L_) return;
+        if (!L_) {
+            return;
+        }
 
         g_scriptCtx = &ctx;
         g_scriptScene = &scene;
@@ -375,10 +477,12 @@ public:
         const std::string& fn,
         Context& ctx,
         SceneManager& mgr,
-        std::map<std::string,double>& vars,
+        std::map<std::string, double>& vars,
         Scene* scene = nullptr
     ) {
-        if (!L_ || fn.empty()) return;
+        if (!L_ || fn.empty()) {
+            return;
+        }
 
         g_scriptCtx = &ctx;
         g_scriptScene = scene;
@@ -443,7 +547,9 @@ private:
             if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
                 const char* err = lua_tostring(L_, -1);
 
-                g_luaLog.push_back(fn + " error: " + (err ? err : "?"));
+                g_luaLog.push_back(
+                    fn + " error: " + (err ? err : "?")
+                );
 
                 lua_pop(L_, 1);
             }
@@ -461,7 +567,9 @@ private:
             if (lua_pcall(L_, 1, 0, 0) != LUA_OK) {
                 const char* err = lua_tostring(L_, -1);
 
-                g_luaLog.push_back(fn + " error: " + (err ? err : "?"));
+                g_luaLog.push_back(
+                    fn + " error: " + (err ? err : "?")
+                );
 
                 lua_pop(L_, 1);
             }
@@ -473,5 +581,32 @@ private:
     lua_State* L_ = nullptr;
     bool started_ = false;
 };
+
+#else
+
+// Safe no-Lua fallback.
+// Build works, but .lua scripts are ignored.
+class ScriptSystem {
+public:
+    void load(const std::string&) {}
+
+    void update(
+        Scene&,
+        Context&,
+        float,
+        SceneManager&,
+        std::map<std::string, double>&
+    ) {}
+
+    void callGlobal(
+        const std::string&,
+        Context&,
+        SceneManager&,
+        std::map<std::string, double>&,
+        Scene* = nullptr
+    ) {}
+};
+
+#endif
 
 } // namespace suka
