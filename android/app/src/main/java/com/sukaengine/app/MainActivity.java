@@ -160,7 +160,6 @@ public class MainActivity extends Activity {
             if (f.exists()) typeface = Typeface.createFromFile(f);
         }
 
-        // COMPOSE-FIX: клавиатура шлёт набор по мере ввода, а не пачкой по пробелу
         @Override public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
             outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE;
             outAttrs.imeOptions |= EditorInfo.IME_FLAG_NO_EXTRACT_UI;
@@ -169,6 +168,7 @@ public class MainActivity extends Activity {
                     nativeScriptText(text.toString());
                     return true;
                 }
+                // COMPOSE-FIX: живой набор без ожидания пробела
                 @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
                     nativeScriptCompose(text.toString());
                     return true;
@@ -342,24 +342,27 @@ public class MainActivity extends Activity {
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     int fill = Color.parseColor(p[6]);
+                    int fa = Color.alpha(fill);   // BTN-ALPHA
                     float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
                     String tex = p.length > 8 ? p[8] : "";
 
                     c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang);
                     if (!tex.isEmpty()) {
                         Bitmap bm = loadBitmap(tex);
-                        if (bm != null) { c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint); c.restore(); return; }
+                        if (bm != null) { paint.setAlpha(fa); c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint); c.restore(); paint.setAlpha(255); return; }
                     }
                     paint.setColor(fill);
                     c.drawRoundRect(new RectF(-w/2, -h/2, w/2, h/2), 12f, 12f, paint);
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
                     paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
+                    paint.setAlpha(fa);   // BTN-ALPHA: текст кнопки тоже полупрозрачный
                     paint.setTextSize(Math.min(30f, h * 0.45f));
                     paint.setTextAlign(Paint.Align.CENTER);
                     if (typeface != null) paint.setTypeface(typeface);
                     c.drawText(p[1], 0, paint.getTextSize() * 0.35f, paint);
                     paint.setTextAlign(Paint.Align.LEFT);
                     c.restore();
+                    paint.setAlpha(255);
                 }
                 else if (p[0].equals("tex")) {
                     Bitmap bm = loadBitmap(p[1]);
@@ -396,4 +399,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                    }
+        }
