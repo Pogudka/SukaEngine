@@ -94,7 +94,6 @@ public:
         if (appMode_ == AppMode::Editor && !showCreate_ && !showBg_) {
             Scene* es = editor_ ? editor_->scene() : nullptr;
 
-            // GROUP-FIX: выбор родителя обрабатывается ПЕРВЫМ, независимо от типа выделения
             if (t.action == RawTouch::Action::Down && pickParent_ && !pickChild_.empty() && es && es->root) {
                 float wx, wy; unproj(*es, x, y, wx, wy);
                 std::string hit = hitTest(es->root.get(), wx, wy);
@@ -103,9 +102,7 @@ public:
                     lastMsg_ = "attached " + pickChild_ + " -> " + hit;
                     if (pickChild_.rfind("UI:", 0) == 0) editor_->selectUi(pickChild_.substr(3));
                     else editor_->select(pickChild_);
-                } else {
-                    lastMsg_ = hit.empty() ? "no target under tap" : "cannot attach to self";
-                }
+                } else lastMsg_ = hit.empty() ? "no target under tap" : "cannot attach to self";
                 pickParent_ = false; pickChild_.clear();
                 buildEditorPanels(); input_.setUi(&editorScene_.ui);
                 return;
@@ -115,15 +112,20 @@ public:
                         (editor_->selected() ? dynamic_cast<Node2D*>(editor_->selected()) : nullptr) : nullptr;
 
             if (g && es) {
-                float scx, scy; proj(*es, g->position.x, g->position.y, scx, scy);
+                // WORLD-FIX: гизмо рисуется/хватается по МИРОВОЙ позиции узла
+                float gwx, gwy, gwr, gsx, gsy;
+                bool ok = nodeWorld(es, g->name, gwx, gwy, gwr, gsx, gsy);
+                if (!ok) { gwx = g->position.x; gwy = g->position.y; gsx = gsy = 1; }
+                float scx, scy; proj(*es, gwx, gwy, scx, scy);
+
                 if (t.action == RawTouch::Action::Down) {
                     float dx = x - scx, dy = y - scy;
                     float dist = std::sqrt(dx*dx + dy*dy);
                     if (manip_ == Manip::Rotate) {
                         if (std::fabs(dist - 70.0f) < 26.0f) { gizmoRot_ = true; gizmoStartAngle_ = std::atan2(dy, dx); gizmoStartRot_ = g->rotation; return; }
                     } else if (manip_ == Manip::Scale) {
-                        float hw = (g->w * g->scale.x) * 0.46875f / 2;
-                        float hh = (g->h * g->scale.y) * 0.46875f / 2;
+                        float hw = (g->w * gsx) * 0.46875f / 2;
+                        float hh = (g->h * gsy) * 0.46875f / 2;
                         if (std::fabs(x - (scx + hw + 24)) < 28 && std::fabs(dy) < 28) { gizmoSclX_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSX_ = g->scale.x; return; }
                         if (std::fabs(y - (scy + hh + 24)) < 28 && std::fabs(dx) < 28) { gizmoSclY_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSY_ = g->scale.y; return; }
                     } else {
@@ -209,6 +211,26 @@ private:
             if (wx >= b.touch.rect.x && wx <= b.touch.rect.x + b.touch.rect.w &&
                 wy >= b.touch.rect.y && wy <= b.touch.rect.y + b.touch.rect.h) return b.touch.id;
         return "";
+    }
+
+    // ---- мировая трансформация (позиция/поворот/масштаб с учётом родителей) ----
+    static bool nodeWorldRec(Node* n, const std::string& name,
+                             float ox, float oy, float orot, float osx, float osy,
+                             float& wx, float& wy, float& wr, float& wsx, float& wsy) {
+        float cr = std::cos(orot), sr = std::sin(orot);
+        float cx = ox + (n->position.x * osx) * cr - (n->position.y * osy) * sr;
+        float cy = oy + (n->position.x * osx) * sr + (n->position.y * osy) * cr;
+        float crot = orot + n->rotation;
+        float csx = osx * n->scale.x, csy = osy * n->scale.y;
+        if (n->name == name) { wx = cx; wy = cy; wr = crot; wsx = csx; wsy = csy; return true; }
+        for (auto& ch : n->getChildren())
+            if (nodeWorldRec(ch.get(), name, cx, cy, crot, csx, csy, wx, wy, wr, wsx, wsy)) return true;
+        return false;
+    }
+    static bool nodeWorld(Scene* sc, const std::string& name,
+                          float& wx, float& wy, float& wr, float& wsx, float& wsy) {
+        if (!sc || !sc->root) return false;
+        return nodeWorldRec(sc->root.get(), name, 0, 0, 0, 1, 1, wx, wy, wr, wsx, wsy);
     }
 
     void parentXf(Node* n, const std::string& name, float cx, float cy, float sx, float sy,
@@ -368,11 +390,6 @@ private:
     }
 
     // ---------------- EDITOR ----------------
-    struct HierRow { int depth; std::string name; std::string type; };
-    void collectHier(const Node& n, int depth, std::vector<HierRow>& out) {
-        out.push_back({ depth, n.name, std::string(n.typeName()) });
-        for (const auto& ch : n.getChildren()) collectHier(*ch, depth + 1, out);
-    }
     std::string hitTest(const Node* n, float wx, float wy) {
         if (!n) return "";
         std::string bestBox, bestNear; float bestDist = 1e9f;
@@ -423,6 +440,41 @@ private:
 
     static std::string dash(int depth) { return depth > 0 ? std::string(depth, '-') + " " : ""; }
 
+    bool hasUiGroup(Scene* esc, const std::string& name) {
+        if (!esc) return false;
+        for (auto& ub : esc->ui) if (ub.group == name) return true;
+        return false;
+    }
+
+    struct EdRow { std::string text, action; bool sel; bool hasKids; bool open; std::string name; };
+
+    // FOLD-FIX: дерево со сворачиванием; дети рисуются только когда группа открыта
+    void buildTreeRows(Scene* esc, Node* n, int depth,
+                       const std::string& sel, const std::string& selUi,
+                       std::vector<EdRow>& rows) {
+        for (auto& ch : n->getChildren()) {
+            std::string nm = ch->name;
+            bool kids = ch->childCount() > 0 || hasUiGroup(esc, nm);
+            bool open = collapsed_.count(nm) == 0;
+            EdRow r;
+            r.text = dash(depth) + (kids ? (open ? "[-] " : "[+] ") : "    ") + nm + "   " + std::string(ch->typeName());
+            r.action = "ed_select:" + nm;
+            r.sel = (sel == nm); r.hasKids = kids; r.open = open; r.name = nm;
+            rows.push_back(r);
+            if (kids && open) {
+                buildTreeRows(esc, ch.get(), depth + 1, sel, selUi, rows);
+                for (auto& ub : esc->ui) {
+                    if (ub.group == nm) {
+                        EdRow br; br.text = dash(depth + 1) + "    " + ub.touch.id + "   Button";
+                        br.action = "ed_selectui:" + ub.touch.id; br.sel = (selUi == ub.touch.id);
+                        br.hasKids = false; br.open = false; br.name = "";
+                        rows.push_back(br);
+                    }
+                }
+            }
+        }
+    }
+
     void buildEditorPanels() {
         Theme& th = currentTheme(); const unsigned GODOT_ORANGE = 0xFF8800FFu;
         editorScene_ = Scene(); editorScene_.name = "Editor"; editorScene_.root = std::make_unique<Node>(); editorScene_.root->name = "EdRoot";
@@ -443,28 +495,20 @@ private:
             editorScene_.ui.push_back(b);
         }
 
-        std::vector<HierRow> hier;
-        if (editor_ && editor_->scene() && editor_->scene()->root) collectHier(*editor_->scene()->root, 0, hier);
-        struct Row { std::string text, action; bool sel; };
-        std::vector<Row> rows;
+        Scene* esc = editor_ ? editor_->scene() : nullptr;
         Node* selNode = editor_ ? editor_->selected() : nullptr; std::string sel = selNode ? selNode->name : std::string{};
         std::string selUi = editor_ ? editor_->selectedUi() : std::string{};
-        Scene* esc = editor_ ? editor_->scene() : nullptr;
-        for (auto& hr : hier) {
-            Row r; r.text = dash(hr.depth) + hr.name + "   " + hr.type;
-            r.action = "ed_select:" + hr.name; r.sel = (sel == hr.name); rows.push_back(r);
-            if (esc) for (auto& ub : esc->ui) {
-                if (ub.group == hr.name) {
-                    Row br; br.text = dash(hr.depth + 1) + ub.touch.id + "   Button";
-                    br.action = "ed_selectui:" + ub.touch.id; br.sel = (selUi == ub.touch.id); rows.push_back(br);
-                }
-            }
-        }
+
+        std::vector<EdRow> rows;
+        if (esc && esc->root) buildTreeRows(esc, esc->root.get(), 0, sel, selUi, rows);
         if (esc) for (auto& ub : esc->ui) {
             if (!ub.group.empty()) continue;
-            Row r; r.text = "  " + ub.touch.id + "   Button";
-            r.action = "ed_selectui:" + ub.touch.id; r.sel = (selUi == ub.touch.id); rows.push_back(r);
+            EdRow r; r.text = "    " + ub.touch.id + "   Button";
+            r.action = "ed_selectui:" + ub.touch.id; r.sel = (selUi == ub.touch.id);
+            r.hasKids = false; r.open = false; r.name = "";
+            rows.push_back(r);
         }
+
         const int VIS = 10;
         int maxScroll = (int)rows.size() > VIS ? (int)rows.size() - VIS : 0;
         if (hierScroll_ < 0) hierScroll_ = 0;
@@ -472,8 +516,17 @@ private:
         { UiButton b; b.touch.id="hup"; b.touch.rect=Rect{248,38,20,22}; b.text="^"; b.action="hier_up"; b.color=th.button; editorScene_.ui.push_back(b); }
         { UiButton b; b.touch.id="hdn"; b.touch.rect=Rect{270,38,20,22}; b.text="v"; b.action="hier_dn"; b.color=th.button; editorScene_.ui.push_back(b); }
         for (int i = hierScroll_; i < (int)rows.size() && i < hierScroll_ + VIS; ++i) {
+            float y = 64 + (float)(i - hierScroll_) * 30;
+            if (rows[i].hasKids) {
+                UiButton f; f.touch.id = "fold" + std::to_string(i);
+                f.touch.rect = Rect{8, y, 26, 28};
+                f.text = rows[i].open ? "-" : "+";
+                f.action = "fold:" + rows[i].name;
+                f.color = th.accent;
+                editorScene_.ui.push_back(f);
+            }
             UiButton b; b.touch.id = "h" + std::to_string(i);
-            b.touch.rect = Rect{8, 64 + (float)(i - hierScroll_) * 30, 284, 28};
+            b.touch.rect = Rect{rows[i].hasKids ? 36 : 8, y, rows[i].hasKids ? 256 : 284, 28};
             b.text = rows[i].text; b.action = rows[i].action;
             b.color = rows[i].sel ? GODOT_ORANGE : th.button;
             editorScene_.ui.push_back(b);
@@ -591,7 +644,12 @@ private:
         bool changed = false;
         for (auto& b : editorScene_.ui) {
             if (!b.touch.pressEdge || b.action.empty()) continue;
-            if (b.action == "hier_up") { hierScroll_ -= 3; changed = true; }
+            if (b.action.rfind("fold:", 0) == 0) {
+                std::string nm = b.action.substr(5);
+                if (collapsed_.count(nm)) collapsed_.erase(nm); else collapsed_.insert(nm);
+                changed = true;
+            }
+            else if (b.action == "hier_up") { hierScroll_ -= 3; changed = true; }
             else if (b.action == "hier_dn") { hierScroll_ += 3; changed = true; }
             else if (b.action == "fs_up") {
                 std::string tmp = fsPath_;
@@ -768,7 +826,7 @@ private:
         out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" + std::to_string((int)VH) + "|#23232B|0\n";
         for (int gx = 0; gx <= 1280; gx += 64) { float px = CX + ((float)gx - 640 - sc.camX)*S; if (px < VX0 || px > VX0+VW) continue; out += "DRAW rect|" + std::to_string((int)px) + "|" + std::to_string((int)VY0) + "|1|" + std::to_string((int)VH) + "|#33333D|0\n"; }
         for (int gy = 0; gy <= 720; gy += 64) { float py = CY + ((float)gy - 360 - sc.camY)*S; if (py < VY0 || py > VY0+VH) continue; out += "DRAW rect|" + std::to_string((int)VX0) + "|" + std::to_string((int)py) + "|" + std::to_string((int)VW) + "|1|#33333D|0\n"; }
-        emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, sc.camX, sc.camY, out);
+        emitNodePreview(sc.root.get(), CX, CY, S, VX0, VY0, VW, VH, sc.camX, sc.camY, 0, 0, 0, 1, 1, out);
         for (auto& b : sc.ui) {
             float bcx = CX + (b.touch.rect.x + b.touch.rect.w/2 - sc.camX - 640)*S;
             float bcy = CY + (b.touch.rect.y + b.touch.rect.h/2 - sc.camY - 360)*S;
@@ -779,8 +837,11 @@ private:
         Node* selN = editor_ ? editor_->selected() : nullptr;
         Node2D* g = (selN && (editor_->selectedUi().empty())) ? dynamic_cast<Node2D*>(selN) : nullptr;
         if (g) {
-            float cx = CX + (g->position.x - sc.camX - 640)*S;
-            float cy = CY + (g->position.y - sc.camY - 360)*S;
+            float gwx, gwy, gwr, gsx, gsy;
+            Scene* esc = const_cast<Scene*>(&sc);
+            if (!nodeWorld(esc, g->name, gwx, gwy, gwr, gsx, gsy)) { gwx = g->position.x; gwy = g->position.y; gsx = gsy = 1; }
+            float cx = CX + (gwx - sc.camX - 640)*S;
+            float cy = CY + (gwy - sc.camY - 360)*S;
             if (manip_ == Manip::Move) {
                 out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-2)) + "|56|4|#D62828|0\n";
                 out += "DRAW shape|triangle|" + std::to_string((int)(cx+50)) + "|" + std::to_string((int)(cy-8)) + "|16|14|#D62828|90\n";
@@ -793,7 +854,7 @@ private:
                     out += "DRAW rect|" + std::to_string((int)(px-3)) + "|" + std::to_string((int)(py-3)) + "|6|6|#FF8800|0\n";
                 }
             } else {
-                float hw = (g->w * g->scale.x)*S/2, hh = (g->h * g->scale.y)*S/2;
+                float hw = (g->w * gsx)*S/2, hh = (g->h * gsy)*S/2;
                 out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy-1)) + "|" + std::to_string((int)(hw+24)) + "|2|#4CC9F0|0\n";
                 out += "DRAW rect|" + std::to_string((int)(cx+hw+16)) + "|" + std::to_string((int)(cy-8)) + "|16|16|#4CC9F0|0\n";
                 out += "DRAW rect|" + std::to_string((int)(cx-1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh+24)) + "|#4CC9F0|0\n";
@@ -804,38 +865,45 @@ private:
             out += "DRAW rect|300|64|592|26|#FF8800|0\n";
             out += "DRAW text|PARENT FOR: " + pickChild_ + "  ->  tap object or row|306|68|16|#1A1A2E|0\n";
         }
-        if (!lastMsg_.empty()) {
-            out += "DRAW text|" + lastMsg_ + "|306|580|14|#FFD700|0\n";
-        }
+        if (!lastMsg_.empty()) out += "DRAW text|" + lastMsg_ + "|306|580|14|#FFD700|0\n";
     }
-    void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH, float camX, float camY, std::string& out) {
+
+    // WORLD-FIX: превью считает мировую трансформацию (дети едут/крутятся/масштабируются с родителем)
+    void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH,
+                         float camX, float camY, float ox, float oy, float orot, float osx, float osy,
+                         std::string& out) {
         if (!n) return;
+        float cr = std::cos(orot), sr = std::sin(orot);
+        float wx = ox + (n->position.x * osx) * cr - (n->position.y * osy) * sr;
+        float wy = oy + (n->position.x * osx) * sr + (n->position.y * osy) * cr;
+        float wrot = orot + n->rotation;
+        float wsx = osx * n->scale.x, wsy = osy * n->scale.y;
+
         std::string tn = std::string(n->typeName());
+        float sx = CX + (wx - camX - 640)*S, sy = CY + (wy - camY - 360)*S;
+        float ang = wrot * 57.2957795f;
+
         if (tn == "Camera2D") {
-            const Node2D* d = static_cast<const Node2D*>(n);
-            float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;
-            if (cx >= VX0 && cx <= VX0+VW && cy >= VY0 && cy <= VY0+VH) {
-                out += "DRAW rect|" + std::to_string((int)(cx-14)) + "|" + std::to_string((int)(cy-10)) + "|28|20|#FFD700|0\n";
-                out += "DRAW text|CAM|" + std::to_string((int)(cx-12)) + "|" + std::to_string((int)(cy+12)) + "|12|#FFD700|0\n";
+            if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
+                out += "DRAW rect|" + std::to_string((int)(sx-14)) + "|" + std::to_string((int)(sy-10)) + "|28|20|#FFD700|0\n";
+                out += "DRAW text|CAM|" + std::to_string((int)(sx-12)) + "|" + std::to_string((int)(sy+12)) + "|12|#FFD700|0\n";
             }
         }
         else if (tn != "Node") {
             const Node2D* d = static_cast<const Node2D*>(n);
-            float ang = d->rotation * 57.2957795f;
-            float sw = d->w * d->scale.x, sh = d->h * d->scale.y;
-            float cx = CX + (d->position.x - camX - 640)*S, cy = CY + (d->position.y - camY - 360)*S;
-            float w = sw*S, h = sh*S, rx = cx - w/2, ry = cy - h/2;
+            float w = d->w * wsx * S, h = d->h * wsy * S;
+            float rx = sx - w/2, ry = sy - h/2;
             if (!d->hasAppearance() && tn == "Node2D") {
-                if (cx >= VX0 && cx <= VX0+VW && cy >= VY0 && cy <= VY0+VH) {
-                    out += "DRAW rect|" + std::to_string((int)(cx-10)) + "|" + std::to_string((int)(cy-2)) + "|20|4|#808080|0\n";
-                    out += "DRAW rect|" + std::to_string((int)(cx-2)) + "|" + std::to_string((int)(cy-10)) + "|4|20|#808080|0\n";
-                    out += "DRAW text|" + d->name + "|" + std::to_string((int)(cx+12)) + "|" + std::to_string((int)(cy+4)) + "|12|#808080|0\n";
+                if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
+                    out += "DRAW rect|" + std::to_string((int)(sx-10)) + "|" + std::to_string((int)(sy-2)) + "|20|4|#808080|0\n";
+                    out += "DRAW rect|" + std::to_string((int)(sx-2)) + "|" + std::to_string((int)(sy-10)) + "|4|20|#808080|0\n";
+                    out += "DRAW text|" + d->name + "|" + std::to_string((int)(sx+12)) + "|" + std::to_string((int)(sy+4)) + "|12|#808080|0\n";
                 }
             }
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
                 if (tn == "Label") {
-                    int fs = (int)(14 * ((d->scale.x + d->scale.y) * 0.5f));
+                    int fs = (int)(d->fontSize * ((wsx + wsy) * 0.5f) * S);
                     if (fs < 6) fs = 6;
                     out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
                 }
@@ -843,7 +911,8 @@ private:
                 else if (d->hasAppearance()) out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
             }
         }
-        for (const auto& ch : n->getChildren()) emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, out);
+        for (const auto& ch : n->getChildren())
+            emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, wx, wy, wrot, wsx, wsy, out);
     }
 
     std::string stepEditor() {
@@ -876,6 +945,7 @@ private:
     float pinchMX_ = 0, pinchMY_ = 0;
     float dragOX_ = 0, dragOY_ = 0, dragPSX_ = 1, dragPSY_ = 1;
     int hierScroll_ = 0;
+    std::set<std::string> collapsed_;
     Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     std::mutex dlgMtx_;
