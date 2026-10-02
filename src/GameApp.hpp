@@ -55,26 +55,34 @@ public:
     void submitAction(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); actionRes_ = t; hasAction_ = true; }
     void submitNumber(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); numRes_ = t;    hasNum_ = true; }
 
+    // ZOOM-PAN SPLIT: зум = расхождение пальцев, пан = смещение середины,
+    // оба привязаны к якорю (мировая точка под пальцами в момент касания).
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
         if (appMode_ != AppMode::Editor || showCreate_ || showBg_) return;
         Scene* es = editor_ ? editor_->scene() : nullptr;
         if (!es) return;
         float mx = (x0 + x1) / 2.0f, my = (y0 + y1) / 2.0f;
         float dist = std::sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
-        if (phase == 1) { pinching_ = true; pinchMX_ = mx; pinchMY_ = my; pinchDist0_ = dist; return; }
+        if (phase == 1) {
+            pinching_ = true;
+            pinchDist0_ = dist;
+            pinchZoom0_ = edZoom_;
+            float S = 0.46875f * edZoom_;
+            pinchAX_ = 640 + es->camX + (mx - 596) / S;
+            pinchAY_ = 360 + es->camY + (my - 310) / S;
+            return;
+        }
         if (phase == 3) { pinching_ = false; return; }
         if (!pinching_) return;
-        // ZOOM-FIX: расхождение пальцев = зум, чистый сдвиг = панорама
-        if (pinchDist0_ > 4 && dist > 4 && std::fabs(dist - pinchDist0_) > 1.5f) {
-            float z = edZoom_ * (dist / pinchDist0_);
+        float z = pinchZoom0_;
+        if (pinchDist0_ > 4 && dist > 4) {
+            z = pinchZoom0_ * (dist / pinchDist0_);
             if (z < 0.4f) z = 0.4f; if (z > 3.0f) z = 3.0f;
-            edZoom_ = z; pinchDist0_ = dist;
-        } else {
-            float S = 0.46875f * edZoom_;
-            es->camX += (mx - pinchMX_) / S;
-            es->camY += (my - pinchMY_) / S;
         }
-        pinchMX_ = mx; pinchMY_ = my;
+        float S = 0.46875f * z;
+        es->camX = pinchAX_ - 640 - (mx - 596) / S;
+        es->camY = pinchAY_ - 360 - (my - 310) / S;
+        edZoom_ = z;
     }
 
     void feedTouch(int action, float x, float y) {
@@ -293,7 +301,6 @@ private:
         if (up) root->addChild(std::move(up));
     }
 
-    // UNDO-FIX: снапшоты сцены во временные json
     void pushUndo() {
         if (!editor_ || !editor_->scene()) return;
         std::string rel = "snap_" + std::to_string(snapCounter_++) + ".json";
@@ -980,7 +987,6 @@ private:
             }
         }
         else if (tn == "Light2D") {
-            // LIGHT-PREVIEW-FIX: свет виден в редакторе
             Light2D* li = static_cast<Light2D*>(n2d);
             float r = li->radius * ((wsx + wsy) * 0.5f) * S;
             if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH)
@@ -1039,7 +1045,7 @@ private:
     std::string pendingNodeAction_;
     std::string lastMsg_;
     float edZoom_ = 1.0f;
-    float pinchMX_ = 0, pinchMY_ = 0, pinchDist0_ = 0;
+    float pinchDist0_ = 0, pinchZoom0_ = 1.0f, pinchAX_ = 0, pinchAY_ = 0;
     float dragOX_ = 0, dragOY_ = 0, dragPSX_ = 1, dragPSY_ = 1;
     int hierScroll_ = 0;
     std::set<std::string> collapsed_;
