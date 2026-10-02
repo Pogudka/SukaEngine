@@ -66,13 +66,11 @@ private:
             s += ", \"scale_x\": " + std::to_string(n2->scale.x);
             s += ", \"scale_y\": " + std::to_string(n2->scale.y);
             if (!n2->action.empty()) s += ", \"action\": \"" + n2->action + "\"";
-            if (n2->hasAppearance()) {
-                s += ", \"shape\": \"" + n2->shape + "\"";
-                s += ", \"color\": \"" + colorToHex(n2->color) + "\"";
-                if (!n2->texture.empty()) s += ", \"texture\": \"" + n2->texture + "\"";
-                s += ", \"w\": " + std::to_string((int)n2->w);
-                s += ", \"h\": " + std::to_string((int)n2->h);
-            }
+            s += ", \"shape\": \"" + n2->shape + "\"";
+            s += ", \"color\": \"" + colorToHex(n2->color) + "\"";
+            if (!n2->texture.empty()) s += ", \"texture\": \"" + n2->texture + "\"";
+            s += ", \"w\": " + std::to_string((int)n2->w);
+            s += ", \"h\": " + std::to_string((int)n2->h);
         }
         std::string t = n.typeName();
         if (t == "Label") { Label* l = static_cast<Label*>(n2); s += ", \"text\": \"" + l->text + "\""; s += ", \"font_size\": " + std::to_string(l->fontSize); }
