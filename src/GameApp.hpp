@@ -112,7 +112,6 @@ public:
                         (editor_->selected() ? dynamic_cast<Node2D*>(editor_->selected()) : nullptr) : nullptr;
 
             if (g && es) {
-                // WORLD-FIX: гизмо рисуется/хватается по МИРОВОЙ позиции узла
                 float gwx, gwy, gwr, gsx, gsy;
                 bool ok = nodeWorld(es, g->name, gwx, gwy, gwr, gsx, gsy);
                 if (!ok) { gwx = g->position.x; gwy = g->position.y; gsx = gsy = 1; }
@@ -213,17 +212,24 @@ private:
         return "";
     }
 
-    // ---- мировая трансформация (позиция/поворот/масштаб с учётом родителей) ----
+    // NODE2D-FIX: проверяем тип перед доступом к position/rotation/scale
     static bool nodeWorldRec(Node* n, const std::string& name,
                              float ox, float oy, float orot, float osx, float osy,
                              float& wx, float& wy, float& wr, float& wsx, float& wsy) {
+        Node2D* n2d = dynamic_cast<Node2D*>(n);
+        if (!n2d) {
+            for (auto& ch : n->getChildren())
+                if (nodeWorldRec(ch.get(), name, ox, oy, orot, osx, osy, wx, wy, wr, wsx, wsy)) return true;
+            return false;
+        }
+        
         float cr = std::cos(orot), sr = std::sin(orot);
-        float cx = ox + (n->position.x * osx) * cr - (n->position.y * osy) * sr;
-        float cy = oy + (n->position.x * osx) * sr + (n->position.y * osy) * cr;
-        float crot = orot + n->rotation;
-        float csx = osx * n->scale.x, csy = osy * n->scale.y;
-        if (n->name == name) { wx = cx; wy = cy; wr = crot; wsx = csx; wsy = csy; return true; }
-        for (auto& ch : n->getChildren())
+        float cx = ox + (n2d->position.x * osx) * cr - (n2d->position.y * osy) * sr;
+        float cy = oy + (n2d->position.x * osx) * sr + (n2d->position.y * osy) * cr;
+        float crot = orot + n2d->rotation;
+        float csx = osx * n2d->scale.x, csy = osy * n2d->scale.y;
+        if (n2d->name == name) { wx = cx; wy = cy; wr = crot; wsx = csx; wsy = csy; return true; }
+        for (auto& ch : n2d->getChildren())
             if (nodeWorldRec(ch.get(), name, cx, cy, crot, csx, csy, wx, wy, wr, wsx, wsy)) return true;
         return false;
     }
@@ -448,7 +454,6 @@ private:
 
     struct EdRow { std::string text, action; bool sel; bool hasKids; bool open; std::string name; };
 
-    // FOLD-FIX: дерево со сворачиванием; дети рисуются только когда группа открыта
     void buildTreeRows(Scene* esc, Node* n, int depth,
                        const std::string& sel, const std::string& selUi,
                        std::vector<EdRow>& rows) {
@@ -526,7 +531,10 @@ private:
                 editorScene_.ui.push_back(f);
             }
             UiButton b; b.touch.id = "h" + std::to_string(i);
-            b.touch.rect = Rect{rows[i].hasKids ? 36 : 8, y, rows[i].hasKids ? 256 : 284, 28};
+            // NARROWING-FIX: явное приведение int к float
+            float rx = rows[i].hasKids ? 36.0f : 8.0f;
+            float rw = rows[i].hasKids ? 256.0f : 284.0f;
+            b.touch.rect = Rect{rx, y, rw, 28};
             b.text = rows[i].text; b.action = rows[i].action;
             b.color = rows[i].sel ? GODOT_ORANGE : th.button;
             editorScene_.ui.push_back(b);
@@ -868,18 +876,26 @@ private:
         if (!lastMsg_.empty()) out += "DRAW text|" + lastMsg_ + "|306|580|14|#FFD700|0\n";
     }
 
-    // WORLD-FIX: превью считает мировую трансформацию (дети едут/крутятся/масштабируются с родителем)
+    // NODE2D-FIX: проверяем тип перед доступом к position/rotation/scale
     void emitNodePreview(const Node* n, float CX, float CY, float S, float VX0, float VY0, float VW, float VH,
                          float camX, float camY, float ox, float oy, float orot, float osx, float osy,
                          std::string& out) {
         if (!n) return;
+        
+        Node2D* n2d = dynamic_cast<Node2D*>(const_cast<Node*>(n));
+        if (!n2d) {
+            for (const auto& ch : n->getChildren())
+                emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, ox, oy, orot, osx, osy, out);
+            return;
+        }
+        
         float cr = std::cos(orot), sr = std::sin(orot);
-        float wx = ox + (n->position.x * osx) * cr - (n->position.y * osy) * sr;
-        float wy = oy + (n->position.x * osx) * sr + (n->position.y * osy) * cr;
-        float wrot = orot + n->rotation;
-        float wsx = osx * n->scale.x, wsy = osy * n->scale.y;
+        float wx = ox + (n2d->position.x * osx) * cr - (n2d->position.y * osy) * sr;
+        float wy = oy + (n2d->position.x * osx) * sr + (n2d->position.y * osy) * cr;
+        float wrot = orot + n2d->rotation;
+        float wsx = osx * n2d->scale.x, wsy = osy * n2d->scale.y;
 
-        std::string tn = std::string(n->typeName());
+        std::string tn = std::string(n2d->typeName());
         float sx = CX + (wx - camX - 640)*S, sy = CY + (wy - camY - 360)*S;
         float ang = wrot * 57.2957795f;
 
@@ -890,28 +906,29 @@ private:
             }
         }
         else if (tn != "Node") {
-            const Node2D* d = static_cast<const Node2D*>(n);
-            float w = d->w * wsx * S, h = d->h * wsy * S;
+            float w = n2d->w * wsx * S, h = n2d->h * wsy * S;
             float rx = sx - w/2, ry = sy - h/2;
-            if (!d->hasAppearance() && tn == "Node2D") {
+            if (!n2d->hasAppearance() && tn == "Node2D") {
                 if (sx >= VX0 && sx <= VX0+VW && sy >= VY0 && sy <= VY0+VH) {
                     out += "DRAW rect|" + std::to_string((int)(sx-10)) + "|" + std::to_string((int)(sy-2)) + "|20|4|#808080|0\n";
                     out += "DRAW rect|" + std::to_string((int)(sx-2)) + "|" + std::to_string((int)(sy-10)) + "|4|20|#808080|0\n";
-                    out += "DRAW text|" + d->name + "|" + std::to_string((int)(sx+12)) + "|" + std::to_string((int)(sy+4)) + "|12|#808080|0\n";
+                    out += "DRAW text|" + n2d->name + "|" + std::to_string((int)(sx+12)) + "|" + std::to_string((int)(sy+4)) + "|12|#808080|0\n";
                 }
             }
             bool vis = (rx >= VX0 && ry >= VY0 && rx + w <= VX0 + VW && ry + h <= VY0 + VH);
             if (vis) {
                 if (tn == "Label") {
-                    int fs = (int)(d->fontSize * ((wsx + wsy) * 0.5f) * S);
+                    // LABEL-FIX: приводим к Label* перед доступом к fontSize
+                    const Label* lbl = static_cast<const Label*>(n2d);
+                    int fs = (int)(lbl->fontSize * ((wsx + wsy) * 0.5f) * S);
                     if (fs < 6) fs = 6;
-                    out += "DRAW text|" + static_cast<const Label*>(d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
+                    out += "DRAW text|" + lbl->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHex(n2d->color) + "|" + std::to_string(ang) + "\n";
                 }
                 else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|#555555|" + std::to_string(ang) + "\n";
-                else if (d->hasAppearance()) out += "DRAW shape|" + d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(d->color) + "|" + std::to_string(ang) + "\n";
+                else if (n2d->hasAppearance()) out += "DRAW shape|" + n2d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHex(n2d->color) + "|" + std::to_string(ang) + "\n";
             }
         }
-        for (const auto& ch : n->getChildren())
+        for (const auto& ch : n2d->getChildren())
             emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, wx, wy, wrot, wsx, wsy, out);
     }
 
