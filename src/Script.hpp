@@ -34,6 +34,7 @@ class ScriptSystem {
 public:
     void load(const std::string& projectRoot) {
         root_ = projectRoot;
+        entries_.clear();   // PROJ-FIX: не тащим скрипты прошлого проекта
         std::string path = projectRoot + "/scripts.json";
         if (!fileExists(path)) { std::cout << "[Scripts] no scripts.json\n"; return; }
         std::string json = readFile(path);
