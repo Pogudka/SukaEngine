@@ -65,9 +65,10 @@ public:
     void submitName(const std::string& t)   { std::lock_guard<std::mutex> lk(dlgMtx_); nameRes_ = t;   hasName_ = true; }
     void submitAction(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); actionRes_ = t; hasAction_ = true; }
     void submitNumber(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); numRes_ = t;    hasNum_ = true; }
-    // IME-FIX: поток символов/клавиш с клавиатуры в редактор скриптов
-    void submitScriptText(const std::string& t) { std::lock_guard<std::mutex> lk(imeMtx_); imeTextQ_.push_back(t); }
-    void submitScriptKey(int k)                 { std::lock_guard<std::mutex> lk(imeMtx_); imeKeyQ_.push_back(k); }
+    void submitScriptText(const std::string& t)   { std::lock_guard<std::mutex> lk(imeMtx_); imeTextQ_.push_back(t); }
+    void submitScriptCompose(const std::string& t){ std::lock_guard<std::mutex> lk(imeMtx_); imeCompQ_.push_back(t); }
+    void submitScriptFinish()                     { std::lock_guard<std::mutex> lk(imeMtx_); imeFinish_ = true; }
+    void submitScriptKey(int k)                   { std::lock_guard<std::mutex> lk(imeMtx_); imeKeyQ_.push_back(k); }
 
     void feedMultiTouch(int phase, float x0, float y0, float x1, float y1) {
         if (appMode_ != AppMode::Editor || scriptMode_ || showCreate_ || showBg_) return;
@@ -103,6 +104,24 @@ public:
         t.x = x; t.y = y;
         Scene* cur = uiScene();
         if (!cur) return;
+
+        // CURSOR-FIX: тап по окну кода ставит курсор в строку/колонку
+        if (appMode_ == AppMode::Editor && scriptMode_) {
+            if (t.action == RawTouch::Action::Down && x >= 300 && x <= 850 && y >= 64 && y <= 556) {
+                const float LH = 19;
+                int line = scriptScroll_ + (int)((y - 70) / LH);
+                if (line < 0) line = 0;
+                if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
+                int col = (int)((x - 340) / 7.2f);
+                const std::string& L = scriptLines_[line];
+                if (col < 0) col = 0;
+                if (col > (int)L.size()) col = (int)L.size();
+                curLine_ = line; curCol_ = col; compAnchor_ = -1;
+                imeChanged_ = true;
+            }
+            touch_.onTouch(t, *cur, input_);
+            return;
+        }
 
         if (appMode_ == AppMode::Game && t.action == RawTouch::Action::Down && sceneMgr_ && sceneMgr_->current()) {
             Scene* gs = sceneMgr_->current();
@@ -342,7 +361,7 @@ private:
         loadSnap(rel); lastMsg_ = "redo";
     }
 
-    // ---------- SCRIPT EDITOR (B2) ----------
+    // ---------- SCRIPT EDITOR ----------
     void loadScript(const std::string& rel) {
         scriptPath_ = rel;
         std::string s = readFile(project_.rootPath + "/" + rel);
@@ -351,7 +370,7 @@ private:
         for (char c : s) { if (c == '\n') { scriptLines_.push_back(cur); cur.clear(); } else cur += c; }
         scriptLines_.push_back(cur);
         if (scriptLines_.empty()) scriptLines_.push_back("");
-        curLine_ = 0; curCol_ = 0; scriptScroll_ = 0;
+        curLine_ = 0; curCol_ = 0; scriptScroll_ = 0; compAnchor_ = -1;
     }
     void saveScript() {
         if (scriptPath_.empty()) return;
@@ -376,7 +395,41 @@ private:
         }
         scClampView();
     }
+    // COMPOSE-FIX: живой предпросмотр набора — заменяем диапазон от якоря
+    void scCompose(const std::string& text) {
+        if (curLine_ >= (int)scriptLines_.size()) scriptLines_.push_back("");
+        if (compAnchor_ < 0) compAnchor_ = curCol_;
+        std::string& L = scriptLines_[curLine_];
+        if (curCol_ > compAnchor_ && compAnchor_ <= (int)L.size()) {
+            int del = curCol_ - compAnchor_;
+            if (compAnchor_ + del > (int)L.size()) del = (int)L.size() - compAnchor_;
+            L.erase(L.begin() + compAnchor_, L.begin() + compAnchor_ + del);
+            curCol_ = compAnchor_;
+        }
+        for (char c : text) {
+            if (c == '\n') c = ' ';
+            if (curCol_ > (int)L.size()) curCol_ = (int)L.size();
+            L.insert(L.begin() + curCol_, c);
+            curCol_++;
+        }
+        scClampView();
+    }
+    void scCommit(const std::string& text) {
+        if (compAnchor_ >= 0) {
+            std::string& L = scriptLines_[curLine_];
+            if (curCol_ > compAnchor_ && compAnchor_ <= (int)L.size()) {
+                int del = curCol_ - compAnchor_;
+                if (compAnchor_ + del > (int)L.size()) del = (int)L.size() - compAnchor_;
+                L.erase(L.begin() + compAnchor_, L.begin() + compAnchor_ + del);
+                curCol_ = compAnchor_;
+            }
+            compAnchor_ = -1;
+        }
+        for (char c : text) scTypeChar(c);
+    }
+    void scFinish() { compAnchor_ = -1; }
     void scBackspace() {
+        compAnchor_ = -1;
         if (curLine_ >= (int)scriptLines_.size()) return;
         std::string& L = scriptLines_[curLine_];
         if (curCol_ > 0) { L.erase(L.begin() + curCol_ - 1); curCol_--; }
@@ -389,6 +442,7 @@ private:
         scClampView();
     }
     void scMove(int d) {
+        compAnchor_ = -1;
         curCol_ += d;
         if (curLine_ < 0) curLine_ = 0;
         if (curLine_ >= (int)scriptLines_.size()) curLine_ = (int)scriptLines_.size() - 1;
@@ -404,13 +458,15 @@ private:
         if (scriptScroll_ < 0) scriptScroll_ = 0;
     }
     void imeApply() {
-        std::vector<std::string> tq; std::vector<int> kq;
-        { std::lock_guard<std::mutex> lk(imeMtx_); tq.swap(imeTextQ_); kq.swap(imeKeyQ_); }
-        if (tq.empty() && kq.empty()) return;
-        for (auto& s : tq) for (char c : s) scTypeChar(c);
+        std::vector<std::string> tq, cq; std::vector<int> kq; bool fin = false;
+        { std::lock_guard<std::mutex> lk(imeMtx_); tq.swap(imeTextQ_); cq.swap(imeCompQ_); kq.swap(imeKeyQ_); fin = imeFinish_; imeFinish_ = false; }
+        if (tq.empty() && cq.empty() && kq.empty() && !fin) return;
+        for (auto& s : cq) scCompose(s);
+        for (auto& s : tq) scCommit(s);
+        if (fin) scFinish();
         for (int k : kq) {
             if (k == 67) scBackspace();
-            else if (k == 66) scTypeChar('\n');
+            else if (k == 66) { compAnchor_ = -1; scTypeChar('\n'); }
             else if (k == 21) scMove(-1);
             else if (k == 22) scMove(1);
         }
@@ -572,7 +628,7 @@ private:
         showCreate_ = false; showBg_ = false; pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0; pickParent_ = false; lastMsg_.clear();
         edZoom_ = 1.0f; undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
-        scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear();
+        scriptMode_ = false; scriptPath_.clear(); scriptLines_.clear(); compAnchor_ = -1;
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick(); appMode_ = AppMode::Editor; return true;
     }
 
@@ -617,7 +673,6 @@ private:
         auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
             auto l = std::make_unique<Label>(); l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y}; editorScene_.root->addChild(std::move(l));
         };
-        // SCRIPT-FIX: вкладки Scene / Scripts — кнопки
         { UiButton b; b.touch.id="tab_scene"; b.touch.rect=Rect{10,4,80,26}; b.text="Scene"; b.action="tab_scene"; b.color=scriptMode_?th.button:GODOT_ORANGE; editorScene_.ui.push_back(b); }
         addLbl("Tab2D", "2D", 110, 8, 20, th.ink); addLbl("Tab3D", "3D", 160, 8, 20, th.ink);
         { UiButton b; b.touch.id="tab_scripts"; b.touch.rect=Rect{200,4,90,26}; b.text="Scripts"; b.action="tab_scripts"; b.color=scriptMode_?GODOT_ORANGE:th.button; editorScene_.ui.push_back(b); }
@@ -787,7 +842,7 @@ private:
         if (!fsPath_.empty()) frows.push_back({ "..", "fs_up", th.button });
         std::string abs = project_.rootPath + "/" + fsPath_;
         for (const auto& it : FileBrowser::list(abs)) {
-            if (it.name.rfind("snap_", 0) == 0) continue;   // SNAP-FIX: не показываем снапшоты
+            if (it.name.rfind("snap_", 0) == 0) continue;
             FsRow r;
             r.text = (it.isDir ? "/ " : "  ") + it.name;
             r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + fsPath_ + it.name);
@@ -809,7 +864,6 @@ private:
         }
     }
 
-    // ---------- layout редактора скриптов ----------
     void buildScriptPanels(Theme& th) {
         const unsigned GODOT_ORANGE = 0xFF8800FFu;
         auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
@@ -867,7 +921,7 @@ private:
 
         addLbl("ScInfo", scriptPath_.empty() ? "(no script)" : scriptPath_, 900, 64, 16, GODOT_ORANGE);
         addLbl("ScInfo2", "lines " + std::to_string((int)scriptLines_.size()) + "   cur " + std::to_string(curLine_+1) + ":" + std::to_string(curCol_), 900, 88, 14, th.ink);
-        addLbl("ScInfo3", "keyboard types into this window", 900, 110, 14, th.ink);
+        addLbl("ScInfo3", "tap line = cursor; keyboard types here", 900, 110, 14, th.ink);
         addLbl("ScInfo4", "SAVE writes file + reloads scripts", 900, 132, 14, th.ink);
     }
 
@@ -897,7 +951,7 @@ private:
             else if (b.action == "scup") { scriptScroll_ -= 3; imeChanged_ = true; changed = true; }
             else if (b.action == "scdn") { scriptScroll_ += 3; imeChanged_ = true; changed = true; }
             else if (b.action == "snew") { pendingName_ = true; pendingKind_ = 2; changed = true; }
-            else if (scriptMode_) { continue; }   // в режиме скриптов остальные действия не работают
+            else if (scriptMode_) { continue; }
             else if (b.action == "fscroll_up") { fsScroll_ -= 3; changed = true; }
             else if (b.action == "fscroll_dn") { fsScroll_ += 3; changed = true; }
             else if (b.action == "ed_lock") {
@@ -1215,12 +1269,13 @@ private:
                     out += "DRAW text|" + static_cast<Label*>(n2d)->text + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string(fs) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
                 }
                 else if (tn == "Sprite2D") out += "DRAW rect|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(withAlpha(0x555555FFu, n2d->alpha)) + "|" + std::to_string(ang) + "\n";
-                else if (n2d->hasAppearance()) out += "DRAW shape|" + n2d->shape + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
+                else if (n2d->hasAppearance()) out += "DRAW shape|" + d_shape(n2d) + "|" + std::to_string((int)rx) + "|" + std::to_string((int)ry) + "|" + std::to_string((int)w) + "|" + std::to_string((int)h) + "|" + colorToHexA(colA) + "|" + std::to_string(ang) + "\n";
             }
         }
         for (const auto& ch : n2d->getChildren())
             emitNodePreview(ch.get(), CX, CY, S, VX0, VY0, VW, VH, camX, camY, wx, wy, wrot, wsx, wsy, out);
     }
+    static std::string d_shape(Node2D* d) { return d->shape; }
 
     std::string stepEditor() {
         if (!editor_ || !editor_->scene()) { appMode_ = AppMode::Hub; rebuildHub(); return ""; }
@@ -1264,8 +1319,9 @@ private:
     bool dbg_ = false; float fps_ = 0; long long lastMs_ = 0; int nodeCount_ = 0, lastDraws_ = 0;
     bool scriptMode_ = false; std::string scriptPath_;
     std::vector<std::string> scriptLines_; int curLine_ = 0, curCol_ = 0, scriptScroll_ = 0;
+    int compAnchor_ = -1;
     bool imeWantOn_ = false, imeWantOff_ = false, imeChanged_ = false;
-    std::mutex imeMtx_; std::vector<std::string> imeTextQ_; std::vector<int> imeKeyQ_;
+    std::mutex imeMtx_; std::vector<std::string> imeTextQ_, imeCompQ_; std::vector<int> imeKeyQ_; bool imeFinish_ = false;
     Node2D* dragNode_ = nullptr; UiButton* dragUi_ = nullptr; int createCounter_ = 0; std::string pendingTextCur_;
     std::string fsPath_;
     std::mutex dlgMtx_;
