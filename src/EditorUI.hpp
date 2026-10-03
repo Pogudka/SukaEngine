@@ -358,25 +358,11 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 addLbl("InText", "Text: " + static_cast<Label*>(nd)->text, 900, 364, 16, th.ink);
             }
 
+            // Prefab inspector: source + children count + RELOAD. Nothing else.
             if (std::string(nd->typeName()) == "Prefab2D") {
                 Prefab2D* pf = static_cast<Prefab2D*>(nd);
                 addLbl("InSrc", "Source: " + (pf->sourcePath.empty() ? std::string("(none)") : pf->sourcePath), 900, 364, 16, parseColor("#8E44AD"));
-
-                UiButton pb;
-                pb.touch.id = "prefabpick";
-                pb.touch.rect = Rect{1092, 360, 88, 26};
-                pb.text = "PICK";
-                pb.action = "prefab_pick";
-                pb.color = GO;
-                s.ui.push_back(pb);
-
-                if (pf->sourcePath.empty()) {
-                    addLbl("InSrcHint", "no source: children empty", 900, 388, 14, parseColor("#D62828"));
-                } else {
-                    int kids = (int)pf->childCount();
-                    addLbl("InInst", "instance: " + std::to_string(kids) + " children", 900, 388, 14, th.ink);
-                }
-
+                addLbl("InInst", "instance: " + std::to_string((int)pf->childCount()) + " children", 900, 388, 14, th.ink);
                 { UiButton b; b.touch.id = "reloadpf"; b.touch.rect = Rect{900, 410, 100, 26}; b.text = "RELOAD"; b.action = "prefab_reload"; b.color = th.accent; s.ui.push_back(b); }
             }
 
@@ -450,7 +436,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     { UiButton b; b.touch.id = "pstbtn"; b.touch.rect = Rect{996, 482, 44, 30}; b.text = "PST"; b.action = "ed_paste"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "undbtn"; b.touch.rect = Rect{1044, 482, 44, 30}; b.text = "UND"; b.action = "ed_undo"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "redbtn"; b.touch.rect = Rect{1092, 482, 44, 30}; b.text = "RED"; b.action = "ed_redo"; b.color = th.button; s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "mkpf"; b.touch.rect = Rect{1140, 482, 44, 30}; b.text = "→PF"; b.action = "make_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
 
     const char* mv[4] = { "l", "u", "d", "r" };
     const char* mvTxt[4] = { "<", "^", "v", ">" };
@@ -464,9 +449,11 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
+    // Toolbar: SAVE SCN | PF SAVE | PF ADD | RGB | DEL | SAVE | < | + | TXT | SCR | TEX | FILES
     float tx = 300;
     { UiButton b; b.touch.id = "savesc"; b.touch.rect = Rect{tx, 34, 92, 26}; tx += 94; b.text = "SAVE SCN"; b.action = "save_scene_as"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "savepf"; b.touch.rect = Rect{tx, 34, 92, 26}; tx += 94; b.text = "SAVE PF"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "savepf"; b.touch.rect = Rect{tx, 34, 74, 26}; tx += 76; b.text = "PF SAVE"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "addpf"; b.touch.rect = Rect{tx, 34, 74, 26}; tx += 76; b.text = "PF ADD"; b.action = "prefabs_open"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "colbtn"; b.touch.rect = Rect{tx, 34, 54, 26}; tx += 56; b.text = "RGB"; b.action = "col_rgb"; b.color = th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "del"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "DEL"; b.action = "ed_del"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "save"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "SAVE"; b.action = "ed_save"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
@@ -495,7 +482,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         { UiButton b; b.touch.id = "ctgrp"; b.touch.rect = Rect{300 + 8 * 58, 560, 54, 40}; b.text = "GRP"; b.action = "create_grp"; b.color = parseColor("#808080"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctbtn"; b.touch.rect = Rect{300 + 9 * 58, 560, 54, 40}; b.text = "BTN"; b.action = "create_btn"; b.color = parseColor("#2EC4B6"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctprt"; b.touch.rect = Rect{300, 604, 54, 40}; b.text = "PART"; b.action = "create:Particle2D:none"; b.color = parseColor("#FF69B4"); s.ui.push_back(b); }
-        { UiButton b; b.touch.id = "ctprf"; b.touch.rect = Rect{358, 604, 70, 40}; b.text = "PREFAB"; b.action = "create_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
     }
 
     if (in.showAssets) {
@@ -581,6 +567,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         addLbl("FsHint", "tap file = load/assign  |  X = delete", 10, 668, 12, th.ink);
     }
 
+    // Prefab list: tap a row = insert prefab instance at scene center.
     if (in.showPrefabs) {
         const unsigned BG = 0x14141CFF;
         auto btn = [&](const std::string& id, float x, float y, float w, float h,
@@ -589,7 +576,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             b.text = txt; b.action = action; b.color = col; s.ui.push_back(b);
         };
         btn("__prbg",    360, 120, 560, 480, "", "", BG);
-        btn("__prtitle", 380, 132, 520,  40, "PICK PREFAB SOURCE", "", BG);
+        btn("__prtitle", 380, 132, 520,  40, "ADD PREFAB (tap to insert)", "", BG);
         btn("pr_close",  830, 132,  70,  32, "X", "prefabs_close", parseColor("#D62828"));
 
         std::vector<std::string> files;
@@ -610,7 +597,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
 
         if (files.empty()) {
             auto l = std::make_unique<Label>();
-            l->name = "PrEmpty"; l->text = "no .prf files in prefabs/ yet";
+            l->name = "PrEmpty"; l->text = "no .prf yet: select node -> PF SAVE";
             l->fontSize = 16; l->color = th.ink; l->position = Vec2{400, 220};
             s.root->addChild(std::move(l));
         }
@@ -618,7 +605,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         for (int i = in.prefabScroll; i < (int)files.size() && i < in.prefabScroll + 10; ++i) {
             float y = 180 + (float)(i - in.prefabScroll) * 36;
             btn("prf" + std::to_string(i), 400, y, 460, 32,
-                "  " + files[i], "prefab_set:prefabs/" + files[i], th.accent);
+                "  " + files[i], "prefab_add:prefabs/" + files[i], th.accent);
         }
     }
 
