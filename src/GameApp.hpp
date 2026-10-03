@@ -415,7 +415,9 @@ private:
     bool loadSnap(const std::string& rel) {
         if (!sceneMgr_ || !editor_) return false;
         if (sceneMgr_->restartScene(rel, resources_)) {
-            editor_->attach(sceneMgr_->current()); scripted_.clear();
+            editor_->attach(sceneMgr_->current());
+            editor_->setProjectRoot(project_.rootPath);
+            scripted_.clear();
             dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pickParent_ = false; pickChild_.clear();
             buildEditorPanels(); input_.setUi(&editorScene_.ui);
             return true;
@@ -582,7 +584,7 @@ private:
 
     EditorUiInput makeEditorUiInput() {
         return EditorUiInput{
-            editor_.get(), scriptMode_, edZoom_, manip_, pickParent_, showCreate_, showAssets_, showSettings_, showPrefabs_,
+            editor_.get(), scriptMode_, edZoom_, manip_, pickParent_, showCreate_, showAssets_, showSettings_, showPrefabs_, showFiles_,
             hierScroll_, fsScroll_, assetScroll_, scriptScroll_, prefabScroll_,
             collapsed_, fsPath_, project_.rootPath, scriptPath_, scriptLines_,
             curLine_, curCol_, imeShown_, g_luaLog
@@ -753,10 +755,13 @@ private:
         auto mgr = std::make_unique<SceneManager>(root, font);
         if (!mgr->restartScene("scenes/main.json", resources_)) if (!mgr->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         project_ = pi; g_projectRoot = project_.rootPath; fontPath_ = font; sceneMgr_ = std::move(mgr);
-        editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false;
+        editor_ = std::make_unique<Editor>();
+        editor_->attach(sceneMgr_->current());
+        editor_->setProjectRoot(project_.rootPath);
+        showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = false;
         assetScroll_ = 0; prefabScroll_ = 0; prefabPickTarget_.clear();
         pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
+        pendingSceneSave_ = false; pendingPrefabSave_ = false;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0;
         pickParent_ = false; pickChild_.clear(); lastMsg_.clear(); edZoom_ = 1.0f;
         undoStack_.clear(); redoStack_.clear(); clipboard_.reset();
@@ -794,6 +799,21 @@ private:
 
         if (act == "create_particle" || act == "create:Particle2D:none") { pushUndo(); std::string name = "Emitter" + std::to_string(createCounter_++); editor_->addNode("Particle2D", name, 640, 360); editor_->select(name); showCreate_ = false; rebuild(); return 1; }
         if (act == "create_prefab") { pendingName_ = true; pendingKind_ = 3; showCreate_ = false; rebuild(); return 1; }
+
+        if (act == "save_scene_as") {
+            pendingSceneSave_ = true;
+            pendingText_ = true;
+            pendingTextCur_ = "main";
+            return 0;
+        }
+        if (act == "save_as_prefab") {
+            if (sel.empty()) { lastMsg_ = "select a node first"; return 0; }
+            pendingPrefabSave_ = true;
+            pendingText_ = true;
+            pendingTextCur_ = sel;
+            return 0;
+        }
+
         if (act == "prefab_pick") {
             if (!sel.empty()) {
                 Node* n = editor_->find2d(sel);
@@ -858,6 +878,23 @@ private:
             return 0;
         }
 
+        // ==== FILES panel ====
+        if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; rebuild(); return 1; }
+        if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
+        if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
+        if (act.rfind("fs_del:", 0) == 0) {
+            std::string rel = act.substr(7);
+            std::string full = project_.rootPath + "/" + rel;
+            if (fileExists(full)) {
+                if (std::remove(full.c_str()) == 0) lastMsg_ = "deleted " + rel;
+                else lastMsg_ = "delete failed: " + rel;
+            } else {
+                lastMsg_ = "file not found: " + rel;
+            }
+            rebuild();
+            return 1;
+        }
+
         Particle2D* p2 = dynamic_cast<Particle2D*>(s2);
         if (act.rfind("view:", 0) == 0) { if (lk || sel.empty() || !p2) return 0; pushUndo(); std::string preset = act.substr(5); if (editor_->setEmitterPreset(sel, preset)) { lastMsg_ = "view " + preset + " -> " + sel; rebuild(); return 1; } rebuild(); return 0; }
         if (act == "ponoff") { if (!lk && p2) { pushUndo(); p2->emitting = !p2->emitting; if (p2->emitting) p2->burstPending = true; lastMsg_ = p2->emitting ? ("emitting ON: " + sel) : ("emitting OFF: " + sel); rebuild(); return 1; } return 0; }
@@ -886,8 +923,6 @@ private:
 
         if (act == "col_rgb") { if (!lk) { pendingRgb_ = 1; pendingText_ = true; pendingTextCur_ = ub ? rgbStr(ub->color) : (s2 ? rgbStr(s2->color) : std::string("255,255,255")); } return 0; }
         if (act == "bg_rgb") { pendingRgb_ = 2; pendingText_ = true; unsigned bc = (editor_->scene() && editor_->scene()->bgSet()) ? parseColor(editor_->scene()->bg) : currentTheme().bg; pendingTextCur_ = rgbStr(bc); return 0; }
-        if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
-        if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
         if (act == "assets_open") { showAssets_ = !showAssets_; assetScroll_ = 0; rebuild(); return 1; }
         if (act == "assets_up") { assetScroll_ -= 3; rebuild(); return 1; }
         if (act == "assets_dn") { assetScroll_ += 3; rebuild(); return 1; }
@@ -916,8 +951,10 @@ private:
             std::string rel = act.substr(8);
             if (rel.size() > 5 && rel.compare(rel.size() - 5, 5, ".json") == 0) {
                 if (sceneMgr_ && sceneMgr_->restartScene(rel, resources_)) {
-                    editor_->attach(sceneMgr_->current()); scripted_.clear();
-                    showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false;
+                    editor_->attach(sceneMgr_->current());
+                    editor_->setProjectRoot(project_.rootPath);
+                    scripted_.clear();
+                    showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = false;
                     assetScroll_ = 0; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                     pickParent_ = false; pickChild_.clear(); hierScroll_ = 0;
                     undoStack_.clear(); redoStack_.clear();
@@ -999,6 +1036,7 @@ private:
         if (act == "ed_back") {
             if (scriptMode_) { scriptMode_ = false; imeWantOff_ = true; imeShown_ = false; }
             pendingName_ = false; pendingText_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
+            pendingSceneSave_ = false; pendingPrefabSave_ = false;
             clearDialogResults();
             pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
             appMode_ = AppMode::Hub; rebuildHub();
@@ -1019,6 +1057,30 @@ private:
         bool ht = false, hn = false, ha = false, hnum = false;
         { std::lock_guard<std::mutex> lk(dlgMtx_); ht = hasText_; hn = hasName_; ha = hasAction_; hnum = hasNum_; txt = textRes_; nm = nameRes_; act = actionRes_; num = numRes_; hasText_ = false; hasName_ = false; hasAction_ = false; hasNum_ = false; }
         if (!editor_) return;
+
+        if (ht && pendingSceneSave_) {
+            std::string name = sanitizeProjectDirName(txt);
+            if (!name.empty()) {
+                editor_->setProjectRoot(project_.rootPath);
+                if (editor_->saveScene(name)) lastMsg_ = "saved scenes/" + name + ".json";
+                else lastMsg_ = "save scene failed";
+            }
+            pendingSceneSave_ = false;
+            buildEditorPanels(); input_.setUi(&editorScene_.ui);
+            return;
+        }
+        if (ht && pendingPrefabSave_) {
+            std::string name = sanitizeProjectDirName(txt);
+            if (!name.empty()) {
+                editor_->setProjectRoot(project_.rootPath);
+                if (editor_->saveAsPrefab(name)) lastMsg_ = "saved prefabs/" + name + ".json";
+                else lastMsg_ = "save prefab failed (select a node first)";
+            }
+            pendingPrefabSave_ = false;
+            buildEditorPanels(); input_.setUi(&editorScene_.ui);
+            return;
+        }
+
         if (hn) {
             if (pendingKind_ == 2) {
                 if (!nm.empty()) {
@@ -1094,6 +1156,7 @@ private:
     std::string stepEditor() {
         if (!editor_ || !editor_->scene()) {
             pendingName_ = false; pendingText_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
+            pendingSceneSave_ = false; pendingPrefabSave_ = false;
             clearDialogResults(); pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
             appMode_ = AppMode::Hub; rebuildHub(); return "";
         }
@@ -1143,12 +1206,15 @@ private:
     bool showAssets_ = false;
     bool showSettings_ = false;
     bool showPrefabs_ = false;
+    bool showFiles_ = false;
     bool dragging_ = false;
     bool pendingText_ = false;
     bool pinching_ = false;
     bool pendingName_ = false;
     bool pendingAction_ = false;
     bool pendingNum_ = false;
+    bool pendingSceneSave_ = false;
+    bool pendingPrefabSave_ = false;
     int pendingKind_ = 0;
     int pendingRgb_ = 0;
     std::string pendingNumKind_;
