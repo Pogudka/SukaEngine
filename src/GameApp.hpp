@@ -582,8 +582,8 @@ private:
 
     EditorUiInput makeEditorUiInput() {
         return EditorUiInput{
-            editor_.get(), scriptMode_, edZoom_, manip_, pickParent_, showCreate_, showAssets_, showSettings_,
-            hierScroll_, fsScroll_, assetScroll_, scriptScroll_,
+            editor_.get(), scriptMode_, edZoom_, manip_, pickParent_, showCreate_, showAssets_, showSettings_, showPrefabs_,
+            hierScroll_, fsScroll_, assetScroll_, scriptScroll_, prefabScroll_,
             collapsed_, fsPath_, project_.rootPath, scriptPath_, scriptLines_,
             curLine_, curCol_, imeShown_, g_luaLog
         };
@@ -754,8 +754,8 @@ private:
         if (!mgr->restartScene("scenes/main.json", resources_)) if (!mgr->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         project_ = pi; g_projectRoot = project_.rootPath; fontPath_ = font; sceneMgr_ = std::move(mgr);
         editor_ = std::make_unique<Editor>(); editor_->attach(sceneMgr_->current());
-        showCreate_ = false; showAssets_ = false; showSettings_ = false;
-        assetScroll_ = 0;
+        showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false;
+        assetScroll_ = 0; prefabScroll_ = 0; prefabPickTarget_.clear();
         pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0;
         pickParent_ = false; pickChild_.clear(); lastMsg_.clear(); edZoom_ = 1.0f;
@@ -792,7 +792,72 @@ private:
         Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
         bool lk = (s2 != nullptr) && s2->locked;
 
-        if (act == "create_particle" || act == "create:Particle2D:none") { pushUndo(); std::string name = "Emitter" + std::to_string(createCounter_++); editor_->addParticleNode(name, 640, 360, "dot"); editor_->select(name); showCreate_ = false; rebuild(); return 1; }
+        if (act == "create_particle" || act == "create:Particle2D:none") { pushUndo(); std::string name = "Emitter" + std::to_string(createCounter_++); editor_->addNode("Particle2D", name, 640, 360); editor_->select(name); showCreate_ = false; rebuild(); return 1; }
+        if (act == "create_prefab") { pendingName_ = true; pendingKind_ = 3; showCreate_ = false; rebuild(); return 1; }
+        if (act == "prefab_pick") {
+            if (!sel.empty()) {
+                Node* n = editor_->find2d(sel);
+                if (n && std::string(n->typeName()) == "Prefab2D") {
+                    prefabPickTarget_ = sel;
+                    showPrefabs_ = true;
+                    prefabScroll_ = 0;
+                    rebuild();
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        if (act == "prefabs_up") { prefabScroll_ -= 3; rebuild(); return 1; }
+        if (act == "prefabs_dn") { prefabScroll_ += 3; rebuild(); return 1; }
+        if (act == "prefabs_close") { showPrefabs_ = false; prefabPickTarget_.clear(); rebuild(); return 1; }
+        if (act.rfind("prefab_set:", 0) == 0) {
+            std::string rel = act.substr(11);
+            if (!prefabPickTarget_.empty()) {
+                pushUndo();
+                Node* n = editor_->find2d(prefabPickTarget_);
+                Prefab2D* pf = n ? dynamic_cast<Prefab2D*>(n) : nullptr;
+                if (pf) {
+                    pf->sourcePath = rel;
+                    pf->instantiate(project_.rootPath, fontPath_);
+                    lastMsg_ = "prefab source: " + rel;
+                }
+            }
+            showPrefabs_ = false;
+            prefabPickTarget_.clear();
+            rebuild();
+            return 1;
+        }
+        if (act == "prefab_reload") {
+            if (!sel.empty()) {
+                Node* n = editor_->find2d(sel);
+                Prefab2D* pf = n ? dynamic_cast<Prefab2D*>(n) : nullptr;
+                if (pf && !pf->sourcePath.empty()) {
+                    pushUndo();
+                    pf->instantiate(project_.rootPath, fontPath_);
+                    lastMsg_ = "prefab reloaded";
+                    rebuild();
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        if (act == "make_prefab") {
+            if (!sel.empty() && sel != editor_->scene()->root->name) {
+                std::string rel = "prefabs/" + sel + ".json";
+                std::string full = project_.rootPath + "/" + rel;
+                if (editor_->makePrefabFromSelected(full, rel)) {
+                    lastMsg_ = "saved " + rel + " + created Prefab2D";
+                    rebuild();
+                    return 1;
+                } else {
+                    lastMsg_ = "make_prefab failed";
+                    return 0;
+                }
+            }
+            lastMsg_ = "select non-root node first";
+            return 0;
+        }
+
         Particle2D* p2 = dynamic_cast<Particle2D*>(s2);
         if (act.rfind("view:", 0) == 0) { if (lk || sel.empty() || !p2) return 0; pushUndo(); std::string preset = act.substr(5); if (editor_->setEmitterPreset(sel, preset)) { lastMsg_ = "view " + preset + " -> " + sel; rebuild(); return 1; } rebuild(); return 0; }
         if (act == "ponoff") { if (!lk && p2) { pushUndo(); p2->emitting = !p2->emitting; if (p2->emitting) p2->burstPending = true; lastMsg_ = p2->emitting ? ("emitting ON: " + sel) : ("emitting OFF: " + sel); rebuild(); return 1; } return 0; }
@@ -852,7 +917,7 @@ private:
             if (rel.size() > 5 && rel.compare(rel.size() - 5, 5, ".json") == 0) {
                 if (sceneMgr_ && sceneMgr_->restartScene(rel, resources_)) {
                     editor_->attach(sceneMgr_->current()); scripted_.clear();
-                    showCreate_ = false; showAssets_ = false; showSettings_ = false;
+                    showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false;
                     assetScroll_ = 0; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                     pickParent_ = false; pickChild_.clear(); hierScroll_ = 0;
                     undoStack_.clear(); redoStack_.clear();
@@ -968,6 +1033,14 @@ private:
                 pushUndo();
                 if (pendingKind_ == 0) { editor_->addNode(pendingType_, nm, 640, 360); if (!pendingShape_.empty()) editor_->setShape(nm, pendingShape_); editor_->select(nm); lastMsg_ = "created " + nm; }
                 else if (pendingKind_ == 1) { editor_->addUi(nm, nm, 580, 335, 120, 50, std::string(), parseColor("#808080")); editor_->selectUi(nm); lastMsg_ = "created button " + nm; }
+                else if (pendingKind_ == 3) {
+                    auto pf = std::make_unique<Prefab2D>();
+                    pf->name = nm;
+                    pf->position = Vec2{640, 360};
+                    editor_->scene()->root->addChild(std::move(pf));
+                    editor_->select(nm);
+                    lastMsg_ = "created prefab " + nm;
+                }
             }
             pendingName_ = false; showCreate_ = false;
         }
@@ -1032,7 +1105,7 @@ private:
         gr.render(editorScene_, &ctx_);
         std::string out = gameBackend_.str();
 
-        if (!scriptMode_ && !showSettings_) {
+        if (!scriptMode_ && !showSettings_ && !showPrefabs_) {
             out += "DRAW clipon\n";
             emitEditorViewport(*editor_->scene(), out, makeEditorRenderInput());
             Scene* es = editor_->scene();
@@ -1069,6 +1142,7 @@ private:
     bool showCreate_ = false;
     bool showAssets_ = false;
     bool showSettings_ = false;
+    bool showPrefabs_ = false;
     bool dragging_ = false;
     bool pendingText_ = false;
     bool pinching_ = false;
@@ -1108,6 +1182,7 @@ private:
     int hierScroll_ = 0;
     int fsScroll_ = 0;
     int assetScroll_ = 0;
+    int prefabScroll_ = 0;
     std::set<std::string> collapsed_;
     std::vector<std::string> undoStack_;
     std::vector<std::string> redoStack_;
@@ -1141,6 +1216,7 @@ private:
     std::string pendingTextCur_;
     std::string fsPath_;
     std::string pendingImportCategory_;
+    std::string prefabPickTarget_;
     std::mutex dlgMtx_;
     bool hasText_ = false;
     bool hasName_ = false;
