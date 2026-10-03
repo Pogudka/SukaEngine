@@ -1437,7 +1437,11 @@ private:
         renderer.render(*sceneMgr_->current(), &ctx_);
 
         out += gameBackend_.str();
-        // --- B6-lite: draw particles (world -> screen, mirrors Renderer) ---
+        if (sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
+            WorldXf ident;
+            walkEmitters(*sceneMgr_->current()->root, ident, 1.0f / 60.0f);
+        }
+        // --- B6: draw particles (world -> screen, mirrors Renderer) ---
         if (sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
             Scene* ps = sceneMgr_->current();
 
