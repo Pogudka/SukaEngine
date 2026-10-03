@@ -257,7 +257,7 @@ public:
     }
 
     // Which view the node currently matches (by glyph), "" if custom/none.
-    std::string currentEmitterPreset(const std::string& nodeName) const {
+    std::string currentEmitterPreset(const std::string& nodeName) {
         Node2D* n = find2d(nodeName);
         Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
         if (!pe) return "";
