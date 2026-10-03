@@ -10,54 +10,10 @@
 
 namespace suka {
 
-// ---------------------------------------------------------------------------
-// Emitter presets ("виды частиц"). Each preset fully describes a Particle2D:
-// glyph + color + motion. The editor UI lists names and applies by name.
-//
-// COLOR FORMAT IS 0xRRGGBBAA (low byte = alpha), matching Solid2D/Player in
-// Nodes.hpp. Do NOT write 0xAARRGGBB here or particles become invisible.
-// ---------------------------------------------------------------------------
-struct EmitterPreset {
-    const char* name;
-    const char* glyph;
-    unsigned color;
-    float rate, burst, vx, vy, spread, gravity, life, lifeSpread, size, sizeEnd, drag;
-};
-
-inline const std::vector<EmitterPreset>& emitterPresets() {
-    static const std::vector<EmitterPreset> v = {
-        // name      glyph       color(RRGGBBAA) rate burst vx   vy    spread grav  life  lspread size sizeEnd drag
-        { "dot",     "\xe2\x80\xa2", 0xFFFFFFFF,  15,  24,   0, -120,  120,  300, 0.9f, 0.3f,  22,   0,  0.0f },
-        { "star",    "*",            0xFFD700FF,  20,  30,   0, -160,  140,  320, 1.0f, 0.4f,  26,   0,  0.0f },
-        { "spark",   "\xe2\x9c\xa6", 0xFF8000FF,  40,   0,   0, -200,   60,  500, 0.5f, 0.2f,  14,   0,  1.2f },
-        { "ember",   ".",            0xFF4040FF,  30,   0,   0,  -40,   80,  900, 1.4f, 0.5f,  12,   0,  0.3f },
-        { "smoke",   "\xe2\x97\x8f", 0xB0B0B040,  12,   0,   0,  -30,   40,  -20, 2.2f, 0.6f,  30,  60,  0.6f },
-        { "snow",    "\xe2\x9d\x84", 0xBFEFFFFF,   8,   0,  20,   40,   60,  120, 3.0f, 0.8f,  18,   0,  0.2f },
-        { "rain",    "|",            0x60A0FFFF,  80,  60,   0,  320,   20,    0, 0.6f, 0.1f,  10,   0,  0.0f },
-        { "magic",   "\xe2\x9c\xa8", 0xC080FFFF,  20,   0,   0,  -90,  100, -120, 1.2f, 0.4f,  20,   0,  0.4f },
-    };
-    return v;
-}
-
-inline void applyEmitterPreset(Particle2D* pe, const EmitterPreset& p) {
-    if (!pe) return;
-    pe->glyph      = p.glyph;
-    pe->color      = p.color;
-    pe->rate       = p.rate;
-    pe->burst      = (int)p.burst;
-    pe->vx         = p.vx;
-    pe->vy         = p.vy;
-    pe->spread     = p.spread;
-    pe->gravity    = p.gravity;
-    pe->life       = p.life;
-    pe->lifeSpread = p.lifeSpread;
-    pe->size       = p.size;
-    pe->sizeEnd    = p.sizeEnd;
-    pe->drag       = p.drag;
-}
-
 class SceneWriter {
 public:
+    static std::string writeNode(Node& n, int indent) { return nodeJson(n, indent); }
+
     static bool write(Scene& scene, const std::string& path) {
         std::ofstream f(path);
         if (!f.good()) return false;
@@ -88,7 +44,7 @@ public:
             s += "\"angle\": " + std::to_string(b.angle);
             if (!b.texture.empty()) s += ", \"texture\": \"" + b.texture + "\"";
             if (!b.group.empty()) s += ", \"group\": \"" + b.group + "\"";
-            s += ", \"alpha\": " + std::to_string(b.alpha);   // BTN-ALPHA
+            s += ", \"alpha\": " + std::to_string(b.alpha);
             s += " }";
             uiparts.push_back(s);
         }
@@ -101,6 +57,28 @@ public:
 private:
     static std::string nodeJson(Node& n, int indent) {
         std::string pad(indent, ' ');
+
+        // Prefabs serialize as a shell + source reference; children are NOT saved.
+        Prefab2D* pf = dynamic_cast<Prefab2D*>(&n);
+        if (pf) {
+            std::string s = pad + "{ ";
+            s += "\"type\": \"Prefab2D\", ";
+            s += "\"name\": \"" + n.name + "\", ";
+            s += "\"source\": \"" + pf->sourcePath + "\", ";
+            s += "\"x\": " + std::to_string((int)pf->position.x);
+            s += ", \"y\": " + std::to_string((int)pf->position.y);
+            s += ", \"rotation\": " + std::to_string(pf->rotation * 57.2957795f);
+            s += ", \"scale_x\": " + std::to_string(pf->scale.x);
+            s += ", \"scale_y\": " + std::to_string(pf->scale.y);
+            s += ", \"color\": \"" + colorToHex(pf->color) + "\"";
+            s += ", \"w\": " + std::to_string((int)pf->w);
+            s += ", \"h\": " + std::to_string((int)pf->h);
+            s += ", \"locked\": " + std::string(pf->locked ? "1" : "0");
+            s += ", \"alpha\": " + std::to_string(pf->alpha);
+            s += " }";
+            return s;
+        }
+
         Node2D* n2 = dynamic_cast<Node2D*>(&n);
         std::string s = pad + "{ ";
         s += std::string("\"type\": \"") + n.typeName() + "\", ";
@@ -219,6 +197,7 @@ public:
         else if (type == "Camera2D") n = std::make_unique<Camera2D>();
         else if (type == "Light2D") n = std::make_unique<Light2D>();
         else if (type == "Particle2D") n = std::make_unique<Particle2D>();
+        else if (type == "Prefab2D") n = std::make_unique<Prefab2D>();
         else n = std::make_unique<Node2D>();
         n->name = name; n->position = Vec2{x, y};
         Node2D* raw = n.get();
@@ -226,50 +205,40 @@ public:
         return raw;
     }
 
-    // ---- particle helpers for the [+] menu and the inspector ----
+    // Turns the selected subtree into prefabs/<name>.json and replaces it with a Prefab2D.
+    bool makePrefabFromSelected(const std::string& fullPath, const std::string& relPath) {
+        if (!scene_ || !scene_->root || !selected_) return false;
+        Node* sel = selected_;
+        if (sel == scene_->root.get()) return false;
+        Node* owner = scene_->root->findParentOf(sel->name);
+        if (!owner) return false;
 
-    Node2D* addParticleNode(const std::string& name, float x, float y, const std::string& presetName) {
-        Node2D* raw = addNode("Particle2D", name, x, y);
-        Particle2D* pe = raw ? dynamic_cast<Particle2D*>(raw) : nullptr;
-        if (!pe) return raw;
-        for (const auto& p : emitterPresets()) {
-            if (presetName == p.name) { applyEmitterPreset(pe, p); break; }
+        size_t slash = fullPath.find_last_of('/');
+        if (slash != std::string::npos) {
+            std::string dir = fullPath.substr(0, slash);
+            std::string cmd = "mkdir -p \"" + dir + "\"";
+            system(cmd.c_str());
         }
-        pe->emitting = true;
-        pe->burstPending = true;
-        return pe;
-    }
 
-    bool setEmitterPreset(const std::string& nodeName, const std::string& presetName) {
-        Node2D* n = find2d(nodeName);
-        Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
-        if (!pe) return false;
-        for (const auto& p : emitterPresets()) {
-            if (presetName == p.name) {
-                applyEmitterPreset(pe, p);
-                pe->emitting = true;
-                pe->burstPending = true;
-                return true;
-            }
-        }
-        return false;
-    }
+        std::string json = "{\n  \"name\": \"prefab\",\n  \"nodes\": [\n" + SceneWriter::writeNode(*sel, 4) + "\n  ]\n}\n";
+        { std::ofstream f(fullPath); if (!f.good()) return false; f << json; }
 
-    std::vector<std::string> emitterPresetNames() const {
-        std::vector<std::string> out;
-        for (const auto& p : emitterPresets()) out.emplace_back(p.name);
-        return out;
-    }
+        auto up = owner->takeChild(sel->name);
+        if (!up) return false;
 
-    // NOTE: deliberately NOT const — it calls find2d(), which is non-const.
-    std::string currentEmitterPreset(const std::string& nodeName) {
-        Node2D* n = find2d(nodeName);
-        Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
-        if (!pe) return "";
-        for (const auto& p : emitterPresets()) {
-            if (pe->glyph == p.glyph) return p.name;
-        }
-        return "";
+        auto pf = std::make_unique<Prefab2D>();
+        pf->name = up->name;
+        Node2D* u2 = dynamic_cast<Node2D*>(up.get());
+        if (u2) { pf->position = u2->position; pf->rotation = u2->rotation; pf->scale = u2->scale; pf->alpha = u2->alpha; }
+        pf->sourcePath = relPath;
+
+        auto kids = up->takeAllChildren();
+        for (auto& k : kids) pf->addChild(std::move(k));
+
+        Node* pfRaw = pf.get();
+        owner->addChild(std::move(pf));
+        selected_ = pfRaw;
+        return true;
     }
 
     void deleteNode(const std::string& name) {
