@@ -596,18 +596,35 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 addLbl("InText", "Text: " + static_cast<Label*>(nd)->text, 900, 364, 16, th.ink);
             }
 
-            const char* nl[7] = { "X", "Y", "ROT", "SCL", "W", "H", "A" };
-            const char* na[7] = { "nx", "ny", "nrot", "nscl", "nw", "nh", "nalpha" };
+            if (std::string(nd->typeName()) == "Particle2D") {
+                std::string cur = in.editor->currentEmitterPreset(sel);
+                addLbl("InView", "View: " + (cur.empty() ? std::string("(custom)") : cur), 900, 364, 16, th.ink);
 
-            for (int k = 0; k < 7; ++k) {
-                UiButton b;
-                b.touch.id = std::string("numbtn") + std::to_string(k);
-                b.touch.rect = Rect{900 + (float)k * 46, 392, 44, 28};
-                b.text = nl[k];
-                b.action = std::string("num:") + na[k];
-                b.color = th.button;
+                int vk = 0;
+                for (const auto& p : emitterPresets()) {
+                    UiButton vb;
+                    vb.touch.id = std::string("viewbtn") + std::to_string(vk);
+                    vb.touch.rect = Rect{900 + (float)vk * 46, 392, 44, 28};
+                    vb.text = p.name;
+                    vb.action = std::string("view:") + p.name;
+                    vb.color = (cur == p.name) ? GO : th.button;
+                    s.ui.push_back(vb);
+                    ++vk;
+                }
+            } else {
+                const char* nl[7] = { "X", "Y", "ROT", "SCL", "W", "H", "A" };
+                const char* na[7] = { "nx", "ny", "nrot", "nscl", "nw", "nh", "nalpha" };
 
-                s.ui.push_back(b);
+                for (int k = 0; k < 7; ++k) {
+                    UiButton b;
+                    b.touch.id = std::string("numbtn") + std::to_string(k);
+                    b.touch.rect = Rect{900 + (float)k * 46, 392, 44, 28};
+                    b.text = nl[k];
+                    b.action = std::string("num:") + na[k];
+                    b.color = th.button;
+
+                    s.ui.push_back(b);
+                }
             }
         } else {
             addLbl("InNone", "(no selection)", 900, 92, 18, th.ink);
@@ -942,6 +959,17 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             b.text = "BTN";
             b.action = "create_btn";
             b.color = parseColor("#2EC4B6");
+
+            s.ui.push_back(b);
+        }
+
+        {
+            UiButton b;
+            b.touch.id = "ctprt";
+            b.touch.rect = Rect{300 + 10 * 58, 560, 54, 40};
+            b.text = "PART";
+            b.action = "create_particle";
+            b.color = parseColor("#FF69B4");
 
             s.ui.push_back(b);
         }
