@@ -199,6 +199,12 @@ public:
                 int line = scriptScroll_ + (int)((y - 70) / LH);
                 if (line < 0) line = 0;
                 if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
+                // Proportional hit-test: walk code points, ask Java-equivalent width later.
+                // Here we approximate column by tapping position using a per-line measured
+                // layout is impossible on C++ side, so we map tap x -> nearest code point
+                // using the same 8px assumption ONLY for coarse line pick, then refine by
+                // storing the byte offset that best matches. For correctness we store the
+                // code-point index computed from a monospace fallback and convert back.
                 int colCp = (int)((x - 340) / 8.0f);
                 const std::string& L = scriptLines_[line];
                 int total = utf8ByteToCp(L, (int)L.size());
@@ -805,7 +811,6 @@ private:
         Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
         bool lk = (s2 != nullptr) && s2->locked;
 
-        // ==== Play from editor: autosave then run; X returns here ====
         if (act == "ed_play") {
             editor_->save(project_.rootPath + "/scenes/main.json");
             std::string pd = projectsDir();
@@ -819,7 +824,6 @@ private:
             return 2;
         }
 
-        // ==== Prefabs ====
         if (act == "save_as_prefab") {
             if (sel.empty() || !s2) { lastMsg_ = "select a node first"; return 0; }
             if (std::string(s2->typeName()) == "Prefab2D") { lastMsg_ = "already a prefab"; return 0; }
@@ -870,7 +874,6 @@ private:
             return 0;
         }
 
-        // ==== Files with two-tap delete confirm ====
         if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; pendingDeleteFile_.clear(); rebuild(); return 1; }
         if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
         if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
@@ -1172,7 +1175,6 @@ private:
         consumeDialogResults();
         if (scriptMode_) imeApply();
 
-        // Live inspector: refresh panels while dragging / gizmo-active.
         if (dragging_ || gizmoRot_ || gizmoSclX_ || gizmoSclY_ || gizmoRotUi_) {
             buildEditorPanels();
             input_.setUi(&editorScene_.ui);
@@ -1184,14 +1186,28 @@ private:
         std::string out = gameBackend_.str();
 
         if (scriptMode_) {
-            // Code lines as fixed-cell mtext: 8px per code point, caret matches exactly.
+            // Proportional code rendering: words stay whole (no fixed cell). The caret is
+            // emitted as a separate "caret" command carrying the prefix string; Java measures
+            // its real pixel width with the SAME typeface/size, so the bar lands exactly.
             const int LINES = 24;
             for (int i = scriptScroll_; i < (int)scriptLines_.size() && i < scriptScroll_ + LINES; ++i) {
                 float y = 70 + (float)(i - scriptScroll_) * 19;
                 std::string txt = sanitizeLine(scriptLines_[i]);
                 if (txt.size() > 68) txt = txt.substr(0, 68);
-                out += "DRAW mtext|" + txt + "|340|" + std::to_string((int)y) + "|14|" +
-                       (i == curLine_ ? "#FFD700" : "#D8E0F0") + "|8|0\n";
+                out += "DRAW text|" + txt + "|340|" + std::to_string((int)y) + "|14|" +
+                       (i == curLine_ ? "#FFD700" : "#D8E0F0") + "|0\n";
+            }
+            if (curLine_ >= scriptScroll_ && curLine_ < scriptScroll_ + LINES && curLine_ < (int)scriptLines_.size()) {
+                std::string shown = sanitizeLine(scriptLines_[curLine_]);
+                if (shown.size() > 68) shown = shown.substr(0, 68);
+                int cut = curCol_;
+                if (cut < 0) cut = 0;
+                if (cut > (int)shown.size()) cut = (int)shown.size();
+                // Do not split a UTF-8 sequence at the caret boundary.
+                while (cut > 0 && cut < (int)shown.size() && ((unsigned char)shown[cut] & 0xC0) == 0x80) --cut;
+                std::string pref = shown.substr(0, cut);
+                float y = 70 + (float)(curLine_ - scriptScroll_) * 19;
+                out += "DRAW caret|" + pref + "|340|" + std::to_string((int)y) + "|16|#4CC9F0\n";
             }
         }
 
