@@ -27,6 +27,10 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.app.AlertDialog;
+import android.content.Intent;
+import android.net.Uri;
+import android.database.Cursor;
+import android.provider.OpenableColumns;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -50,6 +54,9 @@ public class MainActivity extends Activity {
     private static volatile int g_stepLen = -1;
     private static volatile String g_stepHead = "";
     private static volatile boolean g_dialog = false;
+
+    private static final int IMPORT_REQUEST_CODE = 1001;
+    private String pendingImportCategory = "";
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -131,6 +138,70 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void startImport(final String category) {
+        pendingImportCategory = category;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        if (category.equals("fonts")) intent.setType("*/*");
+        else if (category.equals("sprites")) intent.setType("image/*");
+        else if (category.equals("videos")) intent.setType("video/*");
+        else if (category.equals("models")) intent.setType("*/*");
+        else if (category.equals("sounds")) intent.setType("audio/*");
+        else intent.setType("*/*");
+        try { startActivityForResult(intent, IMPORT_REQUEST_CODE); }
+        catch (Exception e) { lastImportMsg_ = "no file picker"; }
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == IMPORT_REQUEST_CODE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                Uri uri = data.getData();
+                String fileName = getFileName(uri);
+                if (fileName == null || fileName.isEmpty()) fileName = "imported_" + System.currentTimeMillis();
+                String safeName = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
+                File targetDir = new File(getFilesDir(), "projects/" + GAME_DIR + "/temp_import");
+                targetDir.mkdirs();
+                File target = new File(targetDir, safeName);
+                try {
+                    InputStream in = getContentResolver().openInputStream(uri);
+                    FileOutputStream out = new FileOutputStream(target);
+                    byte[] buf = new byte[8192]; int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    out.close(); in.close();
+                    lastImportMsg_ = "imported " + safeName + " -> " + pendingImportCategory;
+                    nativeImportFile(pendingImportCategory, safeName);
+                } catch (Exception e) {
+                    lastImportMsg_ = "import failed: " + e.getMessage();
+                }
+            } else {
+                lastImportMsg_ = "import cancelled";
+            }
+            pendingImportCategory = "";
+        }
+    }
+
+    private String getFileName(Uri uri) {
+        String result = null;
+        if ("content".equals(uri.getScheme())) {
+            Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                    if (idx >= 0) result = cursor.getString(idx);
+                }
+            } finally { if (cursor != null) cursor.close(); }
+        }
+        if (result == null) {
+            result = uri.getPath();
+            int cut = result == null ? -1 : result.lastIndexOf('/');
+            if (cut >= 0) result = result.substring(cut + 1);
+        }
+        return result;
+    }
+
+    private volatile String lastImportMsg_ = "";
+
     native boolean nativeInit(String root, String gameDir);
     native String nativeStep();
     native void nativeTouch(int action, float x, float y);
@@ -143,6 +214,7 @@ public class MainActivity extends Activity {
     native void nativeScriptCompose(String text);
     native void nativeScriptFinish();
     native void nativeScriptKey(int key);
+    native void nativeImportFile(String category, String relativePath);
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
@@ -168,7 +240,6 @@ public class MainActivity extends Activity {
                     nativeScriptText(text.toString());
                     return true;
                 }
-                // COMPOSE-FIX: живой набор без ожидания пробела
                 @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
                     nativeScriptCompose(text.toString());
                     return true;
@@ -215,6 +286,17 @@ public class MainActivity extends Activity {
 
                 if (frame.contains("IME_ON"))  requestIme(true);
                 if (frame.contains("IME_OFF")) requestIme(false);
+
+                int ri = frame.indexOf("REQ_IMPORT|");
+                if (!g_dialog && ri >= 0) {
+                    String rest = frame.substring(ri);
+                    int nl = rest.indexOf('\n');
+                    if (nl >= 0) rest = rest.substring(0, nl);
+                    int bar = rest.indexOf('|');
+                    String cat = bar >= 0 ? rest.substring(bar + 1) : "";
+                    startImport(cat);
+                    continue;
+                }
 
                 int rt = frame.indexOf("REQ_TEXT|");
                 int rn = frame.indexOf("REQ_NAME|");
@@ -273,6 +355,9 @@ public class MainActivity extends Activity {
             float x = 20f, y = rh - 50f;
             c.drawText("init=" + g_initOk + "  files=" + g_fileCount + "  proj=" + g_hasProject + "  font=" + g_hasFont, x, y, paint);
             c.drawText("step=" + g_stepLen + "  head=[" + g_stepHead + "]", x, y + sz + 6, paint);
+            if (lastImportMsg_ != null && !lastImportMsg_.isEmpty()) {
+                c.drawText("import: " + lastImportMsg_, x, y + sz * 2 + 12, paint);
+            }
         }
 
         private Bitmap loadBitmap(String path) {
@@ -342,7 +427,7 @@ public class MainActivity extends Activity {
                     float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     int fill = Color.parseColor(p[6]);
-                    int fa = Color.alpha(fill);   // BTN-ALPHA
+                    int fa = Color.alpha(fill);
                     float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
                     String tex = p.length > 8 ? p[8] : "";
 
@@ -355,7 +440,7 @@ public class MainActivity extends Activity {
                     c.drawRoundRect(new RectF(-w/2, -h/2, w/2, h/2), 12f, 12f, paint);
                     double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
                     paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
-                    paint.setAlpha(fa);   // BTN-ALPHA: текст кнопки тоже полупрозрачный
+                    paint.setAlpha(fa);
                     paint.setTextSize(Math.min(30f, h * 0.45f));
                     paint.setTextAlign(Paint.Align.CENTER);
                     if (typeface != null) paint.setTypeface(typeface);
@@ -399,4 +484,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-        }
+    }
