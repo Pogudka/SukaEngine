@@ -85,7 +85,7 @@ static void drawParticlePreviewTree(Node& n, const WorldXf& parent, std::string&
         float sx = 0, sy = 0; projEditor(w.x, w.y, sx, sy, zoom, camX, camY);
         std::string markerGlyph = isSel ? std::string("\xe2\x97\x89") : pe->glyph;
         float markerSize = isSel ? base * 0.75f : base * 0.45f;
-        out += "DRAW text|" + markerGlyph + "|" + std::to_string((int)sx) + "|" + std::to_string((int)sy) + "|" + std::to_string((int)markerSize) + "|" + colorToHexA(withAlpha(col, alpha)) + "|" + std::to_string(w.rot * 57.2957795f) + "\n";
+        out += std::string("DRAW text|") + markerGlyph + "|" + std::to_string((int)sx) + "|" + std::to_string((int)sy) + "|" + std::to_string((int)markerSize) + "|" + colorToHexA(withAlpha(col, alpha)) + "|" + std::to_string(w.rot * 57.2957795f) + "\n";
         if (isSel) {
             for (int i = 0; i < 12; ++i) {
                 float ang = w.rot + (float)i * 0.5235987756f;
@@ -94,7 +94,7 @@ static void drawParticlePreviewTree(Node& n, const WorldXf& parent, std::string&
                 float py = w.y + std::sin(ang) * rad;
                 float psx = 0, psy = 0; projEditor(px, py, psx, psy, zoom, camX, camY);
                 float psz = base * 0.32f; if (psz < 4.0f) psz = 4.0f;
-                out += "DRAW text|" + pe->glyph + "|" + std::to_string((int)psx) + "|" + std::to_string((int)psy) + "|" + std::to_string((int)psz) + "|" + colorToHexA(withAlpha(col, 0.75f)) + "|" + std::to_string(w.rot * 57.2957795f) + "\n";
+                out += std::string("DRAW text|") + pe->glyph + "|" + std::to_string((int)psx) + "|" + std::to_string((int)psy) + "|" + std::to_string((int)psz) + "|" + colorToHexA(withAlpha(col, 0.75f)) + "|" + std::to_string(w.rot * 57.2957795f) + "\n";
             }
         }
     }
@@ -793,13 +793,12 @@ private:
             return 0;
         }
 
-        // Settings panel actions
-        if (act == "settings_open") { showSettings_ = !showSettings_; rebuild(); return 1; }
+        if (act == "settings_open") { showSettings_ = !showSettings_; if (showSettings_) showCreate_ = false; rebuild(); return 1; }
         if (act == "settings_close") { showSettings_ = false; rebuild(); return 1; }
         if (act.rfind("import_category:", 0) == 0) {
             std::string category = act.substr(16);
-            if (category == "fonts" || category == "sprites") { pendingImportCategory_ = category; }
-            else { lastMsg_ = category + ": coming soon"; }
+            if (category == "fonts" || category == "sprites") pendingImportCategory_ = category;
+            else lastMsg_ = category + ": coming soon";
             return 0;
         }
 
@@ -996,16 +995,24 @@ private:
         }
         consumeDialogResults();
         if (scriptMode_) imeApply();
-        gameBackend_.begin(); Renderer gr(gameBackend_); gr.render(editorScene_, &ctx_);
-        std::string out = gameBackend_.str();
+
+        // Viewport FIRST, then editor UI on top (settings window above viewport).
+        std::string out;
         if (!scriptMode_) {
             emitEditorViewport(*editor_->scene(), out, makeEditorRenderInput());
             Scene* es = editor_->scene();
             if (es && es->root) {
                 std::string sel = editor_->selected() ? editor_->selected()->name : std::string();
-                WorldXf ident; drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
+                WorldXf ident;
+                drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
             }
         }
+
+        gameBackend_.begin();
+        Renderer gr(gameBackend_);
+        gr.render(editorScene_, &ctx_);
+        out += gameBackend_.str();
+
         processEditorActions();
         if (appMode_ != AppMode::Editor) return "";
         if (scriptMode_ && imeChanged_) { buildEditorPanels(); input_.setUi(&editorScene_.ui); imeChanged_ = false; }
@@ -1013,12 +1020,9 @@ private:
         if (imeWantOff_) { out += "IME_OFF\n"; imeWantOff_ = false; }
         if (pendingText_ && appMode_ == AppMode::Editor) { out += "REQ_TEXT|" + pendingTextCur_ + "\n"; pendingText_ = false; }
         if (pendingName_ && appMode_ == AppMode::Editor) out += "REQ_NAME|Object\n";
-        if (!pendingImportCategory_.empty() && appMode_ == AppMode::Editor) {
-            out += "REQ_IMPORT|" + pendingImportCategory_ + "\n";
-            pendingImportCategory_.clear();
-        }
         if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
         if (pendingNum_ && appMode_ == AppMode::Editor) { out += "REQ_NUM|" + pendingNumCur_ + "\n"; pendingNum_ = false; }
+        if (!pendingImportCategory_.empty() && appMode_ == AppMode::Editor) { out += "REQ_IMPORT|" + pendingImportCategory_ + "\n"; pendingImportCategory_.clear(); }
         input_.endFrame(); return out;
     }
 
