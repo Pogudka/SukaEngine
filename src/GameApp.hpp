@@ -798,7 +798,7 @@ private:
         Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
         bool lk = (s2 != nullptr) && s2->locked;
 
-        // ==== Prefabs: 3 simple actions ====
+        // ==== Prefabs: 3 actions only ====
         if (act == "save_as_prefab") {
             if (sel.empty() || !s2) { lastMsg_ = "select a node first"; return 0; }
             if (std::string(s2->typeName()) == "Prefab2D") { lastMsg_ = "already a prefab"; return 0; }
@@ -849,7 +849,6 @@ private:
             return 0;
         }
 
-        // ==== Files panel ====
         if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; rebuild(); return 1; }
         if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
         if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
