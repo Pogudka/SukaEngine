@@ -14,6 +14,7 @@
 #include "Resources.hpp"
 #include "Tween.hpp"
 #include "UiUtils.hpp"
+#include "Particles.hpp"
 
 // -----------------------------------------------------------------------------
 // Auto-detect Lua headers.
@@ -656,6 +657,135 @@ static int lua_get_color(lua_State* L) {
     return 1;
 }
 
+// -----------------------------------------------------------------------------
+// B6-lite: particles. opts is a Lua table (real Lua supports tables, the old
+// hand-written VM did not). All fields optional; missing ones keep defaults.
+// color may be a string ("#RRGGBB" or "r,g,b") or a table {r,g,b}.
+// -----------------------------------------------------------------------------
+
+static double optNum(lua_State* L, int tbl, const char* k, double def) {
+    lua_getfield(L, tbl, k);
+    double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : def;
+    lua_pop(L, 1);
+    return v;
+}
+
+static bool optStr(lua_State* L, int tbl, const char* k, std::string& out) {
+    lua_getfield(L, tbl, k);
+    bool ok = lua_isstring(L, -1);
+    if (ok) {
+        out = lua_tostring(L, -1);
+    }
+    lua_pop(L, 1);
+    return ok;
+}
+
+static void readOpts(lua_State* L, int oi, SpawnOpts& o) {
+    if (oi <= 0 || !lua_istable(L, oi)) {
+        return;
+    }
+
+    o.vx = (float)optNum(L, oi, "vx", o.vx);
+    o.vy = (float)optNum(L, oi, "vy", o.vy);
+    o.spread = (float)optNum(L, oi, "spread", o.spread);
+    o.gravity = (float)optNum(L, oi, "gravity", o.gravity);
+    o.life = (float)optNum(L, oi, "life", o.life);
+    o.lifeSpread = (float)optNum(L, oi, "lifeSpread", o.lifeSpread);
+    o.size = (float)optNum(L, oi, "size", o.size);
+    o.sizeEnd = (float)optNum(L, oi, "sizeEnd", o.sizeEnd);
+    o.drag = (float)optNum(L, oi, "drag", o.drag);
+
+    // color
+    lua_getfield(L, oi, "color");
+    if (lua_isstring(L, -1)) {
+        std::string c = lua_tostring(L, -1);
+        unsigned u = 0;
+        if (!c.empty() && c[0] == '#') {
+            u = parseColor(c);
+        } else if (!parseRgb(c, u)) {
+            u = parseColor(c);
+        }
+        o.color = u;
+    } else if (lua_istable(L, -1)) {
+        double comp[3] = {255, 255, 255};
+        for (int i = 1; i <= 3; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (lua_isnumber(L, -1)) {
+                comp[i - 1] = lua_tonumber(L, -1);
+            }
+            lua_pop(L, 1);
+        }
+        auto clamp255 = [](double v) -> int {
+            int i = (int)(v + (v >= 0 ? 0.5 : -0.5));
+            if (i < 0) i = 0;
+            if (i > 255) i = 255;
+            return i;
+        };
+        std::string rgb =
+            std::to_string(clamp255(comp[0])) + "," +
+            std::to_string(clamp255(comp[1])) + "," +
+            std::to_string(clamp255(comp[2]));
+        unsigned u = 0;
+        if (parseRgb(rgb, u)) {
+            o.color = u;
+        }
+    }
+    lua_pop(L, 1);
+
+    // glyph
+    std::string g;
+    if (optStr(L, oi, "glyph", g) && !g.empty()) {
+        std::memset(o.glyph, 0, sizeof(o.glyph));
+        std::strncpy(o.glyph, g.c_str(), 7);
+        o.glyph[7] = 0;
+    }
+}
+
+static int lua_emit(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+    if (!n) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    int count = (int)luaL_checkinteger(L, 2);
+
+    SpawnOpts o;
+    readOpts(L, 3, o);
+
+    // Local position is used as world position here (fine for flat/demo scenes
+    // whose nodes sit directly under an untransformed root). Nested emitters get
+    // exact world math in B6-full once Scene.hpp is integrated.
+    g_particles.spawn(n->position.x, n->position.y, count, o);
+
+    lua_pushinteger(L, count);
+    return 1;
+}
+
+static int lua_emit_at(lua_State* L) {
+    float x = (float)luaL_checknumber(L, 1);
+    float y = (float)luaL_checknumber(L, 2);
+    int count = (int)luaL_checkinteger(L, 3);
+
+    SpawnOpts o;
+    readOpts(L, 4, o);
+
+    g_particles.spawn(x, y, count, o);
+
+    lua_pushinteger(L, count);
+    return 1;
+}
+
+static int lua_particles_clear(lua_State* L) {
+    g_particles.clear();
+    return 0;
+}
+
+static int lua_particles_count(lua_State* L) {
+    lua_pushinteger(L, (lua_Integer)g_particles.count());
+    return 1;
+}
+
 class ScriptSystem {
 public:
     ~ScriptSystem() {
@@ -723,6 +853,9 @@ public:
         }
 
         callFunctionWithDt("on_update", dt);
+
+        // B6-lite: advance particles every frame (real Lua branch only).
+        g_particles.update(dt);
     }
 
     void callGlobal(
@@ -809,6 +942,12 @@ private:
         lua_register(L_, "set_action", lua_set_action);
         lua_register(L_, "set_color", lua_set_color);
         lua_register(L_, "get_color", lua_get_color);
+
+        // B6-lite particles.
+        lua_register(L_, "emit", lua_emit);
+        lua_register(L_, "emit_at", lua_emit_at);
+        lua_register(L_, "particles_clear", lua_particles_clear);
+        lua_register(L_, "particles_count", lua_particles_count);
     }
 
     void callFunction(const std::string& fn) {
