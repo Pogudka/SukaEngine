@@ -56,7 +56,8 @@ public class MainActivity extends Activity {
     private static volatile boolean g_dialog = false;
 
     private static final int IMPORT_REQUEST_CODE = 1001;
-    private String pendingImportCategory = "";
+    private volatile String pendingImportCategory = "";
+    private volatile String lastImportMsg_ = "";
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -138,23 +139,30 @@ public class MainActivity extends Activity {
         });
     }
 
+    // FIX: pause render thread (g_dialog) + launch picker on UI thread only.
     private void startImport(final String category) {
         pendingImportCategory = category;
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        if (category.equals("fonts")) intent.setType("*/*");
-        else if (category.equals("sprites")) intent.setType("image/*");
-        else if (category.equals("videos")) intent.setType("video/*");
-        else if (category.equals("models")) intent.setType("*/*");
-        else if (category.equals("sounds")) intent.setType("audio/*");
-        else intent.setType("*/*");
-        try { startActivityForResult(intent, IMPORT_REQUEST_CODE); }
-        catch (Exception e) { lastImportMsg_ = "no file picker"; }
+        g_dialog = true;
+        runOnUiThread(() -> {
+            try {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                if (category.equals("sprites")) intent.setType("image/*");
+                else if (category.equals("videos")) intent.setType("video/*");
+                else if (category.equals("sounds")) intent.setType("audio/*");
+                else intent.setType("*/*");
+                startActivityForResult(intent, IMPORT_REQUEST_CODE);
+            } catch (Exception e) {
+                lastImportMsg_ = "no file picker";
+                g_dialog = false;
+            }
+        });
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == IMPORT_REQUEST_CODE) {
+        if (requestCode != IMPORT_REQUEST_CODE) return;
+        try {
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                 Uri uri = data.getData();
                 String fileName = getFileName(uri);
@@ -163,22 +171,25 @@ public class MainActivity extends Activity {
                 File targetDir = new File(getFilesDir(), "projects/" + GAME_DIR + "/temp_import");
                 targetDir.mkdirs();
                 File target = new File(targetDir, safeName);
-                try {
-                    InputStream in = getContentResolver().openInputStream(uri);
+                InputStream in = getContentResolver().openInputStream(uri);
+                if (in != null) {
                     FileOutputStream out = new FileOutputStream(target);
                     byte[] buf = new byte[8192]; int n;
                     while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                     out.close(); in.close();
                     lastImportMsg_ = "imported " + safeName + " -> " + pendingImportCategory;
                     nativeImportFile(pendingImportCategory, safeName);
-                } catch (Exception e) {
-                    lastImportMsg_ = "import failed: " + e.getMessage();
+                } else {
+                    lastImportMsg_ = "cannot read file";
                 }
             } else {
                 lastImportMsg_ = "import cancelled";
             }
-            pendingImportCategory = "";
+        } catch (Exception e) {
+            lastImportMsg_ = "import failed";
         }
+        pendingImportCategory = "";
+        g_dialog = false;
     }
 
     private String getFileName(Uri uri) {
@@ -199,8 +210,6 @@ public class MainActivity extends Activity {
         }
         return result;
     }
-
-    private volatile String lastImportMsg_ = "";
 
     native boolean nativeInit(String root, String gameDir);
     native String nativeStep();
@@ -484,4 +493,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-    }
+                                          }
