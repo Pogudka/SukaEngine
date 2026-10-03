@@ -480,9 +480,25 @@ public class MainActivity extends Activity {
                 if (p[0].equals("clipoff")) { c.restore(); return; }
                 if (p[0].equals("bg")) { c.drawColor(Color.parseColor(p[1])); return; }
 
-                if (p[0].equals("mtext")) {
-                    // Fixed-cell text: each code point advances exactly p[6] px.
-                    // Used for the script editor so the caret column math matches pixels.
+                if (p[0].equals("caret")) {
+                    // Vertical bar placed exactly after the measured prefix, using the SAME
+                    // typeface and size (14px) as the proportional "text" command that drew
+                    // the code line. This guarantees the caret never drifts on long lines.
+                    if (p.length < 6) return;
+                    String pref = p[1];
+                    float bx = Float.parseFloat(p[2]);
+                    float by = Float.parseFloat(p[3]);
+                    float hh = Float.parseFloat(p[4]);
+                    paint.setColor(Color.parseColor(p[5]));
+                    paint.setTextSize(14f);
+                    paint.setTextAlign(Paint.Align.LEFT);
+                    if (typeface != null) paint.setTypeface(typeface);
+                    float w = paint.measureText(pref);
+                    c.drawRect(bx + w, by + 1, bx + w + 2f, by + hh, paint);
+                }
+                else if (p[0].equals("mtext")) {
+                    // Legacy fixed-cell renderer. No longer emitted by the C++ side for code
+                    // (proportional text + caret is used now), but kept harmless for safety.
                     paint.setColor(Color.parseColor(p[5]));
                     float fs = Float.parseFloat(p[4]);
                     float cell = p.length > 6 ? Float.parseFloat(p[6]) : fs * 0.6f;
@@ -606,4 +622,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                                       }
+                }
