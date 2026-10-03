@@ -19,7 +19,7 @@ struct EditorRenderInput {
     const std::string& pickChild;
     const std::string& lastMsg;
     float fps;
-};
+};;
 
 inline void emitNodePreview(
     const Node* n,
@@ -73,7 +73,6 @@ inline void emitNodePreview(
                std::to_string((int)(2 * r)) + "|" +
                colorToHexA(colA) + "|0\n";
     } else if (tn == "Prefab2D") {
-        // Prefab = single diamond marker with PREFAB label; children not drawn.
         float w = n2d->w * wsx * S;
         float h = n2d->h * wsy * S;
         if (w < 24) w = 24;
@@ -132,6 +131,7 @@ inline void emitNodePreview(
     }
 }
 
+// Background, grid, nodes, scene buttons. NO gizmos here (they go on top later).
 inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRenderInput& in) {
     const float VX0 = 300;
     const float VY0 = 64;
@@ -174,10 +174,8 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
     for (auto& b : sc.ui) {
         float bcx = CX + (b.touch.rect.x + b.touch.rect.w / 2 - sc.camX - 640) * S;
         float bcy = CY + (b.touch.rect.y + b.touch.rect.h / 2 - sc.camY - 360) * S;
-
         float bw = b.touch.rect.w * S;
         float bh = b.touch.rect.h * S;
-
         out += "DRAW button|" + b.text + "|" +
                std::to_string((int)(bcx - bw / 2)) + "|" +
                std::to_string((int)(bcy - bh / 2)) + "|" +
@@ -185,6 +183,18 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
                colorToHexA(withAlpha(b.color, b.alpha)) + "|" +
                std::to_string(b.angle) + "|" + resolveAssetPath(b.texture) + "\n";
     }
+}
+
+// Gizmos + banners + status line. Drawn LAST so they are always on top of textures.
+// All gizmo metrics are in constant screen pixels (do not shrink with zoom).
+inline void emitEditorGizmos(const Scene& sc, std::string& out, const EditorRenderInput& in) {
+    const float VX0 = 300;
+    const float VY0 = 64;
+    const float VW = 592;
+    const float VH = 492;
+    const float S = 0.46875f * in.edZoom;
+    const float CX = VX0 + VW / 2;
+    const float CY = VY0 + VH / 2;
 
     Node* selN = in.editor ? in.editor->selected() : nullptr;
     Node2D* g = (selN && in.editor && in.editor->selectedUi().empty())
@@ -195,73 +205,47 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
         float gwx, gwy, gwr, gsx, gsy;
         Scene* esc = const_cast<Scene*>(&sc);
         if (!nodeWorld(esc, g->name, gwx, gwy, gwr, gsx, gsy)) {
-            gwx = g->position.x;
-            gwy = g->position.y;
-            gsx = gsy = 1;
+            gwx = g->position.x; gwy = g->position.y; gsx = gsy = 1;
         }
-
         float cx = CX + (gwx - sc.camX - 640) * S;
         float cy = CY + (gwy - sc.camY - 360) * S;
-        float Z = in.edZoom;
 
         if (in.manip == Manip::Move) {
-            out += "DRAW rect|" + std::to_string((int)cx) + "|" +
-                   std::to_string((int)(cy - 2)) + "|" +
-                   std::to_string((int)(56 * Z)) + "|4|#D62828|0\n";
-            out += "DRAW shape|triangle|" + std::to_string((int)(cx + 50 * Z)) + "|" +
-                   std::to_string((int)(cy - 8 * Z)) + "|" +
-                   std::to_string((int)(16 * Z)) + "|" +
-                   std::to_string((int)(14 * Z)) + "|#D62828|90\n";
-            out += "DRAW rect|" + std::to_string((int)(cx - 2)) + "|" +
-                   std::to_string((int)cy) + "|4|" +
-                   std::to_string((int)(56 * Z)) + "|#40C040|0\n";
-            out += "DRAW shape|triangle|" + std::to_string((int)(cx - 8 * Z)) + "|" +
-                   std::to_string((int)(cy + 50 * Z)) + "|" +
-                   std::to_string((int)(14 * Z)) + "|" +
-                   std::to_string((int)(16 * Z)) + "|#40C040|180\n";
+            out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy - 2)) + "|56|4|#D62828|0\n";
+            out += "DRAW shape|triangle|" + std::to_string((int)(cx + 50)) + "|" + std::to_string((int)(cy - 8)) + "|16|14|#D62828|90\n";
+            out += "DRAW rect|" + std::to_string((int)(cx - 2)) + "|" + std::to_string((int)cy) + "|4|56|#40C040|0\n";
+            out += "DRAW shape|triangle|" + std::to_string((int)(cx - 8)) + "|" + std::to_string((int)(cy + 50)) + "|14|16|#40C040|180\n";
         } else if (in.manip == Manip::Rotate) {
             for (int k = 0; k < 24; ++k) {
                 float a = k * 6.28318f / 24.0f;
-                float px = cx + std::cos(a) * 70 * Z;
-                float py = cy + std::sin(a) * 70 * Z;
-                out += "DRAW rect|" + std::to_string((int)(px - 3)) + "|" +
-                       std::to_string((int)(py - 3)) + "|6|6|#FF8800|0\n";
+                float px = cx + std::cos(a) * 70;
+                float py = cy + std::sin(a) * 70;
+                out += "DRAW rect|" + std::to_string((int)(px - 3)) + "|" + std::to_string((int)(py - 3)) + "|6|6|#FF8800|0\n";
             }
         } else {
             float hw = (g->w * gsx) * S / 2;
             float hh = (g->h * gsy) * S / 2;
-            out += "DRAW rect|" + std::to_string((int)cx) + "|" +
-                   std::to_string((int)(cy - 1)) + "|" +
-                   std::to_string((int)(hw + 24 * Z)) + "|2|#4CC9F0|0\n";
-            out += "DRAW rect|" + std::to_string((int)(cx + hw + 16 * Z)) + "|" +
-                   std::to_string((int)(cy - 8 * Z)) + "|16|16|#4CC9F0|0\n";
-            out += "DRAW rect|" + std::to_string((int)(cx - 1)) + "|" +
-                   std::to_string((int)cy) + "|2|" +
-                   std::to_string((int)(hh + 24 * Z)) + "|#4CC9F0|0\n";
-            out += "DRAW rect|" + std::to_string((int)(cx - 8 * Z)) + "|" +
-                   std::to_string((int)(cy + hh + 16 * Z)) + "|16|16|#4CC9F0|0\n";
+            out += "DRAW rect|" + std::to_string((int)cx) + "|" + std::to_string((int)(cy - 1)) + "|" + std::to_string((int)(hw + 24)) + "|2|#4CC9F0|0\n";
+            out += "DRAW rect|" + std::to_string((int)(cx + hw + 16)) + "|" + std::to_string((int)(cy - 8)) + "|16|16|#4CC9F0|0\n";
+            out += "DRAW rect|" + std::to_string((int)(cx - 1)) + "|" + std::to_string((int)cy) + "|2|" + std::to_string((int)(hh + 24)) + "|#4CC9F0|0\n";
+            out += "DRAW rect|" + std::to_string((int)(cx - 8)) + "|" + std::to_string((int)(cy + hh + 16)) + "|16|16|#4CC9F0|0\n";
         }
     }
 
     if (in.editor) {
         std::string selUi2 = in.editor->selectedUi();
         UiButton* gb2 = selUi2.empty() ? nullptr : in.editor->findUi(selUi2);
-
         if (gb2 && in.manip == Manip::Rotate) {
             float bcx = CX + (gb2->touch.rect.x + gb2->touch.rect.w / 2 - sc.camX - 640) * S;
             float bcy = CY + (gb2->touch.rect.y + gb2->touch.rect.h / 2 - sc.camY - 360) * S;
-            float Z = in.edZoom;
-
             for (int k = 0; k < 24; ++k) {
                 float a = k * 6.28318f / 24.0f;
-                float px = bcx + std::cos(a) * 70 * Z;
-                float py = bcy + std::sin(a) * 70 * Z;
-                out += "DRAW rect|" + std::to_string((int)(px - 3)) + "|" +
-                       std::to_string((int)(py - 3)) + "|6|6|#FF8800|0\n";
+                float px = bcx + std::cos(a) * 70;
+                float py = bcy + std::sin(a) * 70;
+                out += "DRAW rect|" + std::to_string((int)(px - 3)) + "|" + std::to_string((int)(py - 3)) + "|6|6|#FF8800|0\n";
             }
             out += "DRAW text|ang " + std::to_string((int)gb2->angle) + "|" +
-                   std::to_string((int)(bcx + 80)) + "|" +
-                   std::to_string((int)(bcy - 10)) + "|14|#FF8800|0\n";
+                   std::to_string((int)(bcx + 80)) + "|" + std::to_string((int)(bcy - 10)) + "|14|#FF8800|0\n";
         }
     }
 
