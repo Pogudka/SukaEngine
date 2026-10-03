@@ -9,7 +9,7 @@
 namespace suka {
 
 constexpr const char* ENGINE_NAME = "SukaEngine";
-constexpr const char* ENGINE_VERSION = "0.17.0";
+constexpr const char* ENGINE_VERSION = "0.18.4";
 constexpr const char* DEFAULT_FONT_NAME = "Ubuntu";
 
 inline std::string& projectRootRef() {
