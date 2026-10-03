@@ -429,9 +429,26 @@ static int lua_tween_is_active(lua_State* L) {
 }
 
 // -----------------------------------------------------------------------------
+// Shared tolerant color parser: "#RRGGBB" -> parseColor, "r,g,b" -> parseRgb,
+// otherwise fall back to parseColor. Used by set_color, emit opts and
+// particle_config so every path packs color identically to the editor.
+// -----------------------------------------------------------------------------
+
+static unsigned parseColorTolerant(const std::string& s) {
+    if (!s.empty() && s[0] == '#') {
+        return parseColor(s);
+    }
+
+    unsigned u = 0;
+    if (parseRgb(s, u)) {
+        return u;
+    }
+
+    return parseColor(s);
+}
+
+// -----------------------------------------------------------------------------
 // Short aliases + color, matching the API the demo main.lua was written against.
-// Color goes through parseColor / parseRgb so the packing format is exactly the
-// one the editor/renderer already understands (no hand-rolled bit shifts).
 // -----------------------------------------------------------------------------
 
 static int lua_set_pos(lua_State* L) {
@@ -604,7 +621,7 @@ static int lua_set_color(lua_State* L) {
 
     if (top >= 2 && lua_isstring(L, 2)) {
         std::string s = lua_tostring(L, 2);
-        n->color = parseColor(s);
+        n->color = parseColorTolerant(s);
         return 0;
     }
 
@@ -658,9 +675,8 @@ static int lua_get_color(lua_State* L) {
 }
 
 // -----------------------------------------------------------------------------
-// B6-lite: particles. opts is a Lua table (real Lua supports tables, the old
-// hand-written VM did not). All fields optional; missing ones keep defaults.
-// color may be a string ("#RRGGBB" or "r,g,b") or a table {r,g,b}.
+// B6-lite: particles. opts is a Lua table. All fields optional; missing ones
+// keep defaults. color may be a string ("#RRGGBB" or "r,g,b") or a table {r,g,b}.
 // -----------------------------------------------------------------------------
 
 static double optNum(lua_State* L, int tbl, const char* k, double def) {
@@ -699,13 +715,7 @@ static void readOpts(lua_State* L, int oi, SpawnOpts& o) {
     lua_getfield(L, oi, "color");
     if (lua_isstring(L, -1)) {
         std::string c = lua_tostring(L, -1);
-        unsigned u = 0;
-        if (!c.empty() && c[0] == '#') {
-            u = parseColor(c);
-        } else if (!parseRgb(c, u)) {
-            u = parseColor(c);
-        }
-        o.color = u;
+        o.color = parseColorTolerant(c);
     } else if (lua_istable(L, -1)) {
         double comp[3] = {255, 255, 255};
         for (int i = 1; i <= 3; ++i) {
@@ -753,9 +763,6 @@ static int lua_emit(lua_State* L) {
     SpawnOpts o;
     readOpts(L, 3, o);
 
-    // Local position is used as world position here (fine for flat/demo scenes
-    // whose nodes sit directly under an untransformed root). Nested emitters get
-    // exact world math in B6-full once Scene.hpp is integrated.
     g_particles.spawn(n->position.x, n->position.y, count, o);
 
     lua_pushinteger(L, count);
@@ -784,6 +791,78 @@ static int lua_particles_clear(lua_State* L) {
 static int lua_particles_count(lua_State* L) {
     lua_pushinteger(L, (lua_Integer)g_particles.count());
     return 1;
+}
+
+// -----------------------------------------------------------------------------
+// B6-full: Particle2D emitter node control from Lua.
+// -----------------------------------------------------------------------------
+
+static Particle2D* scriptFindEmitter(const char* name) {
+    Node2D* n = scriptFindNode(name);
+    return n ? dynamic_cast<Particle2D*>(n) : nullptr;
+}
+
+static int lua_set_emitting(lua_State* L) {
+    Particle2D* pe = scriptFindEmitter(luaL_checkstring(L, 1));
+    if (!pe) {
+        return 0;
+    }
+
+    bool on = lua_toboolean(L, 2) != 0;
+
+    // Turning on fires one immediate burst so a tap feels responsive.
+    if (on && !pe->emitting) {
+        pe->burstPending = true;
+    }
+
+    pe->emitting = on;
+    return 0;
+}
+
+static int lua_particle_config(lua_State* L) {
+    Particle2D* pe = scriptFindEmitter(luaL_checkstring(L, 1));
+    if (!pe || !lua_istable(L, 2)) {
+        return 0;
+    }
+
+    int t = 2;
+
+    #define PSET(field, key) { \
+        lua_getfield(L, t, key); \
+        if (lua_isnumber(L, -1)) { \
+            pe->field = (decltype(pe->field))lua_tonumber(L, -1); \
+        } \
+        lua_pop(L, 1); \
+    }
+
+    PSET(rate, "rate")
+    PSET(burst, "burst")
+    PSET(vx, "vx")
+    PSET(vy, "vy")
+    PSET(spread, "spread")
+    PSET(gravity, "gravity")
+    PSET(life, "life")
+    PSET(lifeSpread, "life_spread")
+    PSET(size, "size")
+    PSET(sizeEnd, "size_end")
+    PSET(drag, "drag")
+
+    #undef PSET
+
+    lua_getfield(L, t, "glyph");
+    if (lua_isstring(L, -1)) {
+        pe->glyph = lua_tostring(L, -1);
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, t, "color");
+    if (lua_isstring(L, -1)) {
+        std::string c = lua_tostring(L, -1);
+        pe->color = parseColorTolerant(c);
+    }
+    lua_pop(L, 1);
+
+    return 0;
 }
 
 class ScriptSystem {
@@ -948,6 +1027,10 @@ private:
         lua_register(L_, "emit_at", lua_emit_at);
         lua_register(L_, "particles_clear", lua_particles_clear);
         lua_register(L_, "particles_count", lua_particles_count);
+
+        // B6-full emitter node.
+        lua_register(L_, "set_emitting", lua_set_emitting);
+        lua_register(L_, "particle_config", lua_particle_config);
     }
 
     void callFunction(const std::string& fn) {
