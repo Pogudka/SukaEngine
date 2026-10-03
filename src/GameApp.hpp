@@ -1269,8 +1269,10 @@ private:
             manip_,
             pickParent_,
             showCreate_,
+            showAssets_,
             hierScroll_,
             fsScroll_,
+            assetScroll_,
             scriptScroll_,
             collapsed_,
             fsPath_,
@@ -1788,6 +1790,8 @@ private:
         editor_->attach(sceneMgr_->current());
 
         showCreate_ = false;
+        showAssets_ = false;
+        assetScroll_ = 0;
 
         pendingText_ = false;
         pendingName_ = false;
@@ -2092,6 +2096,66 @@ private:
             return 1;
         }
 
+        if (act == "assets_open") {
+            showAssets_ = !showAssets_;
+            assetScroll_ = 0;
+
+            rebuild();
+            return 1;
+        }
+
+        if (act == "assets_up") {
+            assetScroll_ -= 3;
+
+            rebuild();
+            return 1;
+        }
+
+        if (act == "assets_dn") {
+            assetScroll_ += 3;
+
+            rebuild();
+            return 1;
+        }
+
+        if (act.rfind("tex_pick:", 0) == 0) {
+            if (!showAssets_) {
+                return 0;
+            }
+
+            std::string img = act.substr(9);
+            std::string rel = "assets/" + img;
+
+            if (s2) {
+                if (lk) return 0;
+
+                pushUndo();
+                editor_->setTexture(sel, rel);
+
+                lastMsg_ = "tex " + img + " -> " + sel;
+            } else if (ub) {
+                pushUndo();
+                ub->texture = rel;
+
+                lastMsg_ = "tex " + img + " -> button " + selUi;
+            } else {
+                pushUndo();
+
+                std::string name = "Sprite" + std::to_string(createCounter_++);
+
+                editor_->addNode("Sprite2D", name, 640, 360);
+                editor_->setTexture(name, rel);
+                editor_->select(name);
+
+                lastMsg_ = "sprite " + name + " <- " + img;
+            }
+
+            showAssets_ = false;
+
+            rebuild();
+            return 1;
+        }
+
         if (act == "ed_lock") {
             if (s2) {
                 pushUndo();
@@ -2206,6 +2270,8 @@ private:
                     scripted_.clear();
 
                     showCreate_ = false;
+                    showAssets_ = false;
+                    assetScroll_ = 0;
                     dragging_ = false;
                     dragNode_ = nullptr;
                     dragUi_ = nullptr;
@@ -3066,6 +3132,7 @@ private:
     Manip manip_ = Manip::Move;
 
     bool showCreate_ = false;
+    bool showAssets_ = false;
     bool dragging_ = false;
     bool pendingText_ = false;
     bool pinching_ = false;
@@ -3116,6 +3183,7 @@ private:
 
     int hierScroll_ = 0;
     int fsScroll_ = 0;
+    int assetScroll_ = 0;
 
     std::set<std::string> collapsed_;
 
