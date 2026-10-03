@@ -217,7 +217,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.root->addChild(std::move(l));
     };
 
-    // ==== Top toolbar ====
     { UiButton b; b.touch.id = "settings_btn"; b.touch.rect = Rect{10, 4, 32, 26}; b.text = "*"; b.action = "settings_open"; b.color = GO; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "tab_scene"; b.touch.rect = Rect{50, 4, 80, 26}; b.text = "Scene"; b.action = "tab_scene"; b.color = in.scriptMode ? th.button : GO; s.ui.push_back(b); }
     addLbl("Tab2D", "2D", 140, 8, 20, th.ink);
@@ -228,7 +227,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     if (in.scriptMode) { editorBuildScriptScene(in, s); return s; }
     if (!in.editor || !in.editor->scene()) return s;
 
-    // ==== Left-side background (where FILES panel lives) ====
     auto fsBg = std::make_unique<Node2D>();
     fsBg->name = "FsBg"; fsBg->shape = "square"; fsBg->color = dimColor(th.bg, 0.6f);
     fsBg->w = 284; fsBg->h = 320; fsBg->position = Vec2{150, 536};
@@ -238,7 +236,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     addLbl("IHdr", "Inspector", 900, 40, 18, th.ink);
     addLbl("ZoomLbl", "zoom " + std::to_string((int)(in.edZoom * 100)) + "%", 380, 8, 16, th.ink);
 
-    // ==== Manip mode buttons ====
     const char* mlab[3] = { "POS", "ROT", "SCL" };
     Manip mval[3] = { Manip::Move, Manip::Rotate, Manip::Scale };
     for (int k = 0; k < 3; ++k) {
@@ -251,7 +248,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    // ==== Hierarchy ====
     Scene* esc = in.editor->scene();
     Node* selNode = in.editor->selected();
     std::string sel = selNode ? selNode->name : std::string{};
@@ -301,7 +297,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    // ==== Inspector ====
     if (!selUi.empty()) {
         UiButton* ub = in.editor->findUi(selUi);
         if (ub) {
@@ -431,7 +426,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         }
     }
 
-    // ==== Lua log ====
     {
         size_t ln = in.luaLog.size();
         int show = ln > 5 ? 5 : (int)ln;
@@ -442,7 +436,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         }
     }
 
-    // ==== Inspector toolbar (LCK, BG, etc.) ====
     std::string sb = (esc && esc->bgSet()) ? esc->bg : std::string("(theme)");
     addLbl("InBg", "scene bg: " + sb, 900, 426, 16, th.ink);
 
@@ -471,20 +464,10 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    // ==== Scene-toolbar buttons (top-middle of viewport) ====
+    // ==== Top toolbar: SAVE SCN / SAVE PF instead of SQ CI DI TR ====
     float tx = 300;
-    const char* shapes[4] = { "square", "circle", "diamond", "triangle" };
-    const char* shTxt[4] = { "SQ", "CI", "DI", "TR" };
-    for (int k = 0; k < 4; ++k) {
-        UiButton b;
-        b.touch.id = std::string("sh") + std::to_string(k);
-        b.touch.rect = Rect{tx, 34, 44, 26};
-        tx += 46;
-        b.text = shTxt[k];
-        b.action = std::string("ed_shape:") + shapes[k];
-        b.color = th.button;
-        s.ui.push_back(b);
-    }
+    { UiButton b; b.touch.id = "savesc"; b.touch.rect = Rect{tx, 34, 92, 26}; tx += 94; b.text = "SAVE SCN"; b.action = "save_scene_as"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "savepf"; b.touch.rect = Rect{tx, 34, 92, 26}; tx += 94; b.text = "SAVE PF"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "colbtn"; b.touch.rect = Rect{tx, 34, 54, 26}; tx += 56; b.text = "RGB"; b.action = "col_rgb"; b.color = th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "del"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "DEL"; b.action = "ed_del"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "save"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "SAVE"; b.action = "ed_save"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
@@ -495,7 +478,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     { UiButton b; b.touch.id = "tex"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "TEX"; b.action = "assets_open"; b.color = in.showAssets ? GO : th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "file"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "FILES"; b.action = "files_open"; b.color = in.showFiles ? GO : th.button; s.ui.push_back(b); }
 
-    // ==== Create menu ====
+    // ==== Create menu: PREFAB right after PART, no save buttons here ====
     if (in.showCreate) {
         const char* ct[6] = { "Node2D", "Node2D", "Node2D", "Node2D", "Label", "Sprite2D" };
         const char* cs[6] = { "square", "circle", "diamond", "triangle", "", "" };
@@ -514,21 +497,41 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         { UiButton b; b.touch.id = "ctgrp"; b.touch.rect = Rect{300 + 8 * 58, 560, 54, 40}; b.text = "GRP"; b.action = "create_grp"; b.color = parseColor("#808080"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctbtn"; b.touch.rect = Rect{300 + 9 * 58, 560, 54, 40}; b.text = "BTN"; b.action = "create_btn"; b.color = parseColor("#2EC4B6"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctprt"; b.touch.rect = Rect{300, 604, 54, 40}; b.text = "PART"; b.action = "create:Particle2D:none"; b.color = parseColor("#FF69B4"); s.ui.push_back(b); }
-        { UiButton b; b.touch.id = "ctprf"; b.touch.rect = Rect{54, 604, 54, 40}; b.text = "PREFAB"; b.action = "create_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
-
-        // New: explicit save-as-scene / save-as-prefab buttons
-        { UiButton b; b.touch.id = "save_sc"; b.touch.rect = Rect{110, 560, 100, 40}; b.text = "SAVE SCENE"; b.action = "save_scene_as"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
-        { UiButton b; b.touch.id = "save_pf"; b.touch.rect = Rect{214, 560, 100, 40}; b.text = "SAVE PREFAB"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
+        { UiButton b; b.touch.id = "ctprf"; b.touch.rect = Rect{358, 604, 70, 40}; b.text = "PREFAB"; b.action = "create_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
     }
 
-    // ==== FILES modal/panel: covers the left column when open ====
-    if (in.showFiles) {
-        // Dim overlay to make it feel modal
-        auto dim = std::make_unique<Node2D>();
-        dim->name = "__filesDim"; dim->shape = "square"; dim->color = 0x14141CFF;
-        dim->w = 292; dim->h = 330; dim->position = Vec2{146, 541};
-        s.root->addChild(std::move(dim));
-
+    // ==== Left column panels: ASSETS overrides FILES; FILES visible by default ====
+    if (in.showAssets) {
+        addLbl("FsHdr", "ASSETS", 10, 384, 18, th.ink);
+        { UiButton b; b.touch.id = "asclose"; b.touch.rect = Rect{252, 382, 40, 22}; b.text = "X"; b.action = "assets_open"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
+        { UiButton b; b.touch.id = "asu"; b.touch.rect = Rect{210, 382, 20, 22}; b.text = "^"; b.action = "assets_up"; b.color = th.button; s.ui.push_back(b); }
+        { UiButton b; b.touch.id = "asd"; b.touch.rect = Rect{232, 382, 20, 22}; b.text = "v"; b.action = "assets_dn"; b.color = th.button; s.ui.push_back(b); }
+        std::vector<std::string> imgs;
+        for (const auto& it : FileBrowser::list(in.projectRoot + "/assets")) {
+            if (it.isDir) continue;
+            if (editorIsImageName(it.name)) imgs.push_back(it.name);
+        }
+        std::sort(imgs.begin(), imgs.end());
+        const int AMAXROWS = 9;
+        int amax = (int)imgs.size() > AMAXROWS ? (int)imgs.size() - AMAXROWS : 0;
+        if (in.assetScroll < 0) in.assetScroll = 0;
+        if (in.assetScroll > amax) in.assetScroll = amax;
+        addLbl("FsPath", "assets/  (" + std::to_string((int)imgs.size()) + ")", 10, 406, 15, GO);
+        if (imgs.empty()) addLbl("AsEmpty", "drop png/jpg into assets/", 12, 432, 14, th.ink);
+        float ay = 428;
+        const float ASTEP = 28;
+        for (int i = in.assetScroll; i < (int)imgs.size() && i < in.assetScroll + AMAXROWS; ++i) {
+            UiButton tb;
+            tb.touch.id = "tb" + std::to_string(i);
+            tb.touch.rect = Rect{8, ay, 284, ASTEP - 2};
+            tb.text = "  " + imgs[i];
+            tb.action = "tex_pick:" + imgs[i];
+            tb.color = th.accent;
+            s.ui.push_back(tb);
+            ay += ASTEP;
+        }
+        addLbl("AsHint", "tap = assign / create sprite", 10, 668, 12, th.ink);
+    } else if (in.showFiles) {
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
         { UiButton b; b.touch.id = "fsclose"; b.touch.rect = Rect{252, 382, 40, 22}; b.text = "X"; b.action = "files_open"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "fsu"; b.touch.rect = Rect{210, 382, 20, 22}; b.text = "^"; b.action = "fscroll_up"; b.color = th.button; s.ui.push_back(b); }
@@ -578,47 +581,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             }
             fy += STEP;
         }
-        addLbl("FsHint", "tap file = load scene  |  X = delete", 10, 668, 12, th.ink);
-    } else if (!in.showAssets && !in.showPrefabs) {
-        // When nothing is open, just hide — no old bottom panel cluttering the screen
-    }
-
-    // ==== Assets modal ====
-    if (in.showAssets) {
-        auto dim = std::make_unique<Node2D>();
-        dim->name = "__asDim"; dim->shape = "square"; dim->color = 0x14141CFF;
-        dim->w = 292; dim->h = 330; dim->position = Vec2{146, 541};
-        s.root->addChild(std::move(dim));
-
-        addLbl("FsHdr", "ASSETS", 10, 384, 18, th.ink);
-        { UiButton b; b.touch.id = "asclose"; b.touch.rect = Rect{252, 382, 40, 22}; b.text = "X"; b.action = "assets_open"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
-        { UiButton b; b.touch.id = "asu"; b.touch.rect = Rect{210, 382, 20, 22}; b.text = "^"; b.action = "assets_up"; b.color = th.button; s.ui.push_back(b); }
-        { UiButton b; b.touch.id = "asd"; b.touch.rect = Rect{232, 382, 20, 22}; b.text = "v"; b.action = "assets_dn"; b.color = th.button; s.ui.push_back(b); }
-        std::vector<std::string> imgs;
-        for (const auto& it : FileBrowser::list(in.projectRoot + "/assets")) {
-            if (it.isDir) continue;
-            if (editorIsImageName(it.name)) imgs.push_back(it.name);
-        }
-        std::sort(imgs.begin(), imgs.end());
-        const int AMAXROWS = 9;
-        int amax = (int)imgs.size() > AMAXROWS ? (int)imgs.size() - AMAXROWS : 0;
-        if (in.assetScroll < 0) in.assetScroll = 0;
-        if (in.assetScroll > amax) in.assetScroll = amax;
-        addLbl("FsPath", "assets/  (" + std::to_string((int)imgs.size()) + ")", 10, 406, 15, GO);
-        if (imgs.empty()) addLbl("AsEmpty", "drop png/jpg into assets/", 12, 432, 14, th.ink);
-        float ay = 428;
-        const float ASTEP = 28;
-        for (int i = in.assetScroll; i < (int)imgs.size() && i < in.assetScroll + AMAXROWS; ++i) {
-            UiButton tb;
-            tb.touch.id = "tb" + std::to_string(i);
-            tb.touch.rect = Rect{8, ay, 284, ASTEP - 2};
-            tb.text = "  " + imgs[i];
-            tb.action = "tex_pick:" + imgs[i];
-            tb.color = th.accent;
-            s.ui.push_back(tb);
-            ay += ASTEP;
-        }
-        addLbl("AsHint", "tap = assign / create sprite", 10, 668, 12, th.ink);
+        addLbl("FsHint", "tap file = load/assign  |  X = delete", 10, 668, 12, th.ink);
     }
 
     // ==== Prefab picker modal ====
