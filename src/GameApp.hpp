@@ -1,4 +1,4 @@
-7#pragma once
+#pragma once
 
 #include <string>
 #include <memory>
@@ -35,7 +35,33 @@
 #include "EditorRender.hpp"
 
 namespace suka {
+static void walkEmitters(Node& n, const WorldXf& parent, float dt) {
+    Node2D* n2 = dynamic_cast<Node2D*>(&n);
+    if (!n2) { for (const auto& c : n.getChildren()) walkEmitters(*c, parent, dt); return; }
 
+    WorldXf w = parent.child(n2->position, n2->rotation, n2->scale.x, n2->scale.y);
+
+    if (std::string(n2->typeName()) == "Particle2D") {
+        Particle2D* pe = static_cast<Particle2D*>(n2);
+        if (pe->emitting) {
+            SpawnOpts o;
+            o.vx = pe->vx; o.vy = pe->vy; o.spread = pe->spread; o.gravity = pe->gravity;
+            o.life = pe->life; o.lifeSpread = pe->lifeSpread;
+            o.size = pe->size; o.sizeEnd = pe->sizeEnd; o.drag = pe->drag; o.color = pe->color;
+            for (int i = 0; i < 7 && i < (int)pe->glyph.size(); ++i) o.glyph[i] = pe->glyph[i];
+            o.glyph[pe->glyph.size() < 7 ? pe->glyph.size() : 7] = 0;
+
+            int toSpawn = 0;
+            if (pe->burstPending) { toSpawn += pe->burst; pe->burstPending = false; }
+            if (pe->rate > 0.0f) { pe->acc += pe->rate * dt; int wh = (int)pe->acc; pe->acc -= wh; toSpawn += wh; }
+            if (toSpawn > 0) g_particles.spawn(w.x, w.y, toSpawn, o);
+        } else {
+            pe->acc = 0.0f;
+        }
+    }
+
+    for (const auto& c : n2->getChildren()) walkEmitters(*c, w, dt);
+}
 class GameApp {
 public:
     using Manip = suka::Manip;
