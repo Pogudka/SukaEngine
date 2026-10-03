@@ -176,16 +176,6 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         addLbl(("ScN" + std::to_string(i)).c_str(), num, 306, y, 14, parseColor("#667089"));
     }
 
-    if (in.curLine >= in.scriptScroll && in.curLine < in.scriptScroll + LINES) {
-        int cps = utf8ByteToCp(in.scriptLines[in.curLine], in.curCol);
-        auto cur = std::make_unique<Node2D>();
-        cur->name = "__sccur"; cur->shape = "square"; cur->color = 0x4CC9F0FF; cur->w = 3; cur->h = 16;
-        float cxp = 340 + cps * 8.0f;
-        float cyp = 70 + (float)(in.curLine - in.scriptScroll) * LH + 8;
-        cur->position = Vec2{cxp + 1, cyp};
-        s.root->addChild(std::move(cur));
-    }
-
     addLbl("ScInfo", in.scriptPath.empty() ? "(no script)" : in.scriptPath, 900, 64, 16, GO);
     addLbl("ScInfo2", "lines " + std::to_string((int)in.scriptLines.size()) + "   cur " + std::to_string(in.curLine + 1) + ":" + std::to_string(utf8ByteToCp(in.scriptLines.empty() ? std::string("") : in.scriptLines[in.curLine], in.curCol)), 900, 88, 14, th.ink);
     addLbl("ScInfo3", "tap line = cursor + keyboard", 900, 110, 14, th.ink);
