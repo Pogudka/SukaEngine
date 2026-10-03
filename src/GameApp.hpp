@@ -106,10 +106,8 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
     Node2D* n2 = dynamic_cast<Node2D*>(&n);
     if (!n2) { for (const auto& c : n.getChildren()) drawTexturePreviewTree(*c, parent, out, zoom, camX, camY); return; }
     WorldXf w = parent.child(n2->position, n2->rotation, n2->scale.x, n2->scale.y);
-
     Sprite2D* sp = dynamic_cast<Sprite2D*>(n2);
     std::string tex = !n2->texture.empty() ? n2->texture : (sp ? sp->texturePath : std::string());
-
     if (!tex.empty()) {
         float bw = sp ? sp->size.x : n2->w;
         float bh = sp ? sp->size.y : n2->h;
@@ -369,8 +367,6 @@ private:
         if (dragPSX_ < 0.01f) dragPSX_ = 1; if (dragPSY_ < 0.01f) dragPSY_ = 1;
     }
 
-    // Sets texture on any node, syncs Sprite2D::texturePath and hides the ghost
-    // shape under transparent PNGs (shape="none" while a texture is assigned).
     void setNodeTexture(const std::string& name, const std::string& rel) {
         editor_->setTexture(name, rel);
         Node2D* n = editor_->find2d(name);
@@ -649,7 +645,6 @@ private:
             confirmDeleteDir_.clear(); rebuildHub();
         } else if (a.kind == 1) { confirmDeleteDir_.clear(); pendingHubRename_ = false; pendingNewProject_ = false; if (!enterGame(a.dir)) rebuildHub(); }
         else if (a.kind == 2) { confirmDeleteDir_.clear(); pendingHubRename_ = false; pendingNewProject_ = false; if (!enterEditor(a.dir)) rebuildHub(); }
-
         if (appMode_ == AppMode::Hub) {
             if (pendingNewProject_) out += "REQ_NAME|Project\n";
             else if (pendingHubRename_) out += "REQ_NAME|" + pendingHubCurrentName_ + "\n";
@@ -1038,6 +1033,7 @@ private:
         std::string out = gameBackend_.str();
 
         if (!scriptMode_ && !showSettings_) {
+            out += "DRAW clipon\n";
             emitEditorViewport(*editor_->scene(), out, makeEditorRenderInput());
             Scene* es = editor_->scene();
             if (es && es->root) {
@@ -1046,6 +1042,7 @@ private:
                 drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
                 drawTexturePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY);
             }
+            out += "DRAW clipoff\n";
         }
 
         processEditorActions();
