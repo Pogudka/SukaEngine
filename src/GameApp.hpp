@@ -101,7 +101,6 @@ static void drawParticlePreviewTree(Node& n, const WorldXf& parent, std::string&
     for (const auto& c : n2->getChildren()) drawParticlePreviewTree(*c, w, out, zoom, camX, camY, sel);
 }
 
-// NEW: draw real textures in the editor viewport (position/rot/scale/zoom aware).
 static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& out,
                                     float zoom, float camX, float camY) {
     Node2D* n2 = dynamic_cast<Node2D*>(&n);
@@ -370,13 +369,15 @@ private:
         if (dragPSX_ < 0.01f) dragPSX_ = 1; if (dragPSY_ < 0.01f) dragPSY_ = 1;
     }
 
-    // NEW: set texture on any node AND keep Sprite2D::texturePath in sync,
-    // so the picture shows both in the viewport preview and in the game.
+    // Sets texture on any node, syncs Sprite2D::texturePath and hides the ghost
+    // shape under transparent PNGs (shape="none" while a texture is assigned).
     void setNodeTexture(const std::string& name, const std::string& rel) {
         editor_->setTexture(name, rel);
         Node2D* n = editor_->find2d(name);
-        Sprite2D* sp = n ? dynamic_cast<Sprite2D*>(n) : nullptr;
+        if (!n) return;
+        Sprite2D* sp = dynamic_cast<Sprite2D*>(n);
         if (sp) sp->texturePath = rel;
+        if (!rel.empty()) n->shape = "none";
     }
 
     void attachChildTo(const std::string& child, const std::string& parent) {
@@ -876,6 +877,7 @@ private:
                     Node2D* n = editor_->find2d(sel);
                     Sprite2D* sp = n ? dynamic_cast<Sprite2D*>(n) : nullptr;
                     if (sp) sp->texturePath.clear();
+                    if (n) n->shape = "square";
                     rebuild(); return 1;
                 }
             }
