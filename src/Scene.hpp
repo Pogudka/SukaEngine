@@ -13,7 +13,7 @@
 namespace suka {
 
 // Prefab: container node whose children are instantiated from a scene-format
-// JSON file (prefabs/*.json). Only the shell + source path are saved in scenes.
+// json file (prefabs/*.json). Only shell + source path are saved in scenes.
 class Prefab2D : public Node2D {
 public:
     std::string sourcePath;
@@ -248,7 +248,6 @@ public:
     }
 };
 
-// Loads a prefab file (scene-format json) and returns its nodes under a fresh root.
 inline bool loadPrefabTree(const std::string& projectRoot, const std::string& relPath,
                            const std::string& fontPath, std::unique_ptr<Node>& outRoot) {
     Scene tmp;
