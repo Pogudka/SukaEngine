@@ -738,7 +738,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
 
     {
         UiButton b;
-        b.touch.id = "pstbtn";
         b.touch.rect = Rect{996, 482, 44, 30};
         b.text = "PST";
         b.action = "ed_paste";
@@ -893,19 +892,16 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     }
 
     if (in.showCreate) {
-        const char* ct[10] = {
-            "Node2D", "Node2D", "Node2D", "Node2D", "Label", "Sprite2D",
-            "", "", "", ""
+        const char* ct[6] = {
+            "Node2D", "Node2D", "Node2D", "Node2D", "Label", "Sprite2D"
         };
 
-        const char* cs[10] = {
-            "square", "circle", "diamond", "triangle",
-            "", "", "", "", "", ""
+        const char* cs[6] = {
+            "square", "circle", "diamond", "triangle", "", ""
         };
 
-        const char* cl[10] = {
-            "CUBE", "CIRCLE", "DIAMOND", "TRIANGLE", "TEXT", "SPRITE",
-            "CAM", "LIGHT", "GRP", "BTN"
+        const char* cl[6] = {
+            "CUBE", "CIRCLE", "DIAMOND", "TRIANGLE", "TEXT", "SPRITE"
         };
 
         for (int k = 0; k < 6; ++k) {
@@ -966,9 +962,9 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         {
             UiButton b;
             b.touch.id = "ctprt";
-            b.touch.rect = Rect{300 + 10 * 58, 560, 54, 40};
+            b.touch.rect = Rect{300, 604, 54, 40};
             b.text = "PART";
-            b.action = "create_particle";
+            b.action = "create:Particle2D:none";
             b.color = parseColor("#FF69B4");
 
             s.ui.push_back(b);
