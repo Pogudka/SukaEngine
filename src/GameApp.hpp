@@ -1013,6 +1013,10 @@ private:
         if (imeWantOff_) { out += "IME_OFF\n"; imeWantOff_ = false; }
         if (pendingText_ && appMode_ == AppMode::Editor) { out += "REQ_TEXT|" + pendingTextCur_ + "\n"; pendingText_ = false; }
         if (pendingName_ && appMode_ == AppMode::Editor) out += "REQ_NAME|Object\n";
+        if (!pendingImportCategory_.empty() && appMode_ == AppMode::Editor) {
+            out += "REQ_IMPORT|" + pendingImportCategory_ + "\n";
+            pendingImportCategory_.clear();
+        }
         if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
         if (pendingNum_ && appMode_ == AppMode::Editor) { out += "REQ_NUM|" + pendingNumCur_ + "\n"; pendingNum_ = false; }
         input_.endFrame(); return out;
