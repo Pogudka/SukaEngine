@@ -61,7 +61,13 @@ inline bool editorHasUiGroup(Scene* esc, const std::string& name) {
 
     return false;
 }
-
+inline bool editorIsImageName(const std::string& n) {
+    size_t dot = n.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= n.size()) return false;
+    std::string ext = n.substr(dot + 1);
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "bmp";
+}
 struct EdRow {
     std::string text;
     std::string action;
