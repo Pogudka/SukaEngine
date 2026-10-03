@@ -13,6 +13,7 @@
 #include "Scene.hpp"
 #include "Resources.hpp"
 #include "Tween.hpp"
+#include "UiUtils.hpp"
 
 // -----------------------------------------------------------------------------
 // Auto-detect Lua headers.
@@ -418,6 +419,225 @@ static int lua_tween_is_active(lua_State* L) {
     return 1;
 }
 
+// -----------------------------------------------------------------------------
+// Short aliases + color, matching the API the demo main.lua was written against.
+// Color goes through parseColor / parseRgb so the packing format is exactly the
+// one the editor/renderer already understands (no hand-rolled bit shifts).
+// -----------------------------------------------------------------------------
+
+static int lua_set_pos(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->position.x = (float)luaL_checknumber(L, 2);
+        n->position.y = (float)luaL_checknumber(L, 3);
+    }
+
+    return 0;
+}
+
+static int lua_get_pos(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->position.x : 0);
+    lua_pushnumber(L, n ? n->position.y : 0);
+    return 2;
+}
+
+static int lua_set_rot(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->rotation = (float)(luaL_checknumber(L, 2) * TWEEN_PI / 180.0);
+    }
+
+    return 0;
+}
+
+static int lua_get_rot(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->rotation * 180.0 / TWEEN_PI : 0);
+    return 1;
+}
+
+static int lua_set_scale(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+    float s = (float)luaL_checknumber(L, 2);
+
+    if (n) {
+        n->scale.x = s;
+        n->scale.y = s;
+    }
+
+    return 0;
+}
+
+static int lua_get_scale(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? (n->scale.x + n->scale.y) * 0.5 : 1);
+    return 1;
+}
+
+static int lua_set_alpha(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->alpha = (float)luaL_checknumber(L, 2);
+    }
+
+    return 0;
+}
+
+static int lua_get_alpha(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? n->alpha : 1);
+    return 1;
+}
+
+static int lua_set_size(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->w = (float)luaL_checknumber(L, 2);
+        n->h = (float)luaL_checknumber(L, 3);
+    }
+
+    return 0;
+}
+
+static int lua_set_w(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->w = (float)luaL_checknumber(L, 2);
+    }
+
+    return 0;
+}
+
+static int lua_set_h(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->h = (float)luaL_checknumber(L, 2);
+    }
+
+    return 0;
+}
+
+static int lua_set_text(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n && std::string(n->typeName()) == "Label") {
+        static_cast<Label*>(n)->text = luaL_checkstring(L, 2);
+    }
+
+    return 0;
+}
+
+static int lua_get_text(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n && std::string(n->typeName()) == "Label") {
+        lua_pushstring(L, static_cast<Label*>(n)->text.c_str());
+    } else {
+        lua_pushstring(L, "");
+    }
+
+    return 1;
+}
+
+static int lua_set_texture(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->texture = luaL_checkstring(L, 2);
+    }
+
+    return 0;
+}
+
+static int lua_set_action(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    if (n) {
+        n->action = luaL_checkstring(L, 2);
+    }
+
+    return 0;
+}
+
+// Tolerant color setter:
+//   set_color(node, "#RRGGBB")      -> parseColor
+//   set_color(node, "r,g,b")        -> parseRgb
+//   set_color(node, r, g, b)        -> normalized to 0..255, then parseRgb
+//   set_color(node, packedNumber)   -> assigned as-is
+static int lua_set_color(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+    if (!n) {
+        return 0;
+    }
+
+    int top = lua_gettop(L);
+
+    if (top >= 2 && lua_isstring(L, 2)) {
+        std::string s = lua_tostring(L, 2);
+        n->color = parseColor(s);
+        return 0;
+    }
+
+    if (top >= 4 && lua_isnumber(L, 2) && lua_isnumber(L, 3) && lua_isnumber(L, 4)) {
+        double r = lua_tonumber(L, 2);
+        double g = lua_tonumber(L, 3);
+        double b = lua_tonumber(L, 4);
+
+        bool frac = (r != std::floor(r)) || (g != std::floor(g)) || (b != std::floor(b));
+        bool unit = (r >= 0.0 && r <= 1.0 && g >= 0.0 && g <= 1.0 && b >= 0.0 && b <= 1.0);
+
+        if (frac && unit) {
+            r *= 255.0;
+            g *= 255.0;
+            b *= 255.0;
+        }
+
+        auto clamp255 = [](double v) -> int {
+            int i = (int)(v + (v >= 0 ? 0.5 : -0.5));
+            if (i < 0) i = 0;
+            if (i > 255) i = 255;
+            return i;
+        };
+
+        std::string rgb =
+            std::to_string(clamp255(r)) + "," +
+            std::to_string(clamp255(g)) + "," +
+            std::to_string(clamp255(b));
+
+        unsigned c = 0;
+        if (parseRgb(rgb, c)) {
+            n->color = c;
+        }
+
+        return 0;
+    }
+
+    if (top >= 2 && lua_isnumber(L, 2)) {
+        n->color = (unsigned)lua_tonumber(L, 2);
+        return 0;
+    }
+
+    return 0;
+}
+
+static int lua_get_color(lua_State* L) {
+    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
+
+    lua_pushnumber(L, n ? (double)n->color : 0);
+    return 1;
+}
+
 class ScriptSystem {
 public:
     ~ScriptSystem() {
@@ -552,6 +772,25 @@ private:
         lua_register(L_, "tween_clear", lua_tween_clear);
         lua_register(L_, "tween_count", lua_tween_count);
         lua_register(L_, "tween_is_active", lua_tween_is_active);
+
+        // Short aliases the demo expects.
+        lua_register(L_, "set_pos", lua_set_pos);
+        lua_register(L_, "get_pos", lua_get_pos);
+        lua_register(L_, "set_rot", lua_set_rot);
+        lua_register(L_, "get_rot", lua_get_rot);
+        lua_register(L_, "set_scale", lua_set_scale);
+        lua_register(L_, "get_scale", lua_get_scale);
+        lua_register(L_, "set_alpha", lua_set_alpha);
+        lua_register(L_, "get_alpha", lua_get_alpha);
+        lua_register(L_, "set_size", lua_set_size);
+        lua_register(L_, "set_w", lua_set_w);
+        lua_register(L_, "set_h", lua_set_h);
+        lua_register(L_, "set_text", lua_set_text);
+        lua_register(L_, "get_text", lua_get_text);
+        lua_register(L_, "set_texture", lua_set_texture);
+        lua_register(L_, "set_action", lua_set_action);
+        lua_register(L_, "set_color", lua_set_color);
+        lua_register(L_, "get_color", lua_get_color);
     }
 
     void callFunction(const std::string& fn) {
