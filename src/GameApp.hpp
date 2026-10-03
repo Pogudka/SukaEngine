@@ -101,6 +101,31 @@ static void drawParticlePreviewTree(Node& n, const WorldXf& parent, std::string&
     for (const auto& c : n2->getChildren()) drawParticlePreviewTree(*c, w, out, zoom, camX, camY, sel);
 }
 
+// NEW: draw real textures in the editor viewport (position/rot/scale/zoom aware).
+static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& out,
+                                    float zoom, float camX, float camY) {
+    Node2D* n2 = dynamic_cast<Node2D*>(&n);
+    if (!n2) { for (const auto& c : n.getChildren()) drawTexturePreviewTree(*c, parent, out, zoom, camX, camY); return; }
+    WorldXf w = parent.child(n2->position, n2->rotation, n2->scale.x, n2->scale.y);
+
+    Sprite2D* sp = dynamic_cast<Sprite2D*>(n2);
+    std::string tex = !n2->texture.empty() ? n2->texture : (sp ? sp->texturePath : std::string());
+
+    if (!tex.empty()) {
+        float bw = sp ? sp->size.x : n2->w;
+        float bh = sp ? sp->size.y : n2->h;
+        float ww = bw * w.sx * zoom;
+        float hh = bh * w.sy * zoom;
+        float sx = 0, sy = 0;
+        projEditor(w.x, w.y, sx, sy, zoom, camX, camY);
+        out += "DRAW tex|" + resolveAssetPath(tex) + "|"
+             + std::to_string((int)(sx - ww / 2)) + "|" + std::to_string((int)(sy - hh / 2)) + "|"
+             + std::to_string((int)ww) + "|" + std::to_string((int)hh) + "|"
+             + std::to_string(w.rot * 57.2957795f) + "\n";
+    }
+    for (const auto& c : n2->getChildren()) drawTexturePreviewTree(*c, w, out, zoom, camX, camY);
+}
+
 class GameApp {
 public:
     using Manip = suka::Manip;
@@ -130,26 +155,6 @@ public:
 
     void submitImportFile(const std::string& category, const std::string& relativePath) {
         if (category.empty() || relativePath.empty()) return;
-
-        std::string targetDir;
-        if (category == "sprites") targetDir = "assets/";
-        else if (category == "fonts") targetDir = "assets/fonts/";
-        else if (category == "sounds") targetDir = "assets/sounds/";
-        else if (category == "videos") targetDir = "assets/videos/";
-        else if (category == "models") targetDir = "assets/models/";
-        else return;
-
-        std::string src = project_.rootPath + "/temp_import/" + relativePath;
-        std::string dst = project_.rootPath + "/" + targetDir + relativePath;
-
-        std::string cmd = "mkdir -p \"" + project_.rootPath + "/" + targetDir +
-                          "\" && mv -f \"" + src + "\" \"" + dst + "\"";
-        system(cmd.c_str());
-
-        if (fileExists(src) && !fileExists(dst)) {
-            std::rename(src.c_str(), dst.c_str());
-        }
-
         pendingImportCategory_.clear();
         lastMsg_ = "imported " + category + ": " + relativePath;
         buildEditorPanels();
@@ -363,6 +368,15 @@ private:
         dragOX_ = 0; dragOY_ = 0; dragPSX_ = 1; dragPSY_ = 1;
         if (es && es->root) { bool found = false; parentTransform(es->root.get(), name, 0, 0, 1, 1, dragOX_, dragOY_, dragPSX_, dragPSY_, found); }
         if (dragPSX_ < 0.01f) dragPSX_ = 1; if (dragPSY_ < 0.01f) dragPSY_ = 1;
+    }
+
+    // NEW: set texture on any node AND keep Sprite2D::texturePath in sync,
+    // so the picture shows both in the viewport preview and in the game.
+    void setNodeTexture(const std::string& name, const std::string& rel) {
+        editor_->setTexture(name, rel);
+        Node2D* n = editor_->find2d(name);
+        Sprite2D* sp = n ? dynamic_cast<Sprite2D*>(n) : nullptr;
+        if (sp) sp->texturePath = rel;
     }
 
     void attachChildTo(const std::string& child, const std::string& parent) {
@@ -819,9 +833,9 @@ private:
         if (act.rfind("tex_pick:", 0) == 0) {
             if (!showAssets_) return 0;
             std::string img = act.substr(9); std::string rel = "assets/" + img;
-            if (s2) { if (lk) return 0; pushUndo(); editor_->setTexture(sel, rel); lastMsg_ = "tex " + img + " -> " + sel; }
+            if (s2) { if (lk) return 0; pushUndo(); setNodeTexture(sel, rel); lastMsg_ = "tex " + img + " -> " + sel; }
             else if (ub) { pushUndo(); ub->texture = rel; lastMsg_ = "tex " + img + " -> button " + selUi; }
-            else { pushUndo(); std::string name = "Sprite" + std::to_string(createCounter_++); editor_->addNode("Sprite2D", name, 640, 360); editor_->setTexture(name, rel); editor_->select(name); lastMsg_ = "sprite " + name + " <- " + img; }
+            else { pushUndo(); std::string name = "Sprite" + std::to_string(createCounter_++); editor_->addNode("Sprite2D", name, 640, 360); setNodeTexture(name, rel); editor_->select(name); lastMsg_ = "sprite " + name + " <- " + img; }
             showAssets_ = false; rebuild(); return 1;
         }
         if (act == "ed_lock") { if (s2) { pushUndo(); s2->locked = !s2->locked; lastMsg_ = s2->locked ? "locked " + sel : "unlocked " + sel; rebuild(); return 1; } return 0; }
@@ -850,10 +864,23 @@ private:
                 }
                 return 0;
             }
-            if (!lk) { pushUndo(); if (ub) { ub->texture = rel; rebuild(); return 1; } if (!sel.empty()) { editor_->setTexture(sel, rel); rebuild(); return 1; } }
+            if (!lk) { pushUndo(); if (ub) { ub->texture = rel; rebuild(); return 1; } if (!sel.empty()) { setNodeTexture(sel, rel); rebuild(); return 1; } }
             return 0;
         }
-        if (act == "clear_tex") { if (!lk) { pushUndo(); if (ub) { ub->texture.clear(); rebuild(); return 1; } if (!sel.empty()) { editor_->setTexture(sel, std::string()); rebuild(); return 1; } } return 0; }
+        if (act == "clear_tex") {
+            if (!lk) {
+                pushUndo();
+                if (ub) { ub->texture.clear(); rebuild(); return 1; }
+                if (!sel.empty()) {
+                    editor_->setTexture(sel, std::string());
+                    Node2D* n = editor_->find2d(sel);
+                    Sprite2D* sp = n ? dynamic_cast<Sprite2D*>(n) : nullptr;
+                    if (sp) sp->texturePath.clear();
+                    rebuild(); return 1;
+                }
+            }
+            return 0;
+        }
         if (act == "manip:move") { manip_ = Manip::Move; rebuild(); return 1; }
         if (act == "manip:rotate") { manip_ = Manip::Rotate; rebuild(); return 1; }
         if (act == "manip:scale") { manip_ = Manip::Scale; rebuild(); return 1; }
@@ -1015,6 +1042,7 @@ private:
                 std::string sel = editor_->selected() ? editor_->selected()->name : std::string();
                 WorldXf ident;
                 drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
+                drawTexturePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY);
             }
         }
 
