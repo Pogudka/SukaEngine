@@ -16,10 +16,11 @@ struct SpawnOpts {
     float life = 1.0f;
     float lifeSpread = 0.0f;
     float size = 18.0f;
-    float sizeEnd = 0.0f;          // by default particles shrink away
-    float drag = 0.0f;             // per-second velocity damping
-    unsigned color = 0xFFFFFFFFu;  // all-FF = white in any channel order
-    char glyph[8] = {'\xe2','\x80','\xa2',0}; // "•" in UTF-8
+    float sizeEnd = 0.0f;
+    float drag = 0.0f;
+    float rot = 0.0f;
+    unsigned color = 0xFFFFFFFFu;
+    char glyph[8] = {'\xe2', '\x80', '\xa2', 0};
 };
 
 struct Particle {
@@ -27,6 +28,7 @@ struct Particle {
     float life = 0, maxLife = 1;
     float size = 0, sizeEnd = 0;
     float drag = 0, gravity = 0;
+    float rot = 0;
     unsigned color = 0;
     char glyph[8] = {0};
 };
@@ -41,21 +43,38 @@ public:
 
         for (int i = 0; i < count; ++i) {
             Particle p;
+
             p.x = x;
             p.y = y;
-            p.vx = o.vx + uni(rng_) * o.spread;
-            p.vy = o.vy + uni(rng_) * o.spread;
+
+            float bvx = o.vx + uni(rng_) * o.spread;
+            float bvy = o.vy + uni(rng_) * o.spread;
+
+            if (o.rot != 0.0f) {
+                float cr = std::cos(o.rot);
+                float sr = std::sin(o.rot);
+
+                p.vx = bvx * cr - bvy * sr;
+                p.vy = bvx * sr + bvy * cr;
+            } else {
+                p.vx = bvx;
+                p.vy = bvy;
+            }
+
+            p.rot = o.rot;
             p.gravity = o.gravity;
             p.drag = o.drag;
 
             float lf = o.life + uni(rng_) * o.lifeSpread;
             if (lf < 0.05f) lf = 0.05f;
+
             p.life = lf;
             p.maxLife = lf;
 
             p.size = o.size;
             p.sizeEnd = o.sizeEnd;
             p.color = o.color;
+
             std::memcpy(p.glyph, o.glyph, sizeof(p.glyph));
             p.glyph[7] = 0;
 
@@ -82,6 +101,7 @@ public:
             if (p.drag != 0.0f) {
                 float f = 1.0f - p.drag * dt;
                 if (f < 0.0f) f = 0.0f;
+
                 p.vx *= f;
                 p.vy *= f;
             }
@@ -92,9 +112,17 @@ public:
         }
     }
 
-    void clear() { list_.clear(); }
-    size_t count() const { return list_.size(); }
-    const std::vector<Particle>& list() const { return list_; }
+    void clear() {
+        list_.clear();
+    }
+
+    size_t count() const {
+        return list_.size();
+    }
+
+    const std::vector<Particle>& list() const {
+        return list_;
+    }
 
 private:
     std::vector<Particle> list_;
