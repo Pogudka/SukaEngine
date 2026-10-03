@@ -199,7 +199,7 @@ public:
                 int line = scriptScroll_ + (int)((y - 70) / LH);
                 if (line < 0) line = 0;
                 if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
-                int colCp = (int)((x - 340) / 7.2f);
+                int colCp = (int)((x - 340) / 8.0f);
                 const std::string& L = scriptLines_[line];
                 int total = utf8ByteToCp(L, (int)L.size());
                 if (colCp < 0) colCp = 0; if (colCp > total) colCp = total;
@@ -249,8 +249,7 @@ public:
                 if (t.action == RawTouch::Action::Down) {
                     float dx = x - bcx, dy = y - bcy;
                     float dist = std::sqrt(dx * dx + dy * dy);
-                    float R = 70.0f * Z;
-                    if (manip_ == Manip::Rotate && std::fabs(dist - R) < 26.0f * Z) {
+                    if (manip_ == Manip::Rotate && std::fabs(dist - 70.0f) < 26.0f) {
                         gizmoRotUi_ = true; gizmoStartAngle_ = std::atan2(dy, dx); gizmoStartRot_ = gb->angle; return;
                     }
                 } else if (t.action == RawTouch::Action::Move && gizmoRotUi_) {
@@ -269,16 +268,15 @@ public:
                         float dx = x - scx, dy = y - scy;
                         float dist = std::sqrt(dx * dx + dy * dy);
                         if (manip_ == Manip::Rotate) {
-                            float R = 70.0f * Z;
-                            if (std::fabs(dist - R) < 26.0f * Z) { gizmoRot_ = true; gizmoStartAngle_ = std::atan2(dy, dx); gizmoStartRot_ = g->rotation; return; }
+                            if (std::fabs(dist - 70.0f) < 26.0f) { gizmoRot_ = true; gizmoStartAngle_ = std::atan2(dy, dx); gizmoStartRot_ = g->rotation; return; }
                         } else if (manip_ == Manip::Scale) {
                             float hw = (g->w * gsx) * 0.46875f * Z / 2;
                             float hh = (g->h * gsy) * 0.46875f * Z / 2;
-                            if (std::fabs(x - (scx + hw + 24 * Z)) < 28 * Z && std::fabs(dy) < 28 * Z) { gizmoSclX_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSX_ = g->scale.x; return; }
-                            if (std::fabs(y - (scy + hh + 24 * Z)) < 28 * Z && std::fabs(dx) < 28 * Z) { gizmoSclY_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSY_ = g->scale.y; return; }
+                            if (std::fabs(x - (scx + hw + 24)) < 28 && std::fabs(dy) < 28) { gizmoSclX_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSX_ = g->scale.x; return; }
+                            if (std::fabs(y - (scy + hh + 24)) < 28 && std::fabs(dx) < 28) { gizmoSclY_ = true; gizmoStartDist_ = dist > 1 ? dist : 1; gizmoStartSY_ = g->scale.y; return; }
                         } else {
-                            if (std::fabs(dy) < 16 * Z && dx > 8 * Z && dx < 64 * Z) { lockAxis_ = 1; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
-                            if (std::fabs(dx) < 16 * Z && dy > 8 * Z && dy < 64 * Z) { lockAxis_ = 2; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
+                            if (std::fabs(dy) < 16 && dx > 8 && dx < 64) { lockAxis_ = 1; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
+                            if (std::fabs(dx) < 16 && dy > 8 && dy < 64) { lockAxis_ = 2; dragging_ = true; dragNode_ = g; editor_->select(g->name); startDragParent(es, g->name); return; }
                         }
                     }
                 } else if (t.action == RawTouch::Action::Move) {
@@ -587,7 +585,7 @@ private:
         return EditorUiInput{
             editor_.get(), scriptMode_, edZoom_, manip_, pickParent_, showCreate_, showAssets_, showSettings_, showPrefabs_, showFiles_,
             hierScroll_, fsScroll_, assetScroll_, scriptScroll_, prefabScroll_,
-            collapsed_, fsPath_, project_.rootPath, scriptPath_, scriptLines_,
+            collapsed_, fsPath_, project_.rootPath, pendingDeleteFile_, scriptPath_, scriptLines_,
             curLine_, curCol_, imeShown_, g_luaLog
         };
     }
@@ -646,7 +644,7 @@ private:
         } else if (a.kind == 10) {
             if (!hubState_.selectedDir.empty()) { std::string sv = projectsDir() + hubState_.selectedDir + "/save.vars"; std::remove(sv.c_str()); }
             confirmDeleteDir_.clear(); rebuildHub();
-        } else if (a.kind == 1) { confirmDeleteDir_.clear(); pendingHubRename_ = false; pendingNewProject_ = false; if (!enterGame(a.dir)) rebuildHub(); }
+        } else if (a.kind == 1) { confirmDeleteDir_.clear(); pendingHubRename_ = false; pendingNewProject_ = false; playFromEditor_ = false; if (!enterGame(a.dir)) rebuildHub(); }
         else if (a.kind == 2) { confirmDeleteDir_.clear(); pendingHubRename_ = false; pendingNewProject_ = false; if (!enterEditor(a.dir)) rebuildHub(); }
         if (appMode_ == AppMode::Hub) {
             if (pendingNewProject_) out += "REQ_NAME|Project\n";
@@ -671,7 +669,7 @@ private:
         pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
         clearDialogResults();
         Scene* sc = sceneMgr_->current();
-        UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
+        UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = playFromEditor_ ? "editor_return:" : "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
         UiButton dbg; dbg.touch.id = "dbg"; dbg.touch.rect = Rect{1080, 10, 90, 70}; dbg.text = "DBG"; dbg.action = "dbg:"; dbg.color = parseColor("#808080"); sc->ui.push_back(dbg);
         input_.setUi(&sc->ui); touch_.resetJoystick();
         appMode_ = AppMode::Game;
@@ -729,8 +727,15 @@ private:
     void runAction(const std::string& act) {
         Scene* sc = sceneMgr_ ? sceneMgr_->current() : nullptr; if (!sc) return;
         if (act == "dbg:") { dbg_ = !dbg_; return; }
+        const std::string pReturn = "editor_return:";
         const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:";
-        if (act.rfind(pHub, 0) == 0) { if (saveVarsEnabled_) saveVars(); appMode_ = AppMode::Hub; pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear(); clearDialogResults(); rebuildHub(); }
+        if (act.rfind(pReturn, 0) == 0) {
+            playFromEditor_ = false;
+            if (saveVarsEnabled_) saveVars();
+            enterEditor(lastEditorDir_);
+            return;
+        }
+        if (act.rfind(pHub, 0) == 0) { if (saveVarsEnabled_) saveVars(); playFromEditor_ = false; appMode_ = AppMode::Hub; pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear(); clearDialogResults(); rebuildHub(); }
         else if (act.rfind(pRestart, 0) == 0) { g_tweens.clear(); sceneMgr_->requestChange(act.substr(pRestart.size()), true); }
         else if (act.rfind(pChange, 0) == 0) { g_tweens.clear(); sceneMgr_->requestChange(act.substr(pChange.size()), false); }
         else if (act.rfind(pCall, 0) == 0) scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars, sc);
@@ -756,11 +761,13 @@ private:
         auto mgr = std::make_unique<SceneManager>(root, font);
         if (!mgr->restartScene("scenes/main.json", resources_)) if (!mgr->restartScene(pi.mainScene, resources_)) { appMode_ = AppMode::Hub; rebuildHub(); return false; }
         project_ = pi; g_projectRoot = project_.rootPath; fontPath_ = font; sceneMgr_ = std::move(mgr);
+        lastEditorDir_ = dir;
         editor_ = std::make_unique<Editor>();
         editor_->attach(sceneMgr_->current());
         editor_->setProjectRoot(project_.rootPath);
         showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = true;
         assetScroll_ = 0; prefabScroll_ = 0;
+        pendingDeleteFile_.clear();
         pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
         pendingSceneSave_ = false; pendingPrefabSave_ = false;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0;
@@ -798,7 +805,21 @@ private:
         Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
         bool lk = (s2 != nullptr) && s2->locked;
 
-        // ==== Prefabs: 3 actions only ====
+        // ==== Play from editor: autosave then run; X returns here ====
+        if (act == "ed_play") {
+            editor_->save(project_.rootPath + "/scenes/main.json");
+            std::string pd = projectsDir();
+            std::string dir = project_.rootPath;
+            if (dir.rfind(pd, 0) == 0) dir = dir.substr(pd.size());
+            pendingName_ = false; pendingText_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
+            pendingSceneSave_ = false; pendingPrefabSave_ = false;
+            clearDialogResults();
+            playFromEditor_ = true;
+            if (!enterGame(dir)) { playFromEditor_ = false; lastMsg_ = "play failed"; rebuild(); return 0; }
+            return 2;
+        }
+
+        // ==== Prefabs ====
         if (act == "save_as_prefab") {
             if (sel.empty() || !s2) { lastMsg_ = "select a node first"; return 0; }
             if (std::string(s2->typeName()) == "Prefab2D") { lastMsg_ = "already a prefab"; return 0; }
@@ -849,18 +870,25 @@ private:
             return 0;
         }
 
-        if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; rebuild(); return 1; }
+        // ==== Files with two-tap delete confirm ====
+        if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; pendingDeleteFile_.clear(); rebuild(); return 1; }
         if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
         if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
-        if (act.rfind("fs_del:", 0) == 0) {
-            std::string rel = act.substr(7);
+        if (act.rfind("fs_del_ask:", 0) == 0) {
+            pendingDeleteFile_ = act.substr(11);
+            rebuild();
+            return 1;
+        }
+        if (act.rfind("fs_del_yes:", 0) == 0) {
+            std::string rel = act.substr(11);
             std::string full = project_.rootPath + "/" + rel;
-            if (fileExists(full)) {
+            if (pendingDeleteFile_ == rel && fileExists(full)) {
                 if (std::remove(full.c_str()) == 0) lastMsg_ = "deleted " + rel;
                 else lastMsg_ = "delete failed: " + rel;
             } else {
-                lastMsg_ = "file not found: " + rel;
+                lastMsg_ = "delete cancelled";
             }
+            pendingDeleteFile_.clear();
             rebuild();
             return 1;
         }
@@ -868,7 +896,7 @@ private:
         if (act == "create_particle" || act == "create:Particle2D:none") { pushUndo(); std::string name = "Emitter" + std::to_string(createCounter_++); editor_->addNode("Particle2D", name, 640, 360); editor_->select(name); showCreate_ = false; rebuild(); return 1; }
 
         Particle2D* p2 = dynamic_cast<Particle2D*>(s2);
-        if (act.rfind("view:", 0) == 0) { if (lk || sel.empty() || !p2) return 0; pushUndo(); std::string preset = act.substr(5); if (editor_->setEmitterPreset(sel, preset)) { lastMsg_ = "view " + preset + " -> " + sel; rebuild(); return 1; } rebuild(); return 0; }
+        if (act.rfind("view:", 0) == 0) { if (lk || sel.empty() || !p2) return 0; pushUndo(); std::string preset = act.substr(5); if (editor_->setEmitterPreset(sel, preset)) { p2->emitting = true; p2->burstPending = true; lastMsg_ = "view " + preset + " -> " + sel; rebuild(); return 1; } rebuild(); return 0; }
         if (act == "ponoff") { if (!lk && p2) { pushUndo(); p2->emitting = !p2->emitting; if (p2->emitting) p2->burstPending = true; lastMsg_ = p2->emitting ? ("emitting ON: " + sel) : ("emitting OFF: " + sel); rebuild(); return 1; } return 0; }
         if (act == "pcolor") { if (!lk && p2) { pendingRgb_ = 3; pendingText_ = true; pendingTextCur_ = rgbStr(p2->color); } return 0; }
         if (act.rfind("pnum:", 0) == 0) {
@@ -917,8 +945,8 @@ private:
         if (act.rfind("fold:", 0) == 0) { std::string nm = act.substr(5); if (collapsed_.count(nm)) collapsed_.erase(nm); else collapsed_.insert(nm); rebuild(); return 1; }
         if (act == "hier_up") { hierScroll_ -= 3; rebuild(); return 1; }
         if (act == "hier_dn") { hierScroll_ += 3; rebuild(); return 1; }
-        if (act == "fs_up") { std::string tmp = fsPath_; while (!tmp.empty() && tmp.back() == '/') tmp.pop_back(); size_t sl = tmp.find_last_of('/'); fsPath_ = (sl == std::string::npos) ? std::string("") : tmp.substr(0, sl + 1); fsScroll_ = 0; rebuild(); return 1; }
-        if (act.rfind("fs_enter:", 0) == 0) { fsPath_ += act.substr(9) + "/"; fsScroll_ = 0; rebuild(); return 1; }
+        if (act == "fs_up") { std::string tmp = fsPath_; while (!tmp.empty() && tmp.back() == '/') tmp.pop_back(); size_t sl = tmp.find_last_of('/'); fsPath_ = (sl == std::string::npos) ? std::string("") : tmp.substr(0, sl + 1); fsScroll_ = 0; pendingDeleteFile_.clear(); rebuild(); return 1; }
+        if (act.rfind("fs_enter:", 0) == 0) { fsPath_ += act.substr(9) + "/"; fsScroll_ = 0; pendingDeleteFile_.clear(); rebuild(); return 1; }
         if (act.rfind("fs_pick:", 0) == 0) {
             std::string rel = act.substr(8);
             if (rel.size() > 4 && rel.compare(rel.size() - 4, 4, ".prf") == 0) {
@@ -934,6 +962,7 @@ private:
                     showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = true;
                     assetScroll_ = 0; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                     pickParent_ = false; pickChild_.clear(); hierScroll_ = 0;
+                    pendingDeleteFile_.clear();
                     undoStack_.clear(); redoStack_.clear();
                     lastMsg_ = "loaded " + rel; rebuild(); return 1;
                 }
@@ -1026,6 +1055,7 @@ private:
             pendingSceneSave_ = false; pendingPrefabSave_ = false;
             clearDialogResults();
             pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
+            playFromEditor_ = false;
             appMode_ = AppMode::Hub; rebuildHub();
             return 2;
         }
@@ -1142,10 +1172,28 @@ private:
         consumeDialogResults();
         if (scriptMode_) imeApply();
 
+        // Live inspector: refresh panels while dragging / gizmo-active.
+        if (dragging_ || gizmoRot_ || gizmoSclX_ || gizmoSclY_ || gizmoRotUi_) {
+            buildEditorPanels();
+            input_.setUi(&editorScene_.ui);
+        }
+
         gameBackend_.begin();
         Renderer gr(gameBackend_);
         gr.render(editorScene_, &ctx_);
         std::string out = gameBackend_.str();
+
+        if (scriptMode_) {
+            // Code lines as fixed-cell mtext: 8px per code point, caret matches exactly.
+            const int LINES = 24;
+            for (int i = scriptScroll_; i < (int)scriptLines_.size() && i < scriptScroll_ + LINES; ++i) {
+                float y = 70 + (float)(i - scriptScroll_) * 19;
+                std::string txt = sanitizeLine(scriptLines_[i]);
+                if (txt.size() > 68) txt = txt.substr(0, 68);
+                out += "DRAW mtext|" + txt + "|340|" + std::to_string((int)y) + "|14|" +
+                       (i == curLine_ ? "#FFD700" : "#D8E0F0") + "|8|0\n";
+            }
+        }
 
         if (!scriptMode_ && !showSettings_ && !showPrefabs_) {
             out += "DRAW clipon\n";
@@ -1157,6 +1205,7 @@ private:
                 drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
                 drawTexturePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY);
             }
+            emitEditorGizmos(*editor_->scene(), out, makeEditorRenderInput());
             out += "DRAW clipoff\n";
         }
 
@@ -1186,6 +1235,9 @@ private:
     bool showSettings_ = false;
     bool showPrefabs_ = false;
     bool showFiles_ = true;
+    bool playFromEditor_ = false;
+    std::string lastEditorDir_;
+    std::string pendingDeleteFile_;
     bool dragging_ = false;
     bool pendingText_ = false;
     bool pinching_ = false;
