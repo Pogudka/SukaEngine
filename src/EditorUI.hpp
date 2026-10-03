@@ -5,6 +5,8 @@
 #include <set>
 #include <memory>
 #include <cmath>
+#include <cctype>
+#include <algorithm>
 
 #include "Scene.hpp"
 #include "Editor.hpp"
@@ -25,9 +27,11 @@ struct EditorUiInput {
 
     bool pickParent;
     bool showCreate;
+    bool showAssets;
 
     int& hierScroll;
     int& fsScroll;
+    int& assetScroll;
     int& scriptScroll;
 
     const std::set<std::string>& collapsed;
@@ -57,6 +61,16 @@ inline bool editorHasUiGroup(Scene* esc, const std::string& name) {
     }
 
     return false;
+}
+
+inline bool editorIsImageName(const std::string& n) {
+    size_t dot = n.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= n.size()) return false;
+
+    std::string ext = n.substr(dot + 1);
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+
+    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "bmp";
 }
 
 struct EdRow {
@@ -925,6 +939,19 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
+    {
+        UiButton b;
+        b.touch.id = "tex";
+        b.touch.rect = Rect{tx, 34, 44, 26};
+        tx += 46;
+
+        b.text = "TEX";
+        b.action = "assets_open";
+        b.color = in.showAssets ? GO : th.accent;
+
+        s.ui.push_back(b);
+    }
+
     if (in.showCreate) {
         const char* ct[6] = {
             "Node2D", "Node2D", "Node2D", "Node2D", "Label", "Sprite2D"
@@ -1005,79 +1032,144 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         }
     }
 
-    addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
+    if (!in.showAssets) {
+        addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
 
-    {
-        UiButton b;
-        b.touch.id = "fsu";
-        b.touch.rect = Rect{248, 382, 20, 22};
-        b.text = "^";
-        b.action = "fscroll_up";
-        b.color = th.button;
+        {
+            UiButton b;
+            b.touch.id = "fsu";
+            b.touch.rect = Rect{248, 382, 20, 22};
+            b.text = "^";
+            b.action = "fscroll_up";
+            b.color = th.button;
 
-        s.ui.push_back(b);
-    }
+            s.ui.push_back(b);
+        }
 
-    {
-        UiButton b;
-        b.touch.id = "fsd";
-        b.touch.rect = Rect{270, 382, 20, 22};
-        b.text = "v";
-        b.action = "fscroll_dn";
-        b.color = th.button;
+        {
+            UiButton b;
+            b.touch.id = "fsd";
+            b.touch.rect = Rect{270, 382, 20, 22};
+            b.text = "v";
+            b.action = "fscroll_dn";
+            b.color = th.button;
 
-        s.ui.push_back(b);
-    }
+            s.ui.push_back(b);
+        }
 
-    struct FsRow {
-        std::string text;
-        std::string action;
-        unsigned col;
-    };
+        struct FsRow {
+            std::string text;
+            std::string action;
+            unsigned col;
+        };
 
-    std::vector<FsRow> frows;
+        std::vector<FsRow> frows;
 
-    if (!in.fsPath.empty()) {
-        frows.push_back({ "..", "fs_up", th.button });
-    }
+        if (!in.fsPath.empty()) {
+            frows.push_back({ "..", "fs_up", th.button });
+        }
 
-    std::string abs = in.projectRoot + "/" + in.fsPath;
+        std::string abs = in.projectRoot + "/" + in.fsPath;
 
-    for (const auto& it : FileBrowser::list(abs)) {
-        if (it.name.rfind("snap_", 0) == 0) continue;
-        if (it.name == "save.vars") continue;
+        for (const auto& it : FileBrowser::list(abs)) {
+            if (it.name.rfind("snap_", 0) == 0) continue;
+            if (it.name == "save.vars") continue;
 
-        FsRow r;
-        r.text = (it.isDir ? "/ " : "  ") + it.name;
-        r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + in.fsPath + it.name);
-        r.col = it.isDir ? th.button : th.accent;
+            FsRow r;
+            r.text = (it.isDir ? "/ " : "  ") + it.name;
+            r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + in.fsPath + it.name);
+            r.col = it.isDir ? th.button : th.accent;
 
-        frows.push_back(r);
-    }
+            frows.push_back(r);
+        }
 
-    const int FMAXROWS = 8;
-    int fmax = (int)frows.size() > FMAXROWS ? (int)frows.size() - FMAXROWS : 0;
+        const int FMAXROWS = 8;
+        int fmax = (int)frows.size() > FMAXROWS ? (int)frows.size() - FMAXROWS : 0;
 
-    if (in.fsScroll < 0) in.fsScroll = 0;
-    if (in.fsScroll > fmax) in.fsScroll = fmax;
+        if (in.fsScroll < 0) in.fsScroll = 0;
+        if (in.fsScroll > fmax) in.fsScroll = fmax;
 
-    std::string shown = in.fsPath.empty() ? std::string("res/") : ("res/" + in.fsPath);
-    addLbl("FsPath", shown + "  (" + std::to_string((int)frows.size()) + ")", 10, 406, 15, GO);
+        std::string shown = in.fsPath.empty() ? std::string("res/") : ("res/" + in.fsPath);
+        addLbl("FsPath", shown + "  (" + std::to_string((int)frows.size()) + ")", 10, 406, 15, GO);
 
-    float fy = 428;
-    const float STEP = 28;
+        float fy = 428;
+        const float STEP = 28;
 
-    for (int i = in.fsScroll; i < (int)frows.size() && i < in.fsScroll + FMAXROWS; ++i) {
-        UiButton fb;
-        fb.touch.id = "fs" + std::to_string(i);
-        fb.touch.rect = Rect{8, fy, 284, STEP - 2};
-        fb.text = frows[i].text;
-        fb.action = frows[i].action;
-        fb.color = frows[i].col;
+        for (int i = in.fsScroll; i < (int)frows.size() && i < in.fsScroll + FMAXROWS; ++i) {
+            UiButton fb;
+            fb.touch.id = "fs" + std::to_string(i);
+            fb.touch.rect = Rect{8, fy, 284, STEP - 2};
+            fb.text = frows[i].text;
+            fb.action = frows[i].action;
+            fb.color = frows[i].col;
 
-        s.ui.push_back(fb);
+            s.ui.push_back(fb);
 
-        fy += STEP;
+            fy += STEP;
+        }
+    } else {
+        addLbl("FsHdr", "ASSETS", 10, 384, 18, th.ink);
+
+        {
+            UiButton b;
+            b.touch.id = "asu";
+            b.touch.rect = Rect{248, 382, 20, 22};
+            b.text = "^";
+            b.action = "assets_up";
+            b.color = th.button;
+
+            s.ui.push_back(b);
+        }
+
+        {
+            UiButton b;
+            b.touch.id = "asd";
+            b.touch.rect = Rect{270, 382, 20, 22};
+            b.text = "v";
+            b.action = "assets_dn";
+            b.color = th.button;
+
+            s.ui.push_back(b);
+        }
+
+        std::vector<std::string> imgs;
+
+        for (const auto& it : FileBrowser::list(in.projectRoot + "/assets")) {
+            if (it.isDir) continue;
+            if (editorIsImageName(it.name)) imgs.push_back(it.name);
+        }
+
+        std::sort(imgs.begin(), imgs.end());
+
+        const int AMAXROWS = 8;
+        int amax = (int)imgs.size() > AMAXROWS ? (int)imgs.size() - AMAXROWS : 0;
+
+        if (in.assetScroll < 0) in.assetScroll = 0;
+        if (in.assetScroll > amax) in.assetScroll = amax;
+
+        addLbl("FsPath", "assets/  (" + std::to_string((int)imgs.size()) + ")", 10, 406, 15, GO);
+
+        if (imgs.empty()) {
+            addLbl("AsEmpty", "drop png/jpg into assets/", 12, 432, 14, th.ink);
+        }
+
+        float ay = 428;
+        const float ASTEP = 28;
+
+        for (int i = in.assetScroll; i < (int)imgs.size() && i < in.assetScroll + AMAXROWS; ++i) {
+            UiButton tb;
+            tb.touch.id = "tb" + std::to_string(i);
+            tb.touch.rect = Rect{8, ay, 284, ASTEP - 2};
+            tb.text = "  " + imgs[i];
+            tb.action = "tex_pick:" + imgs[i];
+            tb.color = th.accent;
+
+            s.ui.push_back(tb);
+
+            ay += ASTEP;
+        }
+
+        addLbl("AsHint", "tap = assign / create sprite", 10, ay + 4, 12, th.ink);
     }
 
     return s;
