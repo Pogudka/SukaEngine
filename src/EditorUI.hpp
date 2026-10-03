@@ -464,7 +464,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    // ==== Top toolbar: SAVE SCN / SAVE PF instead of SQ CI DI TR ====
     float tx = 300;
     { UiButton b; b.touch.id = "savesc"; b.touch.rect = Rect{tx, 34, 92, 26}; tx += 94; b.text = "SAVE SCN"; b.action = "save_scene_as"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "savepf"; b.touch.rect = Rect{tx, 34, 92, 26}; tx += 94; b.text = "SAVE PF"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
@@ -478,7 +477,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     { UiButton b; b.touch.id = "tex"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "TEX"; b.action = "assets_open"; b.color = in.showAssets ? GO : th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "file"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "FILES"; b.action = "files_open"; b.color = in.showFiles ? GO : th.button; s.ui.push_back(b); }
 
-    // ==== Create menu: PREFAB right after PART, no save buttons here ====
     if (in.showCreate) {
         const char* ct[6] = { "Node2D", "Node2D", "Node2D", "Node2D", "Label", "Sprite2D" };
         const char* cs[6] = { "square", "circle", "diamond", "triangle", "", "" };
@@ -500,7 +498,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         { UiButton b; b.touch.id = "ctprf"; b.touch.rect = Rect{358, 604, 70, 40}; b.text = "PREFAB"; b.action = "create_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
     }
 
-    // ==== Left column panels: ASSETS overrides FILES; FILES visible by default ====
     if (in.showAssets) {
         addLbl("FsHdr", "ASSETS", 10, 384, 18, th.ink);
         { UiButton b; b.touch.id = "asclose"; b.touch.rect = Rect{252, 382, 40, 22}; b.text = "X"; b.action = "assets_open"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
@@ -584,7 +581,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         addLbl("FsHint", "tap file = load/assign  |  X = delete", 10, 668, 12, th.ink);
     }
 
-    // ==== Prefab picker modal ====
     if (in.showPrefabs) {
         const unsigned BG = 0x14141CFF;
         auto btn = [&](const std::string& id, float x, float y, float w, float h,
@@ -600,7 +596,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         std::string dir = in.projectRoot + "/prefabs";
         for (const auto& it : FileBrowser::list(dir)) {
             if (it.isDir) continue;
-            if (it.name.size() >= 5 && it.name.compare(it.name.size() - 5, 5, ".json") == 0)
+            if (it.name.size() >= 4 && it.name.compare(it.name.size() - 4, 4, ".prf") == 0)
                 files.push_back(it.name);
         }
         std::sort(files.begin(), files.end());
@@ -614,7 +610,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
 
         if (files.empty()) {
             auto l = std::make_unique<Label>();
-            l->name = "PrEmpty"; l->text = "no prefabs/ files yet";
+            l->name = "PrEmpty"; l->text = "no .prf files in prefabs/ yet";
             l->fontSize = 16; l->color = th.ink; l->position = Vec2{400, 220};
             s.root->addChild(std::move(l));
         }
@@ -626,7 +622,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         }
     }
 
-    // ==== Settings modal ====
     if (in.showSettings) {
         const unsigned BG = 0x14141CFF;
         auto btn = [&](const std::string& id, float x, float y, float w, float h,
