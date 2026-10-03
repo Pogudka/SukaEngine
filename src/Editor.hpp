@@ -10,6 +10,49 @@
 
 namespace suka {
 
+// ---------------------------------------------------------------------------
+// Emitter presets ("виды частиц"). Each preset fully describes a Particle2D:
+// glyph + color + motion. The editor UI lists names and applies by name.
+// ---------------------------------------------------------------------------
+struct EmitterPreset {
+    const char* name;
+    const char* glyph;
+    unsigned color;
+    float rate, burst, vx, vy, spread, gravity, life, lifeSpread, size, sizeEnd, drag;
+};
+
+inline const std::vector<EmitterPreset>& emitterPresets() {
+    static const std::vector<EmitterPreset> v = {
+        // name      glyph  color        rate burst  vx   vy    spread grav  life  lspread size sizeEnd drag
+        { "dot",     "\xe2\x80\xa2", 0xFFFFFFFF,  0,  24,   0, -120,  120,  300, 0.9f, 0.3f,  22,   0,  0.0f },
+        { "star",    "*",            0xFFFFD700,  0,  30,   0, -160,  140,  320, 1.0f, 0.4f,  26,   0,  0.0f },
+        { "spark",   "\xe2\x9c\xa6", 0xFFFF8000, 40,   0,   0, -200,   60,  500, 0.5f, 0.2f,  14,   0,  1.2f },
+        { "ember",   ".",            0xFFFF4040, 30,   0,   0,  -40,   80,  900, 1.4f, 0.5f,  12,   0,  0.3f },
+        { "smoke",   "\xe2\x97\x8b", 0xFFB0B0B0, 12,   0,   0,  -30,   40,  -20, 2.2f, 0.6f,  30,  60,  0.6f },
+        { "snow",    "\xe2\x9d\x84", 0xFFBFEFFF,  8,   0,  20,   40,   60,  120, 3.0f, 0.8f,  18,   0,  0.2f },
+        { "rain",    "|",            0xFF60A0FF, 60,   0,   0,  320,   20,    0, 0.6f, 0.1f,  10,   0,  0.0f },
+        { "magic",   "\xe2\x9c\xa8", 0xFFC080FF, 20,   0,   0,  -90,  100, -120, 1.2f, 0.4f,  20,   0,  0.4f },
+    };
+    return v;
+}
+
+inline void applyEmitterPreset(Particle2D* pe, const EmitterPreset& p) {
+    if (!pe) return;
+    pe->glyph      = p.glyph;
+    pe->color      = p.color;
+    pe->rate       = p.rate;
+    pe->burst      = (int)p.burst;
+    pe->vx         = p.vx;
+    pe->vy         = p.vy;
+    pe->spread     = p.spread;
+    pe->gravity    = p.gravity;
+    pe->life       = p.life;
+    pe->lifeSpread = p.lifeSpread;
+    pe->size       = p.size;
+    pe->sizeEnd    = p.sizeEnd;
+    pe->drag       = p.drag;
+}
+
 class SceneWriter {
 public:
     static bool write(Scene& scene, const std::string& path) {
@@ -179,6 +222,51 @@ public:
         scene_->root->addChild(std::move(n));
         return raw;
     }
+
+    // ---- particle helpers for the [+] menu and the inspector ----
+
+    // Create a Particle2D pre-loaded with a named view. Returns the node or null.
+    Node2D* addParticleNode(const std::string& name, float x, float y, const std::string& presetName) {
+        Node2D* raw = addNode("Particle2D", name, x, y);
+        Particle2D* pe = raw ? dynamic_cast<Particle2D*>(raw) : nullptr;
+        if (!pe) return raw;
+        for (const auto& p : emitterPresets()) {
+            if (presetName == p.name) { applyEmitterPreset(pe, p); break; }
+        }
+        pe->emitting = true;       // pour immediately after creation
+        pe->burstPending = true;   // plus one opening volley
+        return pe;
+    }
+
+    // Apply a named view to an existing node by name. True if node is an emitter.
+    bool setEmitterPreset(const std::string& nodeName, const std::string& presetName) {
+        Node2D* n = find2d(nodeName);
+        Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
+        if (!pe) return false;
+        for (const auto& p : emitterPresets()) {
+            if (presetName == p.name) { applyEmitterPreset(pe, p); return true; }
+        }
+        return false;
+    }
+
+    // Names of all views, for drawing the inspector row.
+    std::vector<std::string> emitterPresetNames() const {
+        std::vector<std::string> out;
+        for (const auto& p : emitterPresets()) out.emplace_back(p.name);
+        return out;
+    }
+
+    // Which view the node currently matches (by glyph), "" if custom/none.
+    std::string currentEmitterPreset(const std::string& nodeName) const {
+        Node2D* n = find2d(nodeName);
+        Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
+        if (!pe) return "";
+        for (const auto& p : emitterPresets()) {
+            if (pe->glyph == p.glyph) return p.name;
+        }
+        return "";
+    }
+
     void deleteNode(const std::string& name) {
         if (!scene_ || !scene_->root) return;
         Node* n = scene_->root->findNode(name);
