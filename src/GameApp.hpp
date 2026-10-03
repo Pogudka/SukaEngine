@@ -106,6 +106,7 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
     Node2D* n2 = dynamic_cast<Node2D*>(&n);
     if (!n2) { for (const auto& c : n.getChildren()) drawTexturePreviewTree(*c, parent, out, zoom, camX, camY); return; }
     WorldXf w = parent.child(n2->position, n2->rotation, n2->scale.x, n2->scale.y);
+    if (std::string(n2->typeName()) == "Prefab2D") return;
     Sprite2D* sp = dynamic_cast<Sprite2D*>(n2);
     std::string tex = !n2->texture.empty() ? n2->texture : (sp ? sp->texturePath : std::string());
     if (!tex.empty()) {
@@ -838,7 +839,7 @@ private:
                 Prefab2D* pf = n ? dynamic_cast<Prefab2D*>(n) : nullptr;
                 if (pf) {
                     pf->sourcePath = rel;
-                    pf->instantiate(project_.rootPath, fontPath_);
+                    pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
                     lastMsg_ = "prefab source: " + rel;
                 }
             }
@@ -853,7 +854,7 @@ private:
                 Prefab2D* pf = n ? dynamic_cast<Prefab2D*>(n) : nullptr;
                 if (pf && !pf->sourcePath.empty()) {
                     pushUndo();
-                    pf->instantiate(project_.rootPath, fontPath_);
+                    pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
                     lastMsg_ = "prefab reloaded";
                     rebuild();
                     return 1;
@@ -863,7 +864,7 @@ private:
         }
         if (act == "make_prefab") {
             if (!sel.empty() && sel != editor_->scene()->root->name) {
-                std::string rel = "prefabs/" + sel + ".json";
+                std::string rel = "prefabs/" + sel + ".prf";
                 std::string full = project_.rootPath + "/" + rel;
                 if (editor_->makePrefabFromSelected(full, rel)) {
                     lastMsg_ = "saved " + rel + " + created Prefab2D";
@@ -948,6 +949,11 @@ private:
         if (act.rfind("fs_enter:", 0) == 0) { fsPath_ += act.substr(9) + "/"; fsScroll_ = 0; rebuild(); return 1; }
         if (act.rfind("fs_pick:", 0) == 0) {
             std::string rel = act.substr(8);
+            if (rel.size() > 4 && rel.compare(rel.size() - 4, 4, ".prf") == 0) {
+                lastMsg_ = "prefab file: insert via + -> PREFAB -> PICK";
+                rebuild();
+                return 0;
+            }
             if (rel.size() > 5 && rel.compare(rel.size() - 5, 5, ".json") == 0) {
                 if (sceneMgr_ && sceneMgr_->restartScene(rel, resources_)) {
                     editor_->attach(sceneMgr_->current());
@@ -1006,7 +1012,17 @@ private:
             return 0;
         }
         if (act == "ed_scr") { if (!lk && !sel.empty()) { attachScript(sel); rebuild(); return 1; } return 0; }
-        if (act == "ed_clone") { if (!lk && !sel.empty()) { pushUndo(); editor_->cloneSelected(sel + "_copy"); rebuild(); return 1; } return 0; }
+        if (act == "ed_clone") {
+            if (!lk && !sel.empty()) {
+                pushUndo();
+                Node2D* cl = editor_->cloneSelected(sel + "_copy");
+                Prefab2D* cpf = cl ? dynamic_cast<Prefab2D*>(cl) : nullptr;
+                if (cpf) cpf->instantiate(project_.rootPath, fontPath_, editor_->scene());
+                rebuild();
+                return 1;
+            }
+            return 0;
+        }
         if (act == "ed_parent") {
             if (!lk) {
                 if (!selUi.empty()) { pickParent_ = !pickParent_; pickChild_ = pickParent_ ? ("UI:" + selUi) : std::string(); rebuild(); return 1; }
@@ -1072,7 +1088,7 @@ private:
             std::string name = sanitizeProjectDirName(txt);
             if (!name.empty()) {
                 editor_->setProjectRoot(project_.rootPath);
-                if (editor_->saveAsPrefab(name)) lastMsg_ = "saved prefabs/" + name + ".json";
+                if (editor_->saveAsPrefab(name)) lastMsg_ = "saved prefabs/" + name + ".prf";
                 else lastMsg_ = "save prefab failed (select a node first)";
             }
             pendingPrefabSave_ = false;
