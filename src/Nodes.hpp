@@ -227,5 +227,28 @@ public:
     std::string extra() const override { return Node2D::extra() + " radius=" + std::to_string((int)radius); }
     std::unique_ptr<Node> cloneNode() const override { auto c = std::make_unique<Light2D>(); copyBase(*c); copyNode2D(*c); c->radius = radius; c->intensity = intensity; return c; }
 };
+class Particle2D : public Node2D {
+public:
+    float rate = 0.0f;
+    int   burst = 0;
+    float vx = 0.0f, vy = 0.0f, spread = 0.0f;
+    float gravity = 0.0f;
+    float life = 1.0f, lifeSpread = 0.0f;
+    float size = 18.0f, sizeEnd = 0.0f, drag = 0.0f;
+    std::string glyph = "\xe2\x80\xa2";
+    bool  emitting = false;
+    float acc = 0.0f;
+    bool  burstPending = false;
 
+    Particle2D() { shape = "none"; color = 0xFFFFFFFF; w = 0; h = 0; }
+    const char* typeName() const override { return "Particle2D"; }
+    std::string extra() const override { return Node2D::extra() + " rate=" + std::to_string((int)rate) + " emit=" + (emitting ? "1" : "0"); }
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Particle2D>(); copyBase(*c); copyNode2D(*c);
+        c->rate = rate; c->burst = burst; c->vx = vx; c->vy = vy; c->spread = spread;
+        c->gravity = gravity; c->life = life; c->lifeSpread = lifeSpread;
+        c->size = size; c->sizeEnd = sizeEnd; c->drag = drag; c->glyph = glyph;
+        c->emitting = emitting; return c;
+    }
+};
 } // namespace suka
