@@ -12,21 +12,27 @@
 
 namespace suka {
 
-// Prefab: container node whose children are instantiated from a scene-format
-// json file (prefabs/*.json). Only shell + source path are saved in scenes.
+class Scene;
+
+// Prefab: container node instantiated from a .prf file (scene-format json).
+// Only shell + sourcePath are saved in scenes; children AND grouped ui buttons
+// live inside the .prf and are restored on instantiate.
 class Prefab2D : public Node2D {
 public:
     std::string sourcePath;
+    std::vector<std::string> instUiIds;
 
     Prefab2D() { shape = "none"; color = 0x8E44ADFF; w = 48.0f; h = 48.0f; }
     const char* typeName() const override { return "Prefab2D"; }
     std::string extra() const override { return Node2D::extra() + " src='" + sourcePath + "'"; }
 
-    bool instantiate(const std::string& projectRoot, const std::string& fontPath);
     void clearInstanceChildren() {
         auto kids = takeAllChildren();
         (void)kids;
     }
+
+    void detachInstance(Scene* owner);
+    bool instantiate(const std::string& projectRoot, const std::string& fontPath, Scene* owner);
 
     std::unique_ptr<Node> cloneNode() const override {
         auto c = std::make_unique<Prefab2D>();
@@ -115,7 +121,8 @@ inline std::vector<std::string> splitTopObjects(const std::string& arr) {
 
 class SceneLoader {
 public:
-    static std::unique_ptr<Node2D> parseNode(const std::string& obj, const std::string& fontPath, const std::string& projectRoot) {
+    static std::unique_ptr<Node2D> parseNode(const std::string& obj, const std::string& fontPath,
+                                              const std::string& projectRoot, Scene* ownerScene) {
         std::string type; jsonGetString(obj, "type", type);
         std::unique_ptr<Node2D> node2d;
 
@@ -187,17 +194,16 @@ public:
         float lk = 0; if (jsonGetNumber(obj, "locked", lk)) node2d->locked = (lk != 0);
         float alp = 1.0f; if (jsonGetNumber(obj, "alpha", alp)) node2d->alpha = alp;
 
-        // Prefab children come from the source file, never from the scene json.
         if (type != "Prefab2D") {
             size_t cb = 0, ce = 0;
             if (jsonFindArray(obj, "children", cb, ce)) {
                 for (const auto& cobj : splitTopObjects(obj.substr(cb, ce - cb + 1))) {
-                    auto child = parseNode(cobj, fontPath, projectRoot);
+                    auto child = parseNode(cobj, fontPath, projectRoot, ownerScene);
                     if (child) node2d->addChild(std::move(child));
                 }
             }
         } else {
-            static_cast<Prefab2D*>(node2d.get())->instantiate(projectRoot, fontPath);
+            static_cast<Prefab2D*>(node2d.get())->instantiate(projectRoot, fontPath, ownerScene);
         }
         return node2d;
     }
@@ -219,7 +225,7 @@ public:
         if (jsonFindArray(json, "nodes", begin, end)) {
             std::string arr = json.substr(begin, end - begin + 1);
             for (const auto& obj : splitTopObjects(arr)) {
-                auto n = parseNode(obj, fontPath, projectRoot);
+                auto n = parseNode(obj, fontPath, projectRoot, &scene);
                 if (n) scene.root->addChild(std::move(n));
             }
         }
@@ -248,8 +254,10 @@ public:
     }
 };
 
+// Loads a .prf (scene-format) file: nodes + grouped ui buttons.
 inline bool loadPrefabTree(const std::string& projectRoot, const std::string& relPath,
-                           const std::string& fontPath, std::unique_ptr<Node>& outRoot) {
+                           const std::string& fontPath, std::unique_ptr<Node>& outRoot,
+                           std::vector<UiButton>& outUi) {
     Scene tmp;
     if (!SceneLoader::load(projectRoot + "/" + relPath, tmp, fontPath, projectRoot)) return false;
     outRoot = std::make_unique<Node>();
@@ -257,17 +265,34 @@ inline bool loadPrefabTree(const std::string& projectRoot, const std::string& re
         auto kids = tmp.root->takeAllChildren();
         for (auto& k : kids) outRoot->addChild(std::move(k));
     }
+    outUi = std::move(tmp.ui);
     return true;
 }
 
-inline bool Prefab2D::instantiate(const std::string& projectRoot, const std::string& fontPath) {
+inline void Prefab2D::detachInstance(Scene* owner) {
     clearInstanceChildren();
+    if (owner) {
+        for (auto& id : instUiIds) {
+            for (auto it = owner->ui.begin(); it != owner->ui.end(); ++it) {
+                if (it->touch.id == id) { owner->ui.erase(it); break; }
+            }
+        }
+    }
+    instUiIds.clear();
+}
+
+inline bool Prefab2D::instantiate(const std::string& projectRoot, const std::string& fontPath, Scene* owner) {
+    detachInstance(owner);
     if (sourcePath.empty()) return false;
     std::unique_ptr<Node> loaded;
-    if (!loadPrefabTree(projectRoot, sourcePath, fontPath, loaded)) return false;
+    std::vector<UiButton> ui;
+    if (!loadPrefabTree(projectRoot, sourcePath, fontPath, loaded, ui)) return false;
     if (!loaded) return false;
     auto kids = loaded->takeAllChildren();
     for (auto& k : kids) if (k) addChild(std::move(k));
+    if (owner) {
+        for (auto& b : ui) { instUiIds.push_back(b.touch.id); owner->ui.push_back(b); }
+    }
     return true;
 }
 
