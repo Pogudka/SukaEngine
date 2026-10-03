@@ -537,7 +537,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             s.ui.push_back(tb);
             ay += ASTEP;
         }
-        addLbl("AsHint", "tap = assign / create sprite", 10, ay + 4, 12, th.ink);
+        addLbl("AsHint", "tap = assign / create sprite", 10, 660, 12, th.ink);
     }
 
     // Settings window built ONLY from buttons, added last => draws on top of everything.
