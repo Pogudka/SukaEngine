@@ -20,29 +20,41 @@ namespace suka {
 
 struct EditorUiInput {
     Editor* editor;
+
     bool scriptMode;
     float edZoom;
     Manip manip;
+
     bool pickParent;
     bool showCreate;
     bool showAssets;
     bool showSettings;
+    bool showPrefabs;
+
     int& hierScroll;
     int& fsScroll;
     int& assetScroll;
     int& scriptScroll;
+    int& prefabScroll;
+
     const std::set<std::string>& collapsed;
     const std::string& fsPath;
     const std::string& projectRoot;
+
     const std::string& scriptPath;
     const std::vector<std::string>& scriptLines;
+
     int curLine;
     int curCol;
+
     bool imeShown;
+
     const std::vector<std::string>& luaLog;
 };
 
-inline std::string editorDash(int depth) { return depth > 0 ? std::string(depth, '-') + " " : std::string(); }
+inline std::string editorDash(int depth) {
+    return depth > 0 ? std::string(depth, '-') + " " : std::string();
+}
 
 inline bool editorHasUiGroup(Scene* esc, const std::string& name) {
     if (!esc) return false;
@@ -78,6 +90,7 @@ inline void editorBuildTreeRows(
         bool open = collapsed.count(nm) == 0;
         Node2D* ch2d = dynamic_cast<Node2D*>(ch.get());
         std::string lockMark = (ch2d && ch2d->locked) ? " [L]" : "";
+
         EdRow r;
         r.text = editorDash(depth) + (kids ? (open ? "[-] " : "[+] ") : "    ") + nm + lockMark + "   " + std::string(ch->typeName());
         r.action = "ed_select:" + nm;
@@ -86,6 +99,7 @@ inline void editorBuildTreeRows(
         r.open = open;
         r.name = nm;
         rows.push_back(r);
+
         if (kids && open) {
             editorBuildTreeRows(esc, ch.get(), depth + 1, sel, selUi, rows, collapsed);
             for (auto& ub : esc->ui) {
@@ -94,7 +108,9 @@ inline void editorBuildTreeRows(
                     br.text = editorDash(depth + 1) + "    " + ub.touch.id + "   Button";
                     br.action = "ed_selectui:" + ub.touch.id;
                     br.sel = (selUi == ub.touch.id);
-                    br.hasKids = false; br.open = false; br.name = "";
+                    br.hasKids = false;
+                    br.open = false;
+                    br.name = "";
                     rows.push_back(br);
                 }
             }
@@ -105,13 +121,17 @@ inline void editorBuildTreeRows(
 inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
     Theme& th = currentTheme();
     const unsigned GO = 0xFF8800FFu;
+
     auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
         auto l = std::make_unique<Label>();
         l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y};
         s.root->addChild(std::move(l));
     };
+
     const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
+
     addLbl("ScHdr", "SCRIPTS", 10, 40, 18, th.ink);
+
     std::vector<FileEntry> ls = FileBrowser::list(in.projectRoot + "/scripts");
     int li = 0;
     for (auto& it : ls) {
@@ -127,21 +147,34 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         s.ui.push_back(b);
         ++li;
     }
-    { UiButton b; b.touch.id = "scnew"; b.touch.rect = Rect{8, 64 + (float)li * 28, 284, 26}; b.text = "+ NEW SCRIPT"; b.action = "snew"; b.color = th.accent; s.ui.push_back(b); }
+
+    {
+        UiButton b;
+        b.touch.id = "scnew";
+        b.touch.rect = Rect{8, 64 + (float)li * 28, 284, 26};
+        b.text = "+ NEW SCRIPT";
+        b.action = "snew";
+        b.color = th.accent;
+        s.ui.push_back(b);
+    }
+
     auto edbg = std::make_unique<Node2D>();
     edbg->name = "__scbg"; edbg->shape = "square"; edbg->color = 0x101018FF;
     edbg->w = VW; edbg->h = VH; edbg->position = Vec2{VX0 + VW / 2, VY0 + VH / 2};
     s.root->addChild(std::move(edbg));
+
     { UiButton b; b.touch.id = "ssave"; b.touch.rect = Rect{300, 34, 70, 26}; b.text = "SAVE"; b.action = "ssave"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "sclose"; b.touch.rect = Rect{374, 34, 70, 26}; b.text = "SCENE"; b.action = "tab_scene"; b.color = GO; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "kbtog"; b.touch.rect = Rect{448, 34, 80, 26}; b.text = in.imeShown ? "KB OFF" : "KB ON"; b.action = "kb_toggle"; b.color = in.imeShown ? th.button : th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "scu"; b.touch.rect = Rect{860, 70, 26, 26}; b.text = "^"; b.action = "scup"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "scd"; b.touch.rect = Rect{860, 100, 26, 26}; b.text = "v"; b.action = "scdn"; b.color = th.button; s.ui.push_back(b); }
+
     const int LINES = 24;
     const float LH = 19;
     int smax = (int)in.scriptLines.size() > LINES ? (int)in.scriptLines.size() - LINES : 0;
     if (in.scriptScroll < 0) in.scriptScroll = 0;
     if (in.scriptScroll > smax) in.scriptScroll = smax;
+
     for (int i = in.scriptScroll; i < (int)in.scriptLines.size() && i < in.scriptScroll + LINES; ++i) {
         float y = 70 + (float)(i - in.scriptScroll) * LH;
         std::string num = std::to_string(i + 1);
@@ -151,6 +184,7 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         if (txt.size() > 68) txt = txt.substr(0, 68);
         addLbl(("ScC" + std::to_string(i)).c_str(), txt, 340, y, 14, i == in.curLine ? parseColor("#FFD700") : parseColor("#D8E0F0"));
     }
+
     if (in.curLine >= in.scriptScroll && in.curLine < in.scriptScroll + LINES) {
         int cps = utf8ByteToCp(in.scriptLines[in.curLine], in.curCol);
         auto cur = std::make_unique<Node2D>();
@@ -160,6 +194,7 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         cur->position = Vec2{cxp + 1, cyp};
         s.root->addChild(std::move(cur));
     }
+
     addLbl("ScInfo", in.scriptPath.empty() ? "(no script)" : in.scriptPath, 900, 64, 16, GO);
     addLbl("ScInfo2", "lines " + std::to_string((int)in.scriptLines.size()) + "   cur " + std::to_string(in.curLine + 1) + ":" + std::to_string(utf8ByteToCp(in.scriptLines.empty() ? std::string("") : in.scriptLines[in.curLine], in.curCol)), 900, 88, 14, th.ink);
     addLbl("ScInfo3", "tap line = cursor + keyboard", 900, 110, 14, th.ink);
@@ -169,10 +204,12 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
 inline Scene buildEditorScene(const EditorUiInput& in) {
     Theme& th = currentTheme();
     const unsigned GO = 0xFF8800FFu;
+
     Scene s;
     s.name = "Editor";
     s.root = std::make_unique<Node>();
     s.root->name = "EdRoot";
+
     auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
         auto l = std::make_unique<Label>();
         l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y};
@@ -272,6 +309,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 244, 16, th.ink);
             addLbl("InTex", "Texture: " + (ub->texture.empty() ? std::string("(none)") : ub->texture), 900, 268, 16, th.ink);
             addLbl("InGrp", "Group: " + (ub->group.empty() ? std::string("(none)") : ub->group), 900, 292, 16, th.ink);
+
             const char* nl[6] = { "X", "Y", "W", "H", "R", "A" };
             const char* nk[6] = { "bx", "by", "bw", "bh", "bang", "balpha" };
             for (int k = 0; k < 6; ++k) {
@@ -314,13 +352,38 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             }
 
             addLbl("InAct", "Touch: " + (nd->action.empty() ? std::string("(none)") : nd->action), 900, 340, 16, th.ink);
+
             if (std::string(nd->typeName()) == "Label") {
                 addLbl("InText", "Text: " + static_cast<Label*>(nd)->text, 900, 364, 16, th.ink);
             }
+
+            if (std::string(nd->typeName()) == "Prefab2D") {
+                Prefab2D* pf = static_cast<Prefab2D*>(nd);
+                addLbl("InSrc", "Source: " + (pf->sourcePath.empty() ? std::string("(none)") : pf->sourcePath), 900, 364, 16, parseColor("#8E44AD"));
+
+                UiButton pb;
+                pb.touch.id = "prefabpick";
+                pb.touch.rect = Rect{1092, 360, 88, 26};
+                pb.text = "PICK";
+                pb.action = "prefab_pick";
+                pb.color = GO;
+                s.ui.push_back(pb);
+
+                if (pf->sourcePath.empty()) {
+                    addLbl("InSrcHint", "no source: children empty", 900, 388, 14, parseColor("#D62828"));
+                } else {
+                    int kids = (int)pf->childCount();
+                    addLbl("InInst", "instance: " + std::to_string(kids) + " children", 900, 388, 14, th.ink);
+                }
+
+                { UiButton b; b.touch.id = "reloadpf"; b.touch.rect = Rect{900, 410, 100, 26}; b.text = "RELOAD"; b.action = "prefab_reload"; b.color = th.accent; s.ui.push_back(b); }
+            }
+
             if (std::string(nd->typeName()) == "Particle2D") {
                 Particle2D* pe = static_cast<Particle2D*>(nd);
                 std::string cur = in.editor->currentEmitterPreset(sel);
                 addLbl("InView", "View: " + (cur.empty() ? std::string("(custom)") : cur), 900, 364, 16, th.ink);
+
                 int vk = 0;
                 for (const auto& p : emitterPresets()) {
                     UiButton vb;
@@ -332,6 +395,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                     s.ui.push_back(vb);
                     ++vk;
                 }
+
                 const char* pl[7] = { "RT", "LF", "SZ", "SP", "GR", "CL", "ON" };
                 const char* pa[7] = { "pnum:rate", "pnum:life", "pnum:size", "pnum:spread", "pnum:gravity", "pcolor", "ponoff" };
                 for (int k = 0; k < 7; ++k) {
@@ -343,7 +407,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                     pb.color = (k == 6) ? (pe->emitting ? GO : th.button) : th.button;
                     s.ui.push_back(pb);
                 }
-            } else {
+            } else if (std::string(nd->typeName()) != "Prefab2D") {
                 const char* nl[7] = { "X", "Y", "ROT", "SCL", "W", "H", "A" };
                 const char* na[7] = { "nx", "ny", "nrot", "nscl", "nw", "nh", "nalpha" };
                 for (int k = 0; k < 7; ++k) {
@@ -385,6 +449,8 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     { UiButton b; b.touch.id = "pstbtn"; b.touch.rect = Rect{996, 482, 44, 30}; b.text = "PST"; b.action = "ed_paste"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "undbtn"; b.touch.rect = Rect{1044, 482, 44, 30}; b.text = "UND"; b.action = "ed_undo"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "redbtn"; b.touch.rect = Rect{1092, 482, 44, 30}; b.text = "RED"; b.action = "ed_redo"; b.color = th.button; s.ui.push_back(b); }
+
+    { UiButton b; b.touch.id = "mkpf"; b.touch.rect = Rect{1140, 482, 44, 30}; b.text = "→PF"; b.action = "make_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
 
     const char* mv[4] = { "l", "u", "d", "r" };
     const char* mvTxt[4] = { "<", "^", "v", ">" };
@@ -438,9 +504,10 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         { UiButton b; b.touch.id = "ctgrp"; b.touch.rect = Rect{300 + 8 * 58, 560, 54, 40}; b.text = "GRP"; b.action = "create_grp"; b.color = parseColor("#808080"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctbtn"; b.touch.rect = Rect{300 + 9 * 58, 560, 54, 40}; b.text = "BTN"; b.action = "create_btn"; b.color = parseColor("#2EC4B6"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctprt"; b.touch.rect = Rect{300, 604, 54, 40}; b.text = "PART"; b.action = "create:Particle2D:none"; b.color = parseColor("#FF69B4"); s.ui.push_back(b); }
+        { UiButton b; b.touch.id = "ctprf"; b.touch.rect = Rect{54, 604, 54, 40}; b.text = "PREFAB"; b.action = "create_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
     }
 
-    if (!in.showAssets) {
+    if (!in.showAssets && !in.showPrefabs) {
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
         { UiButton b; b.touch.id = "fsu"; b.touch.rect = Rect{248, 382, 20, 22}; b.text = "^"; b.action = "fscroll_up"; b.color = th.button; s.ui.push_back(b); }
         { UiButton b; b.touch.id = "fsd"; b.touch.rect = Rect{270, 382, 20, 22}; b.text = "v"; b.action = "fscroll_dn"; b.color = th.button; s.ui.push_back(b); }
@@ -475,7 +542,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             s.ui.push_back(fb);
             fy += STEP;
         }
-    } else {
+    } else if (in.showAssets) {
         addLbl("FsHdr", "ASSETS", 10, 384, 18, th.ink);
         { UiButton b; b.touch.id = "asu"; b.touch.rect = Rect{248, 382, 20, 22}; b.text = "^"; b.action = "assets_up"; b.color = th.button; s.ui.push_back(b); }
         { UiButton b; b.touch.id = "asd"; b.touch.rect = Rect{270, 382, 20, 22}; b.text = "v"; b.action = "assets_dn"; b.color = th.button; s.ui.push_back(b); }
@@ -504,6 +571,47 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             ay += ASTEP;
         }
         addLbl("AsHint", "tap = assign / create sprite", 10, 660, 12, th.ink);
+    }
+
+    if (in.showPrefabs) {
+        const unsigned BG = 0x14141CFF;
+        auto btn = [&](const std::string& id, float x, float y, float w, float h,
+                       const std::string& txt, const std::string& action, unsigned col) {
+            UiButton b; b.touch.id = id; b.touch.rect = Rect{x, y, w, h};
+            b.text = txt; b.action = action; b.color = col; s.ui.push_back(b);
+        };
+        btn("__prbg",    360, 120, 560, 480, "", "", BG);
+        btn("__prtitle", 380, 132, 520,  40, "PICK PREFAB SOURCE", "", BG);
+        btn("pr_close",  830, 132,  70,  32, "X", "prefabs_close", parseColor("#D62828"));
+
+        std::vector<std::string> files;
+        std::string dir = in.projectRoot + "/prefabs";
+        for (const auto& it : FileBrowser::list(dir)) {
+            if (it.isDir) continue;
+            if (it.name.size() >= 5 && it.name.compare(it.name.size() - 5, 5, ".json") == 0)
+                files.push_back(it.name);
+        }
+        std::sort(files.begin(), files.end());
+
+        int maxScroll = (int)files.size() > 10 ? (int)files.size() - 10 : 0;
+        if (in.prefabScroll < 0) in.prefabScroll = 0;
+        if (in.prefabScroll > maxScroll) in.prefabScroll = maxScroll;
+
+        { UiButton b; b.touch.id = "pru"; b.touch.rect = Rect{880, 180, 24, 22}; b.text = "^"; b.action = "prefabs_up"; b.color = th.button; s.ui.push_back(b); }
+        { UiButton b; b.touch.id = "prd"; b.touch.rect = Rect{880, 208, 24, 22}; b.text = "v"; b.action = "prefabs_dn"; b.color = th.button; s.ui.push_back(b); }
+
+        if (files.empty()) {
+            auto l = std::make_unique<Label>();
+            l->name = "PrEmpty"; l->text = "no prefabs/ files yet";
+            l->fontSize = 16; l->color = th.ink; l->position = Vec2{400, 220};
+            s.root->addChild(std::move(l));
+        }
+
+        for (int i = in.prefabScroll; i < (int)files.size() && i < in.prefabScroll + 10; ++i) {
+            float y = 180 + (float)(i - in.prefabScroll) * 36;
+            btn("prf" + std::to_string(i), 400, y, 460, 32,
+                "  " + files[i], "prefab_set:prefabs/" + files[i], th.accent);
+        }
     }
 
     if (in.showSettings) {
