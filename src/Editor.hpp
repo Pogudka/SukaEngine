@@ -10,6 +10,27 @@
 
 namespace suka {
 
+struct EmitterPreset {
+    std::string name;
+    std::string glyph;
+    float rate; int burst;
+    float vx, vy, spread, gravity;
+    float life, lifeSpread;
+    float size, sizeEnd, drag;
+    unsigned color;
+};
+
+inline const std::vector<EmitterPreset>& emitterPresets() {
+    static std::vector<EmitterPreset> list = {
+        {"fire",  "\xe2\x80\xa2", 40.0f, 40, 0.0f, -180.0f, 140.0f, 80.0f, 0.8f, 0.3f, 18.0f, 4.0f, 0.5f, 0xFFFF6020u},
+        {"smoke", "\xe2\x97\x89", 20.0f, 20, 0.0f, -80.0f,  100.0f, 40.0f, 1.6f, 0.5f, 28.0f, 8.0f, 2.0f, 0x80808080u},
+        {"rain",  "|",             60.0f, 80, 0.0f,  300.0f,  10.0f, 200.0f,0.5f, 0.1f, 4.0f,  1.0f, 0.2f, 0x8888FFFFu},
+        {"snow",  "*",             25.0f, 30, 0.0f,   80.0f,  60.0f, 20.0f, 3.0f, 1.0f, 6.0f,  2.0f, 1.5f, 0xFFFFFFE0u},
+        {"spark", "+",             12.0f, 50, 0.0f, -240.0f, 200.0f, 500.0f,0.4f, 0.1f, 3.0f,  0.5f, 0.0f, 0xFFFFE040u}
+    };
+    return list;
+}
+
 class SceneWriter {
 public:
     static std::string writeNode(Node& n, int indent) { return nodeJson(n, indent); }
@@ -58,7 +79,6 @@ private:
     static std::string nodeJson(Node& n, int indent) {
         std::string pad(indent, ' ');
 
-        // Prefabs serialize as a shell + source reference; children are NOT saved.
         Prefab2D* pf = dynamic_cast<Prefab2D*>(&n);
         if (pf) {
             std::string s = pad + "{ ";
@@ -153,6 +173,12 @@ public:
     }
     std::string selectedUi() const { return selectedUi_; }
     void selectUi(const std::string& id) { selected_ = nullptr; selectedUi_ = id; }
+
+    Node* findNode(const std::string& name) {
+        if (!scene_ || !scene_->root) return nullptr;
+        return scene_->root->findNode(name);
+    }
+
     UiButton* findUi(const std::string& id) {
         if (!scene_) return nullptr;
         for (auto& b : scene_->ui) if (b.touch.id == id) return &b;
@@ -169,13 +195,16 @@ public:
         for (auto it = scene_->ui.begin(); it != scene_->ui.end(); ++it)
             if (it->touch.id == id) { if (selectedUi_ == id) selectedUi_.clear(); scene_->ui.erase(it); return; }
     }
+
     Node2D* cloneSelected(const std::string& newName) {
         if (!scene_ || !scene_->root || !selected_) return nullptr;
-        std::unique_ptr<Node> cp = selected_->cloneNode(); cp->name = newName;
+        std::unique_ptr<Node> cp = selected_->cloneNode();
+        cp->name = newName;
         Node* raw = cp.get();
         scene_->root->addChild(std::move(cp));
         return dynamic_cast<Node2D*>(raw);
     }
+
     void moveSelected(float dx, float dy) {
         Node2D* n2 = selected_ ? dynamic_cast<Node2D*>(selected_) : nullptr;
         if (!n2) return;
@@ -205,7 +234,56 @@ public:
         return raw;
     }
 
-    // Turns the selected subtree into prefabs/<name>.json and replaces it with a Prefab2D.
+    void addParticleNode(const std::string& name, float x, float y, const std::string& glyph) {
+        Node2D* n2 = addNode("Particle2D", name, x, y);
+        if (!n2) return;
+        Particle2D* pe = static_cast<Particle2D*>(n2);
+        pe->glyph = glyph;
+        pe->emitting = true;
+        pe->burstPending = true;
+    }
+
+    bool setEmitterPreset(const std::string& name, const std::string& presetName) {
+        Node* n = findNode(name);
+        Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
+        if (!pe) return false;
+        for (const auto& p : emitterPresets()) {
+            if (p.name == presetName) {
+                pe->glyph = p.glyph; pe->rate = p.rate; pe->burst = p.burst;
+                pe->vx = p.vx; pe->vy = p.vy; pe->spread = p.spread; pe->gravity = p.gravity;
+                pe->life = p.life; pe->lifeSpread = p.lifeSpread;
+                pe->size = p.size; pe->sizeEnd = p.sizeEnd; pe->drag = p.drag;
+                pe->color = p.color;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string currentEmitterPreset(const std::string& name) const {
+        Node* n = scene_ && scene_->root ? scene_->root->findNode(name) : nullptr;
+        Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
+        if (!pe) return "";
+        for (const auto& p : emitterPresets()) {
+            if (p.glyph == pe->glyph &&
+                std::abs(p.rate - pe->rate) < 0.01f &&
+                p.burst == pe->burst &&
+                std::abs(p.vx - pe->vx) < 0.01f &&
+                std::abs(p.vy - pe->vy) < 0.01f &&
+                std::abs(p.spread - pe->spread) < 0.01f &&
+                std::abs(p.gravity - pe->gravity) < 0.01f &&
+                std::abs(p.life - pe->life) < 0.01f &&
+                std::abs(p.lifeSpread - pe->lifeSpread) < 0.01f &&
+                std::abs(p.size - pe->size) < 0.01f &&
+                std::abs(p.sizeEnd - pe->sizeEnd) < 0.01f &&
+                std::abs(p.drag - pe->drag) < 0.01f &&
+                p.color == pe->color) {
+                return p.name;
+            }
+        }
+        return "";
+    }
+
     bool makePrefabFromSelected(const std::string& fullPath, const std::string& relPath) {
         if (!scene_ || !scene_->root || !selected_) return false;
         Node* sel = selected_;
@@ -263,7 +341,9 @@ public:
     bool save(const std::string& path) { if (!scene_) return false; return SceneWriter::write(*scene_, path); }
 
 private:
-    Scene* scene_ = nullptr; Node* selected_ = nullptr; std::string selectedUi_;
+    Scene* scene_ = nullptr;
+    Node* selected_ = nullptr;
+    std::string selectedUi_;
 };
 
 } // namespace suka
