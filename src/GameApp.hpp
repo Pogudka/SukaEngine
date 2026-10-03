@@ -185,6 +185,25 @@ public:
     }
 
     void feedTouch(int action, float x, float y) {
+        // Dedicated caret-placement action from the Java side: x = global line index,
+        // y = UTF-8 byte offset already resolved against the real proportional glyph
+        // widths. Bypasses the old monospace-grid guesswork entirely.
+        if (action == 9) {
+            if (appMode_ == AppMode::Editor && scriptMode_ && editor_) {
+                int line = (int)x;
+                int col  = (int)y;
+                if (line < 0) line = 0;
+                if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
+                const std::string& L = scriptLines_[line];
+                if (col < 0) col = 0;
+                if (col > (int)L.size()) col = (int)L.size();
+                while (col > 0 && col < (int)L.size() && ((unsigned char)L[col] & 0xC0) == 0x80) --col;
+                curLine_ = line; curCol_ = col; compAnchor_ = -1;
+                imeWantOn_ = true; imeShown_ = true; imeChanged_ = true;
+            }
+            return;
+        }
+
         RawTouch t;
         if (action == 0) t.action = RawTouch::Action::Down;
         else if (action == 2) t.action = RawTouch::Action::Move;
@@ -199,12 +218,6 @@ public:
                 int line = scriptScroll_ + (int)((y - 70) / LH);
                 if (line < 0) line = 0;
                 if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
-                // Proportional hit-test: walk code points, ask Java-equivalent width later.
-                // Here we approximate column by tapping position using a per-line measured
-                // layout is impossible on C++ side, so we map tap x -> nearest code point
-                // using the same 8px assumption ONLY for coarse line pick, then refine by
-                // storing the byte offset that best matches. For correctness we store the
-                // code-point index computed from a monospace fallback and convert back.
                 int colCp = (int)((x - 340) / 8.0f);
                 const std::string& L = scriptLines_[line];
                 int total = utf8ByteToCp(L, (int)L.size());
@@ -1186,16 +1199,16 @@ private:
         std::string out = gameBackend_.str();
 
         if (scriptMode_) {
-            // Proportional code rendering: words stay whole (no fixed cell). The caret is
-            // emitted as a separate "caret" command carrying the prefix string; Java measures
-            // its real pixel width with the SAME typeface/size, so the bar lands exactly.
+            // Proportional code lines emitted as "codeline" so the Java renderer can both
+            // draw them with the real typeface AND remember (globalIndex, text, y) to turn
+            // a tap into an exact byte-offset caret via the nativeTouch(9,...) channel.
             const int LINES = 24;
             for (int i = scriptScroll_; i < (int)scriptLines_.size() && i < scriptScroll_ + LINES; ++i) {
                 float y = 70 + (float)(i - scriptScroll_) * 19;
                 std::string txt = sanitizeLine(scriptLines_[i]);
                 if (txt.size() > 68) txt = txt.substr(0, 68);
-                out += "DRAW text|" + txt + "|340|" + std::to_string((int)y) + "|14|" +
-                       (i == curLine_ ? "#FFD700" : "#D8E0F0") + "|0\n";
+                out += "DRAW codeline|" + std::to_string(i) + "|" + txt + "|" + std::to_string((int)y) + "|14|" +
+                       (i == curLine_ ? "#FFD700" : "#D8E0F0") + "\n";
             }
             if (curLine_ >= scriptScroll_ && curLine_ < scriptScroll_ + LINES && curLine_ < (int)scriptLines_.size()) {
                 std::string shown = sanitizeLine(scriptLines_[curLine_]);
@@ -1203,7 +1216,6 @@ private:
                 int cut = curCol_;
                 if (cut < 0) cut = 0;
                 if (cut > (int)shown.size()) cut = (int)shown.size();
-                // Do not split a UTF-8 sequence at the caret boundary.
                 while (cut > 0 && cut < (int)shown.size() && ((unsigned char)shown[cut] & 0xC0) == 0x80) --cut;
                 std::string pref = shown.substr(0, cut);
                 float y = 70 + (float)(curLine_ - scriptScroll_) * 19;
