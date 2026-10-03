@@ -760,7 +760,7 @@ private:
         editor_->attach(sceneMgr_->current());
         editor_->setProjectRoot(project_.rootPath);
         showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = true;
-        assetScroll_ = 0; prefabScroll_ = 0; prefabPickTarget_.clear();
+        assetScroll_ = 0; prefabScroll_ = 0;
         pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
         pendingSceneSave_ = false; pendingPrefabSave_ = false;
         fsPath_ = ""; manip_ = Manip::Move; pinching_ = false; hierScroll_ = 0; fsScroll_ = 0;
@@ -798,8 +798,49 @@ private:
         Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
         bool lk = (s2 != nullptr) && s2->locked;
 
-        if (act == "create_particle" || act == "create:Particle2D:none") { pushUndo(); std::string name = "Emitter" + std::to_string(createCounter_++); editor_->addNode("Particle2D", name, 640, 360); editor_->select(name); showCreate_ = false; rebuild(); return 1; }
-        if (act == "create_prefab") { pendingName_ = true; pendingKind_ = 3; showCreate_ = false; rebuild(); return 1; }
+        // ==== Prefabs: 3 simple actions ====
+        if (act == "save_as_prefab") {
+            if (sel.empty() || !s2) { lastMsg_ = "select a node first"; return 0; }
+            if (std::string(s2->typeName()) == "Prefab2D") { lastMsg_ = "already a prefab"; return 0; }
+            if (lk) { lastMsg_ = "unlock node first"; return 0; }
+            pendingPrefabSave_ = true;
+            pendingText_ = true;
+            pendingTextCur_ = sel;
+            return 0;
+        }
+        if (act == "prefabs_open") { showPrefabs_ = true; prefabScroll_ = 0; rebuild(); return 1; }
+        if (act == "prefabs_close") { showPrefabs_ = false; rebuild(); return 1; }
+        if (act == "prefabs_up") { prefabScroll_ -= 3; rebuild(); return 1; }
+        if (act == "prefabs_dn") { prefabScroll_ += 3; rebuild(); return 1; }
+        if (act.rfind("prefab_add:", 0) == 0) {
+            std::string rel = act.substr(11);
+            pushUndo();
+            std::string name = "PF" + std::to_string(createCounter_++);
+            Node2D* base = editor_->addNode("Prefab2D", name, 640, 360);
+            Prefab2D* pf = base ? static_cast<Prefab2D*>(base) : nullptr;
+            if (pf) {
+                pf->sourcePath = rel;
+                pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
+                editor_->select(name);
+                lastMsg_ = "added " + rel;
+            } else {
+                lastMsg_ = "insert failed";
+            }
+            showPrefabs_ = false;
+            rebuild();
+            return 1;
+        }
+        if (act == "prefab_reload") {
+            Prefab2D* pf = s2 ? dynamic_cast<Prefab2D*>(s2) : nullptr;
+            if (pf && !pf->sourcePath.empty()) {
+                pushUndo();
+                pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
+                lastMsg_ = "reloaded " + pf->sourcePath;
+                rebuild();
+                return 1;
+            }
+            return 0;
+        }
 
         if (act == "save_scene_as") {
             pendingSceneSave_ = true;
@@ -807,78 +848,8 @@ private:
             pendingTextCur_ = "main";
             return 0;
         }
-        if (act == "save_as_prefab") {
-            if (sel.empty()) { lastMsg_ = "select a node first"; return 0; }
-            pendingPrefabSave_ = true;
-            pendingText_ = true;
-            pendingTextCur_ = sel;
-            return 0;
-        }
 
-        if (act == "prefab_pick") {
-            if (!sel.empty()) {
-                Node* n = editor_->find2d(sel);
-                if (n && std::string(n->typeName()) == "Prefab2D") {
-                    prefabPickTarget_ = sel;
-                    showPrefabs_ = true;
-                    prefabScroll_ = 0;
-                    rebuild();
-                    return 1;
-                }
-            }
-            return 0;
-        }
-        if (act == "prefabs_up") { prefabScroll_ -= 3; rebuild(); return 1; }
-        if (act == "prefabs_dn") { prefabScroll_ += 3; rebuild(); return 1; }
-        if (act == "prefabs_close") { showPrefabs_ = false; prefabPickTarget_.clear(); rebuild(); return 1; }
-        if (act.rfind("prefab_set:", 0) == 0) {
-            std::string rel = act.substr(11);
-            if (!prefabPickTarget_.empty()) {
-                pushUndo();
-                Node* n = editor_->find2d(prefabPickTarget_);
-                Prefab2D* pf = n ? dynamic_cast<Prefab2D*>(n) : nullptr;
-                if (pf) {
-                    pf->sourcePath = rel;
-                    pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
-                    lastMsg_ = "prefab source: " + rel;
-                }
-            }
-            showPrefabs_ = false;
-            prefabPickTarget_.clear();
-            rebuild();
-            return 1;
-        }
-        if (act == "prefab_reload") {
-            if (!sel.empty()) {
-                Node* n = editor_->find2d(sel);
-                Prefab2D* pf = n ? dynamic_cast<Prefab2D*>(n) : nullptr;
-                if (pf && !pf->sourcePath.empty()) {
-                    pushUndo();
-                    pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
-                    lastMsg_ = "prefab reloaded";
-                    rebuild();
-                    return 1;
-                }
-            }
-            return 0;
-        }
-        if (act == "make_prefab") {
-            if (!sel.empty() && sel != editor_->scene()->root->name) {
-                std::string rel = "prefabs/" + sel + ".prf";
-                std::string full = project_.rootPath + "/" + rel;
-                if (editor_->makePrefabFromSelected(full, rel)) {
-                    lastMsg_ = "saved " + rel + " + created Prefab2D";
-                    rebuild();
-                    return 1;
-                } else {
-                    lastMsg_ = "make_prefab failed";
-                    return 0;
-                }
-            }
-            lastMsg_ = "select non-root node first";
-            return 0;
-        }
-
+        // ==== Files panel ====
         if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; rebuild(); return 1; }
         if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
         if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
@@ -894,6 +865,8 @@ private:
             rebuild();
             return 1;
         }
+
+        if (act == "create_particle" || act == "create:Particle2D:none") { pushUndo(); std::string name = "Emitter" + std::to_string(createCounter_++); editor_->addNode("Particle2D", name, 640, 360); editor_->select(name); showCreate_ = false; rebuild(); return 1; }
 
         Particle2D* p2 = dynamic_cast<Particle2D*>(s2);
         if (act.rfind("view:", 0) == 0) { if (lk || sel.empty() || !p2) return 0; pushUndo(); std::string preset = act.substr(5); if (editor_->setEmitterPreset(sel, preset)) { lastMsg_ = "view " + preset + " -> " + sel; rebuild(); return 1; } rebuild(); return 0; }
@@ -950,7 +923,7 @@ private:
         if (act.rfind("fs_pick:", 0) == 0) {
             std::string rel = act.substr(8);
             if (rel.size() > 4 && rel.compare(rel.size() - 4, 4, ".prf") == 0) {
-                lastMsg_ = "prefab file: insert via + -> PREFAB -> PICK";
+                lastMsg_ = "prefab: use PF ADD to insert";
                 rebuild();
                 return 0;
             }
@@ -1089,7 +1062,7 @@ private:
             if (!name.empty()) {
                 editor_->setProjectRoot(project_.rootPath);
                 if (editor_->saveAsPrefab(name)) lastMsg_ = "saved prefabs/" + name + ".prf";
-                else lastMsg_ = "save prefab failed (select a node first)";
+                else lastMsg_ = "prefab save failed: " + editor_->lastError();
             }
             pendingPrefabSave_ = false;
             buildEditorPanels(); input_.setUi(&editorScene_.ui);
@@ -1110,14 +1083,6 @@ private:
                 pushUndo();
                 if (pendingKind_ == 0) { editor_->addNode(pendingType_, nm, 640, 360); if (!pendingShape_.empty()) editor_->setShape(nm, pendingShape_); editor_->select(nm); lastMsg_ = "created " + nm; }
                 else if (pendingKind_ == 1) { editor_->addUi(nm, nm, 580, 335, 120, 50, std::string(), parseColor("#808080")); editor_->selectUi(nm); lastMsg_ = "created button " + nm; }
-                else if (pendingKind_ == 3) {
-                    auto pf = std::make_unique<Prefab2D>();
-                    pf->name = nm;
-                    pf->position = Vec2{640, 360};
-                    editor_->scene()->root->addChild(std::move(pf));
-                    editor_->select(nm);
-                    lastMsg_ = "created prefab " + nm;
-                }
             }
             pendingName_ = false; showCreate_ = false;
         }
@@ -1297,7 +1262,6 @@ private:
     std::string pendingTextCur_;
     std::string fsPath_;
     std::string pendingImportCategory_;
-    std::string prefabPickTarget_;
     std::mutex dlgMtx_;
     bool hasText_ = false;
     bool hasName_ = false;
