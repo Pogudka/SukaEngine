@@ -41,6 +41,7 @@ struct EditorUiInput {
     const std::set<std::string>& collapsed;
     const std::string& fsPath;
     const std::string& projectRoot;
+    const std::string& pendingDelete;
 
     const std::string& scriptPath;
     const std::vector<std::string>& scriptLines;
@@ -109,9 +110,7 @@ inline void editorBuildTreeRows(
                     br.text = editorDash(depth + 1) + "    " + ub.touch.id + "   Button";
                     br.action = "ed_selectui:" + ub.touch.id;
                     br.sel = (selUi == ub.touch.id);
-                    br.hasKids = false;
-                    br.open = false;
-                    br.name = "";
+                    br.hasKids = false; br.open = false; br.name = "";
                     rows.push_back(br);
                 }
             }
@@ -149,15 +148,7 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         ++li;
     }
 
-    {
-        UiButton b;
-        b.touch.id = "scnew";
-        b.touch.rect = Rect{8, 64 + (float)li * 28, 284, 26};
-        b.text = "+ NEW SCRIPT";
-        b.action = "snew";
-        b.color = th.accent;
-        s.ui.push_back(b);
-    }
+    { UiButton b; b.touch.id = "scnew"; b.touch.rect = Rect{8, 64 + (float)li * 28, 284, 26}; b.text = "+ NEW SCRIPT"; b.action = "snew"; b.color = th.accent; s.ui.push_back(b); }
 
     auto edbg = std::make_unique<Node2D>();
     edbg->name = "__scbg"; edbg->shape = "square"; edbg->color = 0x101018FF;
@@ -176,14 +167,13 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
     if (in.scriptScroll < 0) in.scriptScroll = 0;
     if (in.scriptScroll > smax) in.scriptScroll = smax;
 
+    // Line numbers only; code text is emitted by GameApp as fixed-cell "mtext"
+    // so the caret column math (8px per code point) matches pixel-perfect.
     for (int i = in.scriptScroll; i < (int)in.scriptLines.size() && i < in.scriptScroll + LINES; ++i) {
         float y = 70 + (float)(i - in.scriptScroll) * LH;
         std::string num = std::to_string(i + 1);
         while (num.size() < 3) num = " " + num;
         addLbl(("ScN" + std::to_string(i)).c_str(), num, 306, y, 14, parseColor("#667089"));
-        std::string txt = sanitizeLine(in.scriptLines[i]);
-        if (txt.size() > 68) txt = txt.substr(0, 68);
-        addLbl(("ScC" + std::to_string(i)).c_str(), txt, 340, y, 14, i == in.curLine ? parseColor("#FFD700") : parseColor("#D8E0F0"));
     }
 
     if (in.curLine >= in.scriptScroll && in.curLine < in.scriptScroll + LINES) {
@@ -358,7 +348,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 addLbl("InText", "Text: " + static_cast<Label*>(nd)->text, 900, 364, 16, th.ink);
             }
 
-            // Prefab inspector: source + children count + RELOAD. Nothing else.
             if (std::string(nd->typeName()) == "Prefab2D") {
                 Prefab2D* pf = static_cast<Prefab2D*>(nd);
                 addLbl("InSrc", "Source: " + (pf->sourcePath.empty() ? std::string("(none)") : pf->sourcePath), 900, 364, 16, parseColor("#8E44AD"));
@@ -425,10 +414,11 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     std::string sb = (esc && esc->bgSet()) ? esc->bg : std::string("(theme)");
     addLbl("InBg", "scene bg: " + sb, 900, 426, 16, th.ink);
 
+    // Inspector action grid: TXT and SCR moved here; T- removed (RM TEX exists above).
     { UiButton b; b.touch.id = "lckbtn"; b.touch.rect = Rect{900, 448, 44, 30}; b.text = "LCK"; b.action = "ed_lock"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{948, 448, 44, 30}; b.text = "BG"; b.action = "bg_rgb"; b.color = th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{996, 448, 44, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "texbtn"; b.touch.rect = Rect{1044, 448, 44, 30}; b.text = "T-"; b.action = "clear_tex"; b.color = th.button; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "txtbtn"; b.touch.rect = Rect{1044, 448, 44, 30}; b.text = "TXT"; b.action = "edit_text"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "clnbtn"; b.touch.rect = Rect{1092, 448, 44, 30}; b.text = "DUP"; b.action = "ed_clone"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "parbtn"; b.touch.rect = Rect{1140, 448, 44, 30}; b.text = in.pickParent ? "PICK" : "PAR"; b.action = "ed_parent"; b.color = in.pickParent ? GO : th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "unpbtn"; b.touch.rect = Rect{900, 482, 44, 30}; b.text = "UNP"; b.action = "ed_unparent"; b.color = th.button; s.ui.push_back(b); }
@@ -436,6 +426,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     { UiButton b; b.touch.id = "pstbtn"; b.touch.rect = Rect{996, 482, 44, 30}; b.text = "PST"; b.action = "ed_paste"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "undbtn"; b.touch.rect = Rect{1044, 482, 44, 30}; b.text = "UND"; b.action = "ed_undo"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "redbtn"; b.touch.rect = Rect{1092, 482, 44, 30}; b.text = "RED"; b.action = "ed_redo"; b.color = th.button; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "scrbtn"; b.touch.rect = Rect{1140, 482, 44, 30}; b.text = "SCR"; b.action = "ed_scr"; b.color = th.button; s.ui.push_back(b); }
 
     const char* mv[4] = { "l", "u", "d", "r" };
     const char* mvTxt[4] = { "<", "^", "v", ">" };
@@ -449,20 +440,19 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    // Toolbar: SAVE SCN | PF SAVE | PF ADD | RGB | DEL | SAVE | < | + | TXT | SCR | TEX | FILES
+    // Top toolbar, compact so it never reaches the inspector column.
     float tx = 300;
-    { UiButton b; b.touch.id = "savesc"; b.touch.rect = Rect{tx, 34, 92, 26}; tx += 94; b.text = "SAVE SCN"; b.action = "save_scene_as"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "savepf"; b.touch.rect = Rect{tx, 34, 74, 26}; tx += 76; b.text = "PF SAVE"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "addpf"; b.touch.rect = Rect{tx, 34, 74, 26}; tx += 76; b.text = "PF ADD"; b.action = "prefabs_open"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "colbtn"; b.touch.rect = Rect{tx, 34, 54, 26}; tx += 56; b.text = "RGB"; b.action = "col_rgb"; b.color = th.accent; s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "del"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "DEL"; b.action = "ed_del"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "savesc"; b.touch.rect = Rect{tx, 34, 84, 26}; tx += 86; b.text = "SAVE SCN"; b.action = "save_scene_as"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "savepf"; b.touch.rect = Rect{tx, 34, 66, 26}; tx += 68; b.text = "PF SAVE"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "addpf"; b.touch.rect = Rect{tx, 34, 66, 26}; tx += 68; b.text = "PF ADD"; b.action = "prefabs_open"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "colbtn"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "RGB"; b.action = "col_rgb"; b.color = th.accent; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "del"; b.touch.rect = Rect{tx, 34, 40, 26}; tx += 42; b.text = "DEL"; b.action = "ed_del"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "save"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "SAVE"; b.action = "ed_save"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "eback"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "<"; b.action = "ed_back"; b.color = GO; s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "plus"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "+"; b.action = "create_open"; b.color = GO; s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "txt"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "TXT"; b.action = "edit_text"; b.color = th.button; s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "scr"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "SCR"; b.action = "ed_scr"; b.color = th.button; s.ui.push_back(b); }
-    { UiButton b; b.touch.id = "tex"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "TEX"; b.action = "assets_open"; b.color = in.showAssets ? GO : th.accent; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "eback"; b.touch.rect = Rect{tx, 34, 40, 26}; tx += 42; b.text = "<"; b.action = "ed_back"; b.color = GO; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "plus"; b.touch.rect = Rect{tx, 34, 40, 26}; tx += 42; b.text = "+"; b.action = "create_open"; b.color = GO; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "tex"; b.touch.rect = Rect{tx, 34, 40, 26}; tx += 42; b.text = "TEX"; b.action = "assets_open"; b.color = in.showAssets ? GO : th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "file"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "FILES"; b.action = "files_open"; b.color = in.showFiles ? GO : th.button; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "play"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "PLAY"; b.action = "ed_play"; b.color = parseColor("#2EC4B6"); s.ui.push_back(b); }
 
     if (in.showCreate) {
         const char* ct[6] = { "Node2D", "Node2D", "Node2D", "Node2D", "Label", "Sprite2D" };
@@ -520,17 +510,17 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         { UiButton b; b.touch.id = "fsu"; b.touch.rect = Rect{210, 382, 20, 22}; b.text = "^"; b.action = "fscroll_up"; b.color = th.button; s.ui.push_back(b); }
         { UiButton b; b.touch.id = "fsd"; b.touch.rect = Rect{232, 382, 20, 22}; b.text = "v"; b.action = "fscroll_dn"; b.color = th.button; s.ui.push_back(b); }
 
-        struct FsRow { std::string text; std::string action; std::string delAction; unsigned col; };
+        struct FsRow { std::string text; std::string rel; std::string action; unsigned col; };
         std::vector<FsRow> frows;
-        if (!in.fsPath.empty()) frows.push_back({ "..", "fs_up", "", th.button });
+        if (!in.fsPath.empty()) frows.push_back({ "..", "", "fs_up", th.button });
         std::string abs = in.projectRoot + "/" + in.fsPath;
         for (const auto& it : FileBrowser::list(abs)) {
             if (it.name.rfind("snap_", 0) == 0) continue;
             if (it.name == "save.vars") continue;
             FsRow r;
+            r.rel = in.fsPath + it.name;
             r.text = (it.isDir ? "/ " : "  ") + it.name;
-            r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + in.fsPath + it.name);
-            r.delAction = "fs_del:" + in.fsPath + it.name;
+            r.action = it.isDir ? ("fs_enter:" + it.name) : ("fs_pick:" + r.rel);
             r.col = it.isDir ? th.button : th.accent;
             frows.push_back(r);
         }
@@ -553,21 +543,21 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             fb.color = frows[i].col;
             s.ui.push_back(fb);
 
-            if (!frows[i].delAction.empty()) {
+            if (!frows[i].rel.empty()) {
+                bool pending = (in.pendingDelete == frows[i].rel);
                 UiButton db;
                 db.touch.id = "fd" + std::to_string(i);
-                db.touch.rect = Rect{248, fy, 40, STEP - 2};
-                db.text = "X";
-                db.action = frows[i].delAction;
-                db.color = parseColor("#D62828");
+                db.touch.rect = Rect{248, fy, pending ? 44 : 40, STEP - 2};
+                db.text = pending ? "SURE?" : "X";
+                db.action = (pending ? "fs_del_yes:" : "fs_del_ask:") + frows[i].rel;
+                db.color = pending ? parseColor("#2E7D32") : parseColor("#D62828");
                 s.ui.push_back(db);
             }
             fy += STEP;
         }
-        addLbl("FsHint", "tap file = load/assign  |  X = delete", 10, 668, 12, th.ink);
+        addLbl("FsHint", "tap file = load/assign  |  X then SURE? = delete", 10, 668, 12, th.ink);
     }
 
-    // Prefab list: tap a row = insert prefab instance at scene center.
     if (in.showPrefabs) {
         const unsigned BG = 0x14141CFF;
         auto btn = [&](const std::string& id, float x, float y, float w, float h,
