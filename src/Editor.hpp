@@ -156,6 +156,22 @@ public:
         else if (type == "Solid2D") n = std::make_unique<Solid2D>();
         else if (type == "Camera2D") n = std::make_unique<Camera2D>();
         else if (type == "Light2D") n = std::make_unique<Light2D>();
+        else if (t == "Particle2D") {
+            Particle2D* pe = static_cast<Particle2D*>(n2);
+            s += ", \"rate\": " + std::to_string(pe->rate);
+            s += ", \"burst\": " + std::to_string(pe->burst);
+            s += ", \"vx\": " + std::to_string(pe->vx);
+            s += ", \"vy\": " + std::to_string(pe->vy);
+            s += ", \"spread\": " + std::to_string(pe->spread);
+            s += ", \"gravity\": " + std::to_string(pe->gravity);
+            s += ", \"life\": " + std::to_string(pe->life);
+            s += ", \"life_spread\": " + std::to_string(pe->lifeSpread);
+            s += ", \"size\": " + std::to_string(pe->size);
+            s += ", \"size_end\": " + std::to_string(pe->sizeEnd);
+            s += ", \"drag\": " + std::to_string(pe->drag);
+            s += ", \"glyph\": \"" + pe->glyph + "\"";
+            s += ", \"emitting\": " + std::string(pe->emitting ? "1" : "0");
+        }
         else n = std::make_unique<Node2D>();
         n->name = name; n->position = Vec2{x, y};
         Node2D* raw = n.get();
