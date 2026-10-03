@@ -12,6 +12,33 @@
 
 namespace suka {
 
+// Prefab: container node whose children are instantiated from a scene-format
+// JSON file (prefabs/*.json). Only the shell + source path are saved in scenes.
+class Prefab2D : public Node2D {
+public:
+    std::string sourcePath;
+
+    Prefab2D() { shape = "none"; color = 0x8E44ADFF; w = 48.0f; h = 48.0f; }
+    const char* typeName() const override { return "Prefab2D"; }
+    std::string extra() const override { return Node2D::extra() + " src='" + sourcePath + "'"; }
+
+    bool instantiate(const std::string& projectRoot, const std::string& fontPath);
+    void clearInstanceChildren() {
+        auto kids = takeAllChildren();
+        (void)kids;
+    }
+
+    std::unique_ptr<Node> cloneNode() const override {
+        auto c = std::make_unique<Prefab2D>();
+        c->name = name; c->dead = dead;
+        c->position = position; c->scale = scale; c->rotation = rotation;
+        c->shape = shape; c->color = color; c->texture = texture;
+        c->w = w; c->h = h; c->action = action; c->locked = locked; c->alpha = alpha;
+        c->sourcePath = sourcePath;
+        return c;
+    }
+};
+
 class Scene {
 public:
     std::string name;
@@ -88,7 +115,7 @@ inline std::vector<std::string> splitTopObjects(const std::string& arr) {
 
 class SceneLoader {
 public:
-    static std::unique_ptr<Node2D> parseNode(const std::string& obj, const std::string& fontPath) {
+    static std::unique_ptr<Node2D> parseNode(const std::string& obj, const std::string& fontPath, const std::string& projectRoot) {
         std::string type; jsonGetString(obj, "type", type);
         std::unique_ptr<Node2D> node2d;
 
@@ -135,6 +162,11 @@ public:
             float em = 0; if (jsonGetNumber(obj, "emitting", em)) pe->emitting = (em != 0);
             node2d = std::move(pe);
         }
+        else if (type == "Prefab2D") {
+            auto pf = std::make_unique<Prefab2D>();
+            jsonGetString(obj, "source", pf->sourcePath);
+            node2d = std::move(pf);
+        }
         else node2d = std::make_unique<Node2D>();
 
         jsonGetString(obj, "name", node2d->name);
@@ -155,12 +187,17 @@ public:
         float lk = 0; if (jsonGetNumber(obj, "locked", lk)) node2d->locked = (lk != 0);
         float alp = 1.0f; if (jsonGetNumber(obj, "alpha", alp)) node2d->alpha = alp;
 
-        size_t cb = 0, ce = 0;
-        if (jsonFindArray(obj, "children", cb, ce)) {
-            for (const auto& cobj : splitTopObjects(obj.substr(cb, ce - cb + 1))) {
-                auto child = parseNode(cobj, fontPath);
-                if (child) node2d->addChild(std::move(child));
+        // Prefab children come from the source file, never from the scene json.
+        if (type != "Prefab2D") {
+            size_t cb = 0, ce = 0;
+            if (jsonFindArray(obj, "children", cb, ce)) {
+                for (const auto& cobj : splitTopObjects(obj.substr(cb, ce - cb + 1))) {
+                    auto child = parseNode(cobj, fontPath, projectRoot);
+                    if (child) node2d->addChild(std::move(child));
+                }
             }
+        } else {
+            static_cast<Prefab2D*>(node2d.get())->instantiate(projectRoot, fontPath);
         }
         return node2d;
     }
@@ -182,7 +219,7 @@ public:
         if (jsonFindArray(json, "nodes", begin, end)) {
             std::string arr = json.substr(begin, end - begin + 1);
             for (const auto& obj : splitTopObjects(arr)) {
-                auto n = parseNode(obj, fontPath);
+                auto n = parseNode(obj, fontPath, projectRoot);
                 if (n) scene.root->addChild(std::move(n));
             }
         }
@@ -199,7 +236,7 @@ public:
                 float btnAngle = 0; if (jsonGetNumber(obj, "angle", btnAngle)) button.angle = btnAngle;
                 jsonGetString(obj, "texture", button.texture);
                 jsonGetString(obj, "group", button.group);
-                float balpha = 1.0f; if (jsonGetNumber(obj, "alpha", balpha)) button.alpha = balpha;   // BTN-ALPHA
+                float balpha = 1.0f; if (jsonGetNumber(obj, "alpha", balpha)) button.alpha = balpha;
                 float x = 0, y = 0, w = 0, h = 0;
                 jsonGetNumber(obj, "x", x); jsonGetNumber(obj, "y", y);
                 jsonGetNumber(obj, "w", w); jsonGetNumber(obj, "h", h);
@@ -210,6 +247,30 @@ public:
         return true;
     }
 };
+
+// Loads a prefab file (scene-format json) and returns its nodes under a fresh root.
+inline bool loadPrefabTree(const std::string& projectRoot, const std::string& relPath,
+                           const std::string& fontPath, std::unique_ptr<Node>& outRoot) {
+    Scene tmp;
+    if (!SceneLoader::load(projectRoot + "/" + relPath, tmp, fontPath, projectRoot)) return false;
+    outRoot = std::make_unique<Node>();
+    if (tmp.root) {
+        auto kids = tmp.root->takeAllChildren();
+        for (auto& k : kids) outRoot->addChild(std::move(k));
+    }
+    return true;
+}
+
+inline bool Prefab2D::instantiate(const std::string& projectRoot, const std::string& fontPath) {
+    clearInstanceChildren();
+    if (sourcePath.empty()) return false;
+    std::unique_ptr<Node> loaded;
+    if (!loadPrefabTree(projectRoot, sourcePath, fontPath, loaded)) return false;
+    if (!loaded) return false;
+    auto kids = loaded->takeAllChildren();
+    for (auto& k : kids) if (k) addChild(std::move(k));
+    return true;
+}
 
 class SceneManager {
 public:
