@@ -59,6 +59,7 @@ public class MainActivity extends Activity {
     private volatile String pendingImportCategory = "";
     private volatile String lastImportMsg_ = "";
 
+    // Queue: filled on UI thread, consumed on render thread (no cross-thread C++ calls).
     private volatile boolean hasImportResult_ = false;
     private volatile String importCatRes_ = "";
     private volatile String importNameRes_ = "";
@@ -165,36 +166,86 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != IMPORT_REQUEST_CODE) return;
-        try {
-            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
-                Uri uri = data.getData();
-                String fileName = getFileName(uri);
-                if (fileName == null || fileName.isEmpty()) fileName = "imported_" + System.currentTimeMillis();
-                String safeName = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
-                File targetDir = new File(getFilesDir(), "projects/" + GAME_DIR + "/temp_import");
-                targetDir.mkdirs();
-                File target = new File(targetDir, safeName);
-                InputStream in = getContentResolver().openInputStream(uri);
-                if (in != null) {
-                    FileOutputStream out = new FileOutputStream(target);
-                    byte[] buf = new byte[8192]; int n;
-                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                    out.close(); in.close();
-                    importCatRes_ = pendingImportCategory;
-                    importNameRes_ = safeName;
-                    hasImportResult_ = true;
-                    lastImportMsg_ = "copied " + safeName;
-                } else {
-                    lastImportMsg_ = "cannot read file";
-                }
-            } else {
-                lastImportMsg_ = "import cancelled";
-            }
-        } catch (Throwable t) {
-            lastImportMsg_ = "import failed";
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            lastImportMsg_ = "import cancelled";
+            g_dialog = false;
+            return;
         }
+        final Uri uri = data.getData();
+        final String category = pendingImportCategory;
         pendingImportCategory = "";
-        g_dialog = false;
+
+        String origName = getFileName(uri);
+        if (origName == null || origName.isEmpty()) origName = "imported_" + System.currentTimeMillis();
+        String safeOrig = origName.replaceAll("[^a-zA-Z0-9._-]", "_");
+
+        String ext = "";
+        int dot = safeOrig.lastIndexOf('.');
+        if (dot >= 0 && dot < safeOrig.length() - 1) { ext = safeOrig.substring(dot); safeOrig = safeOrig.substring(0, dot); }
+        if (ext.isEmpty()) ext = category.equals("sprites") ? ".png" : ".bin";
+
+        final String finalExt = ext;
+        final String defBase = safeOrig.isEmpty() ? "asset" : safeOrig;
+
+        // Ask the user for a texture name, then copy straight into assets/.
+        g_dialog = true;
+        runOnUiThread(() -> {
+            final EditText et = new EditText(MainActivity.this);
+            et.setInputType(InputType.TYPE_CLASS_TEXT);
+            et.setText(defBase);
+            et.selectAll();
+            et.setTextColor(Color.WHITE);
+            new AlertDialog.Builder(MainActivity.this)
+                .setTitle("Name for " + category)
+                .setView(et)
+                .setPositiveButton("OK", (d, w) -> {
+                    String base = et.getText().toString().replaceAll("[^a-zA-Z0-9._-]", "_");
+                    if (base.isEmpty()) base = defBase;
+                    String stored = copyToAssets(uri, category, base, finalExt);
+                    if (stored != null) {
+                        importCatRes_ = category;
+                        importNameRes_ = stored;
+                        hasImportResult_ = true;
+                        lastImportMsg_ = "copied " + stored;
+                    } else {
+                        lastImportMsg_ = "copy failed";
+                    }
+                    g_dialog = false;
+                })
+                .setNegativeButton("Cancel", (d, w) -> {
+                    lastImportMsg_ = "import cancelled";
+                    g_dialog = false;
+                })
+                .setOnCancelListener(d -> {
+                    lastImportMsg_ = "import cancelled";
+                    g_dialog = false;
+                })
+                .show();
+        });
+    }
+
+    // Copies the picked file directly into assets/ (or assets/fonts/).
+    // Returns the stored file name (relative to assets root handled by C++ side list).
+    private String copyToAssets(Uri uri, String category, String base, String ext) {
+        try {
+            String sub = category.equals("fonts") ? "assets/fonts/" : "assets/";
+            File dir = new File(getFilesDir(), "projects/" + GAME_DIR + "/" + sub);
+            dir.mkdirs();
+            String name = base + ext;
+            File target = new File(dir, name);
+            int k = 1;
+            while (target.exists()) { name = base + "_" + k + ext; target = new File(dir, name); k++; }
+            InputStream in = getContentResolver().openInputStream(uri);
+            if (in == null) return null;
+            FileOutputStream out = new FileOutputStream(target);
+            byte[] buf = new byte[8192]; int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.close(); in.close();
+            // C++ expects the name as it appears under assets/ (fonts keep prefix).
+            return category.equals("fonts") ? ("fonts/" + name) : name;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private String getFileName(Uri uri) {
@@ -287,8 +338,6 @@ public class MainActivity extends Activity {
             });
         }
 
-        // FIX: render thread must actually terminate, otherwise surfaceDestroyed's
-        // join() blocks the UI thread forever -> black screen / ANR.
         @Override public void surfaceCreated(SurfaceHolder h) {
             running_ = true;
             thread = new Thread(this);
@@ -529,4 +578,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-        }
+            }
