@@ -597,6 +597,8 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             }
 
             if (std::string(nd->typeName()) == "Particle2D") {
+                Particle2D* pe = static_cast<Particle2D*>(nd);
+
                 std::string cur = in.editor->currentEmitterPreset(sel);
                 addLbl("InView", "View: " + (cur.empty() ? std::string("(custom)") : cur), 900, 364, 16, th.ink);
 
@@ -604,12 +606,43 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 for (const auto& p : emitterPresets()) {
                     UiButton vb;
                     vb.touch.id = std::string("viewbtn") + std::to_string(vk);
-                    vb.touch.rect = Rect{900 + (float)vk * 46, 392, 44, 28};
+                    vb.touch.rect = Rect{900 + (float)vk * 46, 386, 44, 26};
                     vb.text = p.name;
                     vb.action = std::string("view:") + p.name;
                     vb.color = (cur == p.name) ? GO : th.button;
+
                     s.ui.push_back(vb);
                     ++vk;
+                }
+
+                const char* pl[7] = {
+                    "RT", "LF", "SZ", "SP", "GR", "CL", "ON"
+                };
+
+                const char* pa[7] = {
+                    "pnum:rate",
+                    "pnum:life",
+                    "pnum:size",
+                    "pnum:spread",
+                    "pnum:gravity",
+                    "pcolor",
+                    "ponoff"
+                };
+
+                for (int k = 0; k < 7; ++k) {
+                    UiButton pb;
+                    pb.touch.id = std::string("pctl") + std::to_string(k);
+                    pb.touch.rect = Rect{900 + (float)k * 40, 418, 38, 26};
+                    pb.text = pl[k];
+                    pb.action = pa[k];
+
+                    if (k == 6) {
+                        pb.color = pe->emitting ? GO : th.button;
+                    } else {
+                        pb.color = th.button;
+                    }
+
+                    s.ui.push_back(pb);
                 }
             } else {
                 const char* nl[7] = { "X", "Y", "ROT", "SCL", "W", "H", "A" };
@@ -738,6 +771,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
 
     {
         UiButton b;
+        b.touch.id = "pstbtn";
         b.touch.rect = Rect{996, 482, 44, 30};
         b.text = "PST";
         b.action = "ed_paste";
