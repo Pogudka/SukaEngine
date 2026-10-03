@@ -132,6 +132,7 @@ static int lua_print(lua_State* L) {
     return 0;
 }
 
+// FIX 1: integer when whole, so ".." prints "6" not "6.0".
 static int lua_get_var(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
 
@@ -139,12 +140,19 @@ static int lua_get_var(lua_State* L) {
         auto it = g_scriptVars->find(name);
 
         if (it != g_scriptVars->end()) {
-            lua_pushnumber(L, it->second);
+            double v = it->second;
+
+            if (v == std::floor(v) && std::fabs(v) < 1e15) {
+                lua_pushinteger(L, (lua_Integer)v);
+            } else {
+                lua_pushnumber(L, v);
+            }
+
             return 1;
         }
     }
 
-    lua_pushnumber(L, 0);
+    lua_pushinteger(L, 0);
     return 1;
 }
 
@@ -461,23 +469,33 @@ static int lua_get_rot(lua_State* L) {
     return 1;
 }
 
+// FIX 2: accept (node, sx, sy) like the demo calls it, fall back to uniform.
 static int lua_set_scale(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-    float s = (float)luaL_checknumber(L, 2);
-
-    if (n) {
-        n->scale.x = s;
-        n->scale.y = s;
+    if (!n) {
+        return 0;
     }
+
+    float sx = (float)luaL_checknumber(L, 2);
+
+    int top = lua_gettop(L);
+    float sy = (top >= 3 && lua_isnumber(L, 3))
+        ? (float)lua_tonumber(L, 3)
+        : sx;
+
+    n->scale.x = sx;
+    n->scale.y = sy;
 
     return 0;
 }
 
+// FIX 3: return real (sx, sy) instead of averaged scalar.
 static int lua_get_scale(lua_State* L) {
     Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
 
-    lua_pushnumber(L, n ? (n->scale.x + n->scale.y) * 0.5 : 1);
-    return 1;
+    lua_pushnumber(L, n ? n->scale.x : 1);
+    lua_pushnumber(L, n ? n->scale.y : 1);
+    return 2;
 }
 
 static int lua_set_alpha(lua_State* L) {
