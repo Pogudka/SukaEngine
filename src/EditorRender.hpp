@@ -73,16 +73,21 @@ inline void emitNodePreview(
                std::to_string((int)(2 * r)) + "|" +
                colorToHexA(colA) + "|0\n";
     } else if (tn == "Prefab2D") {
-        // Marker so an empty prefab is still visible/selectable.
+        // Prefab = single diamond marker with PREFAB label; children not drawn.
         float w = n2d->w * wsx * S;
         float h = n2d->h * wsy * S;
+        if (w < 24) w = 24;
+        if (h < 24) h = 24;
         out += "DRAW shape|diamond|" + std::to_string((int)(sx - w / 2)) + "|" +
                std::to_string((int)(sy - h / 2)) + "|" +
                std::to_string((int)w) + "|" + std::to_string((int)h) + "|" +
                colorToHexA(withAlpha(0x8E44ADFFu, n2d->alpha)) + "|" +
                std::to_string(ang) + "\n";
-        out += "DRAW text|" + n2d->name + "|" + std::to_string((int)(sx + 12)) + "|" +
+        out += "DRAW text|PREFAB|" + std::to_string((int)(sx - 24)) + "|" +
+               std::to_string((int)(sy - 6)) + "|12|#FFFFFF|0\n";
+        out += "DRAW text|" + n2d->name + "|" + std::to_string((int)(sx + w / 2 + 6)) + "|" +
                std::to_string((int)(sy + 4)) + "|12|#8E44AD|0\n";
+        return;
     } else if (tn != "Node") {
         float w = n2d->w * wsx * S;
         float h = n2d->h * wsy * S;
@@ -100,7 +105,6 @@ inline void emitNodePreview(
                    std::to_string((int)(sy + 4)) + "|12|#808080|0\n";
         }
 
-        // No culling: outer clipon/clipoff trims whatever leaves the viewport.
         if (tn == "Label") {
             int fs = (int)(static_cast<Label*>(n2d)->fontSize * ((wsx + wsy) * 0.5f) * S);
             if (fs < 6) fs = 6;
