@@ -16,6 +16,7 @@
 #include "Core.hpp"
 #include "Project.hpp"
 #include "Scene.hpp"
+#include "Particles.hpp"
 #include "Render.hpp"
 #include "Touch.hpp"
 #include "Input.hpp"
@@ -35,33 +36,188 @@
 #include "EditorRender.hpp"
 
 namespace suka {
+
 static void walkEmitters(Node& n, const WorldXf& parent, float dt) {
     Node2D* n2 = dynamic_cast<Node2D*>(&n);
-    if (!n2) { for (const auto& c : n.getChildren()) walkEmitters(*c, parent, dt); return; }
+
+    if (!n2) {
+        for (const auto& c : n.getChildren()) {
+            walkEmitters(*c, parent, dt);
+        }
+
+        return;
+    }
 
     WorldXf w = parent.child(n2->position, n2->rotation, n2->scale.x, n2->scale.y);
 
     if (std::string(n2->typeName()) == "Particle2D") {
         Particle2D* pe = static_cast<Particle2D*>(n2);
+
         if (pe->emitting) {
             SpawnOpts o;
-            o.vx = pe->vx; o.vy = pe->vy; o.spread = pe->spread; o.gravity = pe->gravity;
-            o.life = pe->life; o.lifeSpread = pe->lifeSpread;
-            o.size = pe->size; o.sizeEnd = pe->sizeEnd; o.drag = pe->drag; o.color = pe->color;
-            for (int i = 0; i < 7 && i < (int)pe->glyph.size(); ++i) o.glyph[i] = pe->glyph[i];
-            o.glyph[pe->glyph.size() < 7 ? pe->glyph.size() : 7] = 0;
+
+            float avgScale = (w.sx + w.sy) * 0.5f;
+            if (avgScale < 0.01f) avgScale = 0.01f;
+
+            o.vx = pe->vx * avgScale;
+            o.vy = pe->vy * avgScale;
+            o.spread = pe->spread * avgScale;
+
+            o.gravity = pe->gravity;
+
+            o.life = pe->life;
+            o.lifeSpread = pe->lifeSpread;
+
+            o.size = pe->size * avgScale;
+            o.sizeEnd = pe->sizeEnd * avgScale;
+
+            o.drag = pe->drag;
+            o.color = pe->color;
+            o.rot = w.rot;
+
+            for (int i = 0; i < 8; ++i) o.glyph[i] = 0;
+
+            size_t gn = pe->glyph.size();
+            if (gn > 7) gn = 7;
+
+            for (size_t i = 0; i < gn; ++i) o.glyph[i] = pe->glyph[i];
+            o.glyph[gn] = 0;
 
             int toSpawn = 0;
-            if (pe->burstPending) { toSpawn += pe->burst; pe->burstPending = false; }
-            if (pe->rate > 0.0f) { pe->acc += pe->rate * dt; int wh = (int)pe->acc; pe->acc -= wh; toSpawn += wh; }
-            if (toSpawn > 0) g_particles.spawn(w.x, w.y, toSpawn, o);
+
+            if (pe->burstPending) {
+                toSpawn += pe->burst;
+                pe->burstPending = false;
+            }
+
+            if (pe->rate > 0.0f) {
+                pe->acc += pe->rate * dt;
+
+                int whole = (int)pe->acc;
+                pe->acc -= whole;
+
+                toSpawn += whole;
+            }
+
+            if (toSpawn > 0) {
+                g_particles.spawn(w.x, w.y, toSpawn, o);
+            }
         } else {
             pe->acc = 0.0f;
         }
     }
 
-    for (const auto& c : n2->getChildren()) walkEmitters(*c, w, dt);
+    for (const auto& c : n2->getChildren()) {
+        walkEmitters(*c, w, dt);
+    }
 }
+
+static void projEditor(
+    float wx,
+    float wy,
+    float& sx,
+    float& sy,
+    float zoom,
+    float camX,
+    float camY
+) {
+    float S = 0.46875f * zoom;
+
+    sx = 596 + (wx - camX - 640) * S;
+    sy = 310 + (wy - camY - 360) * S;
+}
+
+static void drawParticlePreviewTree(
+    Node& n,
+    const WorldXf& parent,
+    std::string& out,
+    float zoom,
+    float camX,
+    float camY,
+    const std::string& sel
+) {
+    Node2D* n2 = dynamic_cast<Node2D*>(&n);
+
+    if (!n2) {
+        for (const auto& c : n.getChildren()) {
+            drawParticlePreviewTree(*c, parent, out, zoom, camX, camY, sel);
+        }
+
+        return;
+    }
+
+    WorldXf w = parent.child(n2->position, n2->rotation, n2->scale.x, n2->scale.y);
+
+    if (std::string(n2->typeName()) == "Particle2D") {
+        Particle2D* pe = static_cast<Particle2D*>(n2);
+
+        bool isSel = (sel == n2->name);
+
+        float avgScale = (w.sx + w.sy) * 0.5f;
+        if (avgScale < 0.01f) avgScale = 0.01f;
+
+        float base = pe->size * avgScale;
+        if (base < 8.0f) base = 8.0f;
+
+        unsigned col = pe->color;
+        float alpha = isSel ? 1.0f : 0.55f;
+
+        float sx = 0, sy = 0;
+        projEditor(w.x, w.y, sx, sy, zoom, camX, camY);
+
+        std::string markerGlyph = isSel ? std::string("\xe2\x97\x89") : pe->glyph;
+        float markerSize = isSel ? base * 0.75f : base * 0.45f;
+
+        out += "DRAW text|";
+        out += markerGlyph;
+        out += "|";
+        out += std::to_string((int)sx);
+        out += "|";
+        out += std::to_string((int)sy);
+        out += "|";
+        out += std::to_string((int)markerSize);
+        out += "|";
+        out += colorToHexA(withAlpha(col, alpha));
+        out += "|";
+        out += std::to_string(w.rot * 57.2957795f);
+        out += "\n";
+
+        if (isSel) {
+            for (int i = 0; i < 12; ++i) {
+                float ang = w.rot + (float)i * 0.5235987756f;
+                float rad = base * (0.75f + (float)(i % 3) * 0.28f);
+
+                float px = w.x + std::cos(ang) * rad;
+                float py = w.y + std::sin(ang) * rad;
+
+                float psx = 0, psy = 0;
+                projEditor(px, py, psx, psy, zoom, camX, camY);
+
+                float psz = base * 0.32f;
+                if (psz < 4.0f) psz = 4.0f;
+
+                out += "DRAW text|";
+                out += pe->glyph;
+                out += "|";
+                out += std::to_string((int)psx);
+                out += "|";
+                out += std::to_string((int)psy);
+                out += "|";
+                out += std::to_string((int)psz);
+                out += "|";
+                out += colorToHexA(withAlpha(col, 0.75f));
+                out += "|";
+                out += std::to_string(w.rot * 57.2957795f);
+                out += "\n";
+            }
+        }
+    }
+
+    for (const auto& c : n2->getChildren()) {
+        drawParticlePreviewTree(*c, w, out, zoom, camX, camY, sel);
+    }
+}
+
 class GameApp {
 public:
     using Manip = suka::Manip;
@@ -1332,6 +1488,7 @@ private:
 
         scripts_.load(root);
         g_tweens.clear();
+        g_particles.clear();
 
         ctx_ = Context();
         g_luaLog.clear();
@@ -1437,12 +1594,13 @@ private:
         renderer.render(*sceneMgr_->current(), &ctx_);
 
         out += gameBackend_.str();
+
         if (sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
+            g_particles.update(1.0f / 60.0f);
+
             WorldXf ident;
             walkEmitters(*sceneMgr_->current()->root, ident, 1.0f / 60.0f);
-        }
-        // --- B6: draw particles (world -> screen, mirrors Renderer) ---
-        if (sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
+
             Scene* ps = sceneMgr_->current();
 
             bool camActive = false;
@@ -1485,9 +1643,11 @@ private:
                 out += std::to_string((int)sz);
                 out += "|";
                 out += colorToHexA(withAlpha(pp.color, a));
-                out += "|0\n";
+                out += "|";
+                out += std::to_string(pp.rot * 57.2957795f);
+                out += "\n";
             }
-}
+        }
 
         if (dbg_) {
             nodeCount_ = countNodes(sceneMgr_->current()->root.get());
@@ -1502,7 +1662,7 @@ private:
             out += "DRAW text|fps " + std::to_string((int)fps_) +
                    "  nodes " + std::to_string(nodeCount_) +
                    "  draws " + std::to_string(lastDraws_) +
-                   "  tweens " + std::to_string((int)g_tweens.count()) +
+                   "  parts " + std::to_string((int)g_particles.count()) +
                    "|20|100|18|#FFD700|0\n";
 
             out += "DRAW text|vars " + std::to_string((int)ctx_.vars.size()) +
@@ -1673,6 +1833,7 @@ private:
         clearDialogResults();
 
         g_tweens.clear();
+        g_particles.clear();
 
         buildEditorPanels();
 
@@ -1805,6 +1966,7 @@ private:
         Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
 
         bool lk = (s2 != nullptr) && s2->locked;
+
         if (act == "create_particle" || act == "create:Particle2D:none") {
             pushUndo();
 
@@ -1819,13 +1981,10 @@ private:
             return 1;
         }
 
-        if (act.rfind("view:", 0) == 0) {
-            if (lk || sel.empty()) {
-                return 0;
-            }
+        Particle2D* p2 = dynamic_cast<Particle2D*>(s2);
 
-            Particle2D* pe = dynamic_cast<Particle2D*>(s2);
-            if (!pe) {
+        if (act.rfind("view:", 0) == 0) {
+            if (lk || sel.empty() || !p2) {
                 return 0;
             }
 
@@ -1841,6 +2000,58 @@ private:
             }
 
             rebuild();
+            return 0;
+        }
+
+        if (act == "ponoff") {
+            if (!lk && p2) {
+                pushUndo();
+
+                p2->emitting = !p2->emitting;
+
+                if (p2->emitting) {
+                    p2->burstPending = true;
+                }
+
+                lastMsg_ = p2->emitting ? ("emitting ON: " + sel) : ("emitting OFF: " + sel);
+
+                rebuild();
+                return 1;
+            }
+
+            return 0;
+        }
+
+        if (act == "pcolor") {
+            if (!lk && p2) {
+                pendingRgb_ = 3;
+                pendingText_ = true;
+                pendingTextCur_ = rgbStr(p2->color);
+            }
+
+            return 0;
+        }
+
+        if (act.rfind("pnum:", 0) == 0) {
+            if (!lk && p2) {
+                pendingNum_ = true;
+                pendingNumKind_ = act.substr(5);
+
+                if (pendingNumKind_ == "rate") {
+                    pendingNumCur_ = std::to_string((int)p2->rate);
+                } else if (pendingNumKind_ == "life") {
+                    pendingNumCur_ = std::to_string(p2->life);
+                } else if (pendingNumKind_ == "size") {
+                    pendingNumCur_ = std::to_string((int)p2->size);
+                } else if (pendingNumKind_ == "spread") {
+                    pendingNumCur_ = std::to_string((int)p2->spread);
+                } else if (pendingNumKind_ == "gravity") {
+                    pendingNumCur_ = std::to_string((int)p2->gravity);
+                } else {
+                    pendingNumCur_ = "0";
+                }
+            }
+
             return 0;
         }
 
@@ -2563,9 +2774,12 @@ private:
                         if (b) b->color = c;
                     } else {
                         Node* s = editor_->selected();
-                        Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr;
-
-                        if (n2) n2->color = c;
+                        Particle2D* pep = dynamic_cast<Particle2D*>(s);
+                        if (pep) pep->color = c;
+                        else {
+                            Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr;
+                            if (n2) n2->color = c;
+                        }
                     }
                 } else {
                     lastMsg_ = "bad rgb, need r,g,b";
@@ -2579,6 +2793,22 @@ private:
                     pushUndo();
 
                     editor_->scene()->bg = colorToHex(c);
+                } else {
+                    lastMsg_ = "bad rgb, need r,g,b";
+                }
+
+                pendingRgb_ = 0;
+            } else if (pendingRgb_ == 3) {
+                unsigned c = 0;
+
+                if (parseRgb(txt, c)) {
+                    pushUndo();
+
+                    Particle2D* pe = dynamic_cast<Particle2D*>(editor_->selected());
+
+                    if (pe) {
+                        pe->color = c;
+                    }
                 } else {
                     lastMsg_ = "bad rgb, need r,g,b";
                 }
@@ -2682,6 +2912,24 @@ private:
                 }
             }
 
+            Particle2D* pe = dynamic_cast<Particle2D*>(s);
+
+            if (!lk2 && pe) {
+                if (pendingNumKind_ == "rate") {
+                    pe->rate = v;
+                } else if (pendingNumKind_ == "life") {
+                    pe->life = v;
+                    if (pe->life < 0.05f) pe->life = 0.05f;
+                } else if (pendingNumKind_ == "size") {
+                    pe->size = v;
+                    if (pe->size < 1.0f) pe->size = 1.0f;
+                } else if (pendingNumKind_ == "spread") {
+                    pe->spread = v;
+                } else if (pendingNumKind_ == "gravity") {
+                    pe->gravity = v;
+                }
+            }
+
             if (b) {
                 if (pendingNumKind_ == "bx") {
                     b->touch.rect.x = v;
@@ -2745,6 +2993,15 @@ private:
 
         if (!scriptMode_) {
             emitEditorViewport(*editor_->scene(), out, makeEditorRenderInput());
+
+            Scene* es = editor_->scene();
+
+            if (es && es->root) {
+                std::string sel = editor_->selected() ? editor_->selected()->name : std::string();
+
+                WorldXf ident;
+                drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
+            }
         }
 
         processEditorActions();
