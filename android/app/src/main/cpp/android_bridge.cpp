@@ -92,3 +92,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_sukaengine_app_MainActivity_nativeScriptKey(JNIEnv* env, jobject, jint key) {
     if (g_app) g_app->submitScriptKey((int)key);
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_sukaengine_app_MainActivity_nativeImportFile(JNIEnv* env, jobject, jstring category, jstring relativePath) {
+    if (!g_app) return;
+    const char* cat = category ? env->GetStringUTFChars(category, nullptr) : nullptr;
+    const char* rel = relativePath ? env->GetStringUTFChars(relativePath, nullptr) : nullptr;
+    g_app->submitImportFile(std::string(cat ? cat : ""), std::string(rel ? rel : ""));
+    if (cat) env->ReleaseStringUTFChars(category, cat);
+    if (rel) env->ReleaseStringUTFChars(relativePath, rel);
+}
