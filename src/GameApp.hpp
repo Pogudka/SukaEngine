@@ -996,9 +996,12 @@ private:
         consumeDialogResults();
         if (scriptMode_) imeApply();
 
-        // Viewport FIRST, then editor UI on top (settings window above viewport).
-        std::string out;
-        if (!scriptMode_) {
+        gameBackend_.begin();
+        Renderer gr(gameBackend_);
+        gr.render(editorScene_, &ctx_);
+        std::string out = gameBackend_.str();
+
+        if (!scriptMode_ && !showSettings_) {
             emitEditorViewport(*editor_->scene(), out, makeEditorRenderInput());
             Scene* es = editor_->scene();
             if (es && es->root) {
@@ -1007,11 +1010,6 @@ private:
                 drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
             }
         }
-
-        gameBackend_.begin();
-        Renderer gr(gameBackend_);
-        gr.render(editorScene_, &ctx_);
-        out += gameBackend_.str();
 
         processEditorActions();
         if (appMode_ != AppMode::Editor) return "";
