@@ -57,9 +57,9 @@ public class MainActivity extends Activity {
 
     private static final int IMPORT_REQUEST_CODE = 1001;
     private volatile String pendingImportCategory = "";
+    private volatile String pendingImportRoot = "";
     private volatile String lastImportMsg_ = "";
 
-    // Queue: filled on UI thread, consumed on render thread (no cross-thread C++ calls).
     private volatile boolean hasImportResult_ = false;
     private volatile String importCatRes_ = "";
     private volatile String importNameRes_ = "";
@@ -144,8 +144,9 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void startImport(final String category) {
+    private void startImport(final String category, final String projectRoot) {
         pendingImportCategory = category;
+        pendingImportRoot = projectRoot;
         g_dialog = true;
         runOnUiThread(() -> {
             try {
@@ -173,7 +174,9 @@ public class MainActivity extends Activity {
         }
         final Uri uri = data.getData();
         final String category = pendingImportCategory;
+        final String projRoot = pendingImportRoot;
         pendingImportCategory = "";
+        pendingImportRoot = "";
 
         String origName = getFileName(uri);
         if (origName == null || origName.isEmpty()) origName = "imported_" + System.currentTimeMillis();
@@ -187,7 +190,6 @@ public class MainActivity extends Activity {
         final String finalExt = ext;
         final String defBase = safeOrig.isEmpty() ? "asset" : safeOrig;
 
-        // Ask the user for a texture name, then copy straight into assets/.
         g_dialog = true;
         runOnUiThread(() -> {
             final EditText et = new EditText(MainActivity.this);
@@ -201,7 +203,7 @@ public class MainActivity extends Activity {
                 .setPositiveButton("OK", (d, w) -> {
                     String base = et.getText().toString().replaceAll("[^a-zA-Z0-9._-]", "_");
                     if (base.isEmpty()) base = defBase;
-                    String stored = copyToAssets(uri, category, base, finalExt);
+                    String stored = copyToAssets(uri, category, base, finalExt, projRoot);
                     if (stored != null) {
                         importCatRes_ = category;
                         importNameRes_ = stored;
@@ -224,12 +226,13 @@ public class MainActivity extends Activity {
         });
     }
 
-    // Copies the picked file directly into assets/ (or assets/fonts/).
-    // Returns the stored file name (relative to assets root handled by C++ side list).
-    private String copyToAssets(Uri uri, String category, String base, String ext) {
+    // Copies into the CURRENT project's assets/ (root comes from C++ via REQ_IMPORT).
+    private String copyToAssets(Uri uri, String category, String base, String ext, String projRoot) {
         try {
+            String rp = projRoot;
+            if (rp == null || rp.isEmpty()) rp = getFilesDir().getAbsolutePath() + "/projects/" + GAME_DIR;
             String sub = category.equals("fonts") ? "assets/fonts/" : "assets/";
-            File dir = new File(getFilesDir(), "projects/" + GAME_DIR + "/" + sub);
+            File dir = new File(rp + "/" + sub);
             dir.mkdirs();
             String name = base + ext;
             File target = new File(dir, name);
@@ -241,7 +244,6 @@ public class MainActivity extends Activity {
             byte[] buf = new byte[8192]; int n;
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             out.close(); in.close();
-            // C++ expects the name as it appears under assets/ (fonts keep prefix).
             return category.equals("fonts") ? ("fonts/" + name) : name;
         } catch (Throwable t) {
             return null;
@@ -381,9 +383,10 @@ public class MainActivity extends Activity {
                     String rest = frame.substring(ri);
                     int nl = rest.indexOf('\n');
                     if (nl >= 0) rest = rest.substring(0, nl);
-                    int bar = rest.indexOf('|');
-                    String cat = bar >= 0 ? rest.substring(bar + 1) : "";
-                    startImport(cat);
+                    String[] parts = rest.split("\\|", 3);
+                    String cat = parts.length > 1 ? parts[1] : "";
+                    String proot = parts.length > 2 ? parts[2] : "";
+                    startImport(cat, proot);
                     continue;
                 }
 
