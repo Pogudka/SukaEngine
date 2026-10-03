@@ -1,4 +1,4 @@
-#pragma once
+7#pragma once
 
 #include <string>
 #include <memory>
@@ -1411,18 +1411,21 @@ private:
         renderer.render(*sceneMgr_->current(), &ctx_);
 
         out += gameBackend_.str();
-        // --- B6-lite: draw particles (world -> screen via camera) ---
+        // --- B6-lite: draw particles (world -> screen, mirrors Renderer) ---
         if (sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
             Scene* ps = sceneMgr_->current();
 
+            bool camActive = false;
             float camX = 0, camY = 0, camZ = 1;
             Node* cn = ps->root->findByType("Camera2D");
             if (cn) {
                 Camera2D* cam = static_cast<Camera2D*>(cn);
+                camActive = true;
                 camZ = cam->zoom > 0.01f ? cam->zoom : 1.0f;
                 camX = cam->position.x;
                 camY = cam->position.y;
             }
+            float zf = camActive ? camZ : 1.0f;
 
             const std::vector<Particle>& plist = g_particles.list();
 
@@ -1433,9 +1436,14 @@ private:
 
                 float sz = pp.size * (1.0f - t) + pp.sizeEnd * t;
                 if (sz < 1.0f) sz = 1.0f;
+                sz *= zf;
 
-                float sx = (pp.x - camX) * camZ + 640.0f;
-                float sy = (pp.y - camY) * camZ + 360.0f;
+                float sx = camActive ? ((pp.x - camX) * camZ + 640.0f) : pp.x;
+                float sy = camActive ? ((pp.y - camY) * camZ + 360.0f) : pp.y;
+
+                float a = pp.maxLife > 0.0f ? (pp.life / pp.maxLife) : 0.0f;
+                if (a < 0.0f) a = 0.0f;
+                if (a > 1.0f) a = 1.0f;
 
                 out += "DRAW text|";
                 out += pp.glyph;
@@ -1446,10 +1454,10 @@ private:
                 out += "|";
                 out += std::to_string((int)sz);
                 out += "|";
-                out += colorToHex(pp.color);
+                out += colorToHexA(withAlpha(pp.color, a));
                 out += "|0\n";
             }
-        }
+}
 
         if (dbg_) {
             nodeCount_ = countNodes(sceneMgr_->current()->root.get());
