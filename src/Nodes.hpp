@@ -229,26 +229,64 @@ public:
 };
 class Particle2D : public Node2D {
 public:
-    float rate = 0.0f;
-    int   burst = 0;
-    float vx = 0.0f, vy = 0.0f, spread = 0.0f;
-    float gravity = 0.0f;
-    float life = 1.0f, lifeSpread = 0.0f;
-    float size = 18.0f, sizeEnd = 0.0f, drag = 0.0f;
-    std::string glyph = "\xe2\x80\xa2";
-    bool  emitting = false;
-    float acc = 0.0f;
-    bool  burstPending = false;
+    float rate = 15.0f;
+    int burst = 24;
 
-    Particle2D() { shape = "none"; color = 0xFFFFFFFF; w = 0; h = 0; }
+    float vx = 0.0f;
+    float vy = -120.0f;
+    float spread = 120.0f;
+    float gravity = 300.0f;
+
+    float life = 0.9f;
+    float lifeSpread = 0.3f;
+
+    float size = 22.0f;
+    float sizeEnd = 0.0f;
+    float drag = 0.0f;
+
+    std::string glyph = "\xe2\x80\xa2";
+
+    bool emitting = false;
+
+    float acc = 0.0f;
+    bool burstPending = false;
+
+    Particle2D() {
+        shape = "circle";
+        color = 0xFFFFFFFF;
+        w = 32.0f;
+        h = 32.0f;
+        alpha = 0.01f;
+    }
+
     const char* typeName() const override { return "Particle2D"; }
-    std::string extra() const override { return Node2D::extra() + " rate=" + std::to_string((int)rate) + " emit=" + (emitting ? "1" : "0"); }
+
+    std::string extra() const override {
+        return Node2D::extra() +
+               " rate=" + std::to_string((int)rate) +
+               " emit=" + (emitting ? "1" : "0");
+    }
+
     std::unique_ptr<Node> cloneNode() const override {
-        auto c = std::make_unique<Particle2D>(); copyBase(*c); copyNode2D(*c);
-        c->rate = rate; c->burst = burst; c->vx = vx; c->vy = vy; c->spread = spread;
-        c->gravity = gravity; c->life = life; c->lifeSpread = lifeSpread;
-        c->size = size; c->sizeEnd = sizeEnd; c->drag = drag; c->glyph = glyph;
-        c->emitting = emitting; return c;
+        auto c = std::make_unique<Particle2D>();
+        copyBase(*c);
+        copyNode2D(*c);
+
+        c->rate = rate;
+        c->burst = burst;
+        c->vx = vx;
+        c->vy = vy;
+        c->spread = spread;
+        c->gravity = gravity;
+        c->life = life;
+        c->lifeSpread = lifeSpread;
+        c->size = size;
+        c->sizeEnd = sizeEnd;
+        c->drag = drag;
+        c->glyph = glyph;
+        c->emitting = emitting;
+
+        return c;
     }
 };
 } // namespace suka
