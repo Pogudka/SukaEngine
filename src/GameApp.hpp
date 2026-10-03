@@ -758,7 +758,7 @@ private:
         editor_ = std::make_unique<Editor>();
         editor_->attach(sceneMgr_->current());
         editor_->setProjectRoot(project_.rootPath);
-        showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = false;
+        showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = true;
         assetScroll_ = 0; prefabScroll_ = 0; prefabPickTarget_.clear();
         pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
         pendingSceneSave_ = false; pendingPrefabSave_ = false;
@@ -878,7 +878,6 @@ private:
             return 0;
         }
 
-        // ==== FILES panel ====
         if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; rebuild(); return 1; }
         if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
         if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
@@ -954,7 +953,7 @@ private:
                     editor_->attach(sceneMgr_->current());
                     editor_->setProjectRoot(project_.rootPath);
                     scripted_.clear();
-                    showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = false;
+                    showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = true;
                     assetScroll_ = 0; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                     pickParent_ = false; pickChild_.clear(); hierScroll_ = 0;
                     undoStack_.clear(); redoStack_.clear();
@@ -1206,7 +1205,7 @@ private:
     bool showAssets_ = false;
     bool showSettings_ = false;
     bool showPrefabs_ = false;
-    bool showFiles_ = false;
+    bool showFiles_ = true;
     bool dragging_ = false;
     bool pendingText_ = false;
     bool pinching_ = false;
