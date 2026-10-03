@@ -13,6 +13,9 @@ namespace suka {
 // ---------------------------------------------------------------------------
 // Emitter presets ("виды частиц"). Each preset fully describes a Particle2D:
 // glyph + color + motion. The editor UI lists names and applies by name.
+//
+// COLOR FORMAT IS 0xRRGGBBAA (low byte = alpha), matching Solid2D/Player in
+// Nodes.hpp. Do NOT write 0xAARRGGBB here or particles become invisible.
 // ---------------------------------------------------------------------------
 struct EmitterPreset {
     const char* name;
@@ -23,15 +26,15 @@ struct EmitterPreset {
 
 inline const std::vector<EmitterPreset>& emitterPresets() {
     static const std::vector<EmitterPreset> v = {
-        // name      glyph  color        rate burst  vx   vy    spread grav  life  lspread size sizeEnd drag
-        { "dot",     "\xe2\x80\xa2", 0xFFFFFFFF,  0,  24,   0, -120,  120,  300, 0.9f, 0.3f,  22,   0,  0.0f },
-        { "star",    "*",            0xFFFFD700,  0,  30,   0, -160,  140,  320, 1.0f, 0.4f,  26,   0,  0.0f },
-        { "spark",   "\xe2\x9c\xa6", 0xFFFF8000, 40,   0,   0, -200,   60,  500, 0.5f, 0.2f,  14,   0,  1.2f },
-        { "ember",   ".",            0xFFFF4040, 30,   0,   0,  -40,   80,  900, 1.4f, 0.5f,  12,   0,  0.3f },
-        { "smoke",   "\xe2\x97\x8b", 0xFFB0B0B0, 12,   0,   0,  -30,   40,  -20, 2.2f, 0.6f,  30,  60,  0.6f },
-        { "snow",    "\xe2\x9d\x84", 0xFFBFEFFF,  8,   0,  20,   40,   60,  120, 3.0f, 0.8f,  18,   0,  0.2f },
-        { "rain",    "|",            0xFF60A0FF, 60,   0,   0,  320,   20,    0, 0.6f, 0.1f,  10,   0,  0.0f },
-        { "magic",   "\xe2\x9c\xa8", 0xFFC080FF, 20,   0,   0,  -90,  100, -120, 1.2f, 0.4f,  20,   0,  0.4f },
+        // name      glyph       color(RRGGBBAA) rate burst vx   vy    spread grav  life  lspread size sizeEnd drag
+        { "dot",     "\xe2\x80\xa2", 0xFFFFFFFF,  15,  24,   0, -120,  120,  300, 0.9f, 0.3f,  22,   0,  0.0f },
+        { "star",    "*",            0xFFD700FF,  20,  30,   0, -160,  140,  320, 1.0f, 0.4f,  26,   0,  0.0f },
+        { "spark",   "\xe2\x9c\xa6", 0xFF8000FF,  40,   0,   0, -200,   60,  500, 0.5f, 0.2f,  14,   0,  1.2f },
+        { "ember",   ".",            0xFF4040FF,  30,   0,   0,  -40,   80,  900, 1.4f, 0.5f,  12,   0,  0.3f },
+        { "smoke",   "\xe2\x97\x8f", 0xB0B0B040,  12,   0,   0,  -30,   40,  -20, 2.2f, 0.6f,  30,  60,  0.6f },
+        { "snow",    "\xe2\x9d\x84", 0xBFEFFFFF,   8,   0,  20,   40,   60,  120, 3.0f, 0.8f,  18,   0,  0.2f },
+        { "rain",    "|",            0x60A0FFFF,  80,  60,   0,  320,   20,    0, 0.6f, 0.1f,  10,   0,  0.0f },
+        { "magic",   "\xe2\x9c\xa8", 0xC080FFFF,  20,   0,   0,  -90,  100, -120, 1.2f, 0.4f,  20,   0,  0.4f },
     };
     return v;
 }
@@ -225,7 +228,6 @@ public:
 
     // ---- particle helpers for the [+] menu and the inspector ----
 
-    // Create a Particle2D pre-loaded with a named view. Returns the node or null.
     Node2D* addParticleNode(const std::string& name, float x, float y, const std::string& presetName) {
         Node2D* raw = addNode("Particle2D", name, x, y);
         Particle2D* pe = raw ? dynamic_cast<Particle2D*>(raw) : nullptr;
@@ -233,30 +235,33 @@ public:
         for (const auto& p : emitterPresets()) {
             if (presetName == p.name) { applyEmitterPreset(pe, p); break; }
         }
-        pe->emitting = true;       // pour immediately after creation
-        pe->burstPending = true;   // plus one opening volley
+        pe->emitting = true;
+        pe->burstPending = true;
         return pe;
     }
 
-    // Apply a named view to an existing node by name. True if node is an emitter.
     bool setEmitterPreset(const std::string& nodeName, const std::string& presetName) {
         Node2D* n = find2d(nodeName);
         Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
         if (!pe) return false;
         for (const auto& p : emitterPresets()) {
-            if (presetName == p.name) { applyEmitterPreset(pe, p); return true; }
+            if (presetName == p.name) {
+                applyEmitterPreset(pe, p);
+                pe->emitting = true;
+                pe->burstPending = true;
+                return true;
+            }
         }
         return false;
     }
 
-    // Names of all views, for drawing the inspector row.
     std::vector<std::string> emitterPresetNames() const {
         std::vector<std::string> out;
         for (const auto& p : emitterPresets()) out.emplace_back(p.name);
         return out;
     }
 
-    // Which view the node currently matches (by glyph), "" if custom/none.
+    // NOTE: deliberately NOT const — it calls find2d(), which is non-const.
     std::string currentEmitterPreset(const std::string& nodeName) {
         Node2D* n = find2d(nodeName);
         Particle2D* pe = n ? dynamic_cast<Particle2D*>(n) : nullptr;
