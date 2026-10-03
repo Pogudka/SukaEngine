@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <functional>
+#include <cstdio>
 
 #include "Scene.hpp"
 
@@ -284,22 +285,31 @@ public:
         return "";
     }
 
-    bool makePrefabFromSelected(const std::string& fullPath, const std::string& relPath) {
+    void setProjectRoot(const std::string& root) { projectRoot_ = root; }
+
+    // Makes a prefab out of the selected subtree.
+    // Writes the subtree as a standalone scene-format JSON in prefabs/<name>.json,
+    // then replaces the original node with a Prefab2D referencing it.
+    bool saveAsPrefab(const std::string& prefabName) {
         if (!scene_ || !scene_->root || !selected_) return false;
         Node* sel = selected_;
         if (sel == scene_->root.get()) return false;
         Node* owner = scene_->root->findParentOf(sel->name);
         if (!owner) return false;
 
-        size_t slash = fullPath.find_last_of('/');
+        std::string relPath = "prefabs/" + prefabName + ".json";
+        std::string full = projectRoot_ + "/" + relPath;
+
+        size_t slash = full.find_last_of('/');
         if (slash != std::string::npos) {
-            std::string dir = fullPath.substr(0, slash);
+            std::string dir = full.substr(0, slash);
             std::string cmd = "mkdir -p \"" + dir + "\"";
             system(cmd.c_str());
         }
 
-        std::string json = "{\n  \"name\": \"prefab\",\n  \"nodes\": [\n" + SceneWriter::writeNode(*sel, 4) + "\n  ]\n}\n";
-        { std::ofstream f(fullPath); if (!f.good()) return false; f << json; }
+        std::string json = "{\n  \"name\": \"" + prefabName + "\",\n  \"nodes\": [\n"
+                         + SceneWriter::writeNode(*sel, 4) + "\n  ]\n}\n";
+        { std::ofstream f(full); if (!f.good()) return false; f << json; }
 
         auto up = owner->takeChild(sel->name);
         if (!up) return false;
@@ -317,6 +327,21 @@ public:
         owner->addChild(std::move(pf));
         selected_ = pfRaw;
         return true;
+    }
+
+    // Saves the current scene to scenes/<name>.json.
+    bool saveScene(const std::string& sceneName) {
+        if (!scene_) return false;
+        if (projectRoot_.empty()) return false;
+        std::string rel = "scenes/" + sceneName + ".json";
+        std::string full = projectRoot_ + "/" + rel;
+        size_t slash = full.find_last_of('/');
+        if (slash != std::string::npos) {
+            std::string dir = full.substr(0, slash);
+            std::string cmd = "mkdir -p \"" + dir + "\"";
+            system(cmd.c_str());
+        }
+        return SceneWriter::write(*scene_, full);
     }
 
     void deleteNode(const std::string& name) {
@@ -344,6 +369,7 @@ private:
     Scene* scene_ = nullptr;
     Node* selected_ = nullptr;
     std::string selectedUi_;
+    std::string projectRoot_;
 };
 
 } // namespace suka
