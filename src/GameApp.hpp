@@ -1805,6 +1805,44 @@ private:
         Node2D* s2 = (!sel.empty()) ? editor_->find2d(sel) : nullptr;
 
         bool lk = (s2 != nullptr) && s2->locked;
+        if (act == "create_particle" || act == "create:Particle2D:none") {
+            pushUndo();
+
+            std::string name = "Emitter" + std::to_string(createCounter_++);
+
+            editor_->addParticleNode(name, 640, 360, "dot");
+            editor_->select(name);
+
+            showCreate_ = false;
+
+            rebuild();
+            return 1;
+        }
+
+        if (act.rfind("view:", 0) == 0) {
+            if (lk || sel.empty()) {
+                return 0;
+            }
+
+            Particle2D* pe = dynamic_cast<Particle2D*>(s2);
+            if (!pe) {
+                return 0;
+            }
+
+            pushUndo();
+
+            std::string preset = act.substr(5);
+
+            if (editor_->setEmitterPreset(sel, preset)) {
+                lastMsg_ = "view " + preset + " -> " + sel;
+
+                rebuild();
+                return 1;
+            }
+
+            rebuild();
+            return 0;
+        }
 
         if (act == "col_rgb") {
             if (!lk) {
