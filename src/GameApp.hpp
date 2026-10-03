@@ -692,7 +692,7 @@ private:
                 float sy = camActive ? ((pp.y - camY) * camZ + 360.0f) : pp.y;
                 float a = pp.maxLife > 0.0f ? (pp.life / pp.maxLife) : 0.0f;
                 if (a < 0.0f) a = 0.0f; if (a > 1.0f) a = 1.0f;
-                out += "DRAW text|" + pp.glyph + "|" + std::to_string((int)sx) + "|" + std::to_string((int)sy) + "|" + std::to_string((int)sz) + "|" + colorToHexA(withAlpha(pp.color, a)) + "|" + std::to_string(pp.rot * 57.2957795f) + "\n";
+                out += std::string("DRAW text|") + pp.glyph + "|" + std::to_string((int)sx) + "|" + std::to_string((int)sy) + "|" + std::to_string((int)sz) + "|" + colorToHexA(withAlpha(pp.color, a)) + "|" + std::to_string(pp.rot * 57.2957795f) + "\n";
             }
         }
         if (dbg_) {
