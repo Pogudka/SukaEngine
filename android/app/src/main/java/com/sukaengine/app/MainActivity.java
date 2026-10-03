@@ -226,7 +226,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    // Copies into the CURRENT project's assets/ (root comes from C++ via REQ_IMPORT).
     private String copyToAssets(Uri uri, String category, String base, String ext, String projRoot) {
         try {
             String rp = projRoot;
@@ -286,6 +285,7 @@ public class MainActivity extends Activity {
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
         private volatile boolean running_ = false;
+        private volatile boolean editorFrame_ = false;
         private final Paint paint = new Paint();
         private final Map<String, Bitmap> bitmaps = new HashMap<>();
         private Typeface typeface;
@@ -375,6 +375,8 @@ public class MainActivity extends Activity {
                 g_stepHead = frame.replace("\n", "|");
                 if (g_stepHead.length() > 70) g_stepHead = g_stepHead.substring(0, 70);
 
+                editorFrame_ = frame.contains("Inspector") || frame.contains("FileSystem") || frame.contains("SCRIPTS");
+
                 if (frame.contains("IME_ON"))  requestIme(true);
                 if (frame.contains("IME_OFF")) requestIme(false);
 
@@ -411,7 +413,7 @@ public class MainActivity extends Activity {
                 if (rw > 0 && rh > 0) { c.save(); c.scale(rw / LOGIC_W, rh / LOGIC_H); for (String line : frame.split("\n")) drawLine(c, line); c.restore(); }
                 else { for (String line : frame.split("\n")) drawLine(c, line); }
 
-                boolean editor = frame.contains("Inspector") || frame.contains("FileSystem") || frame.contains("SCRIPTS");
+                boolean editor = editorFrame_;
                 boolean hubOrMenu = frame.contains("PROJECTS") || frame.contains("START") || frame.contains("Play")
                                  || frame.contains("NEW") || frame.contains("Theme") || frame.contains("MENU");
                 if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
@@ -552,8 +554,11 @@ public class MainActivity extends Activity {
                         float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                         float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                         float ang = p.length > 6 ? Float.parseFloat(p[6]) : 0f;
+                        // In editor mode textures must not escape the viewport rect.
+                        if (editorFrame_) { c.save(); c.clipRect(300, 64, 892, 556); }
                         if (ang != 0f) { c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang); c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint); c.restore(); }
                         else c.drawBitmap(bm, null, new RectF(x, y, x + w, y + h), paint);
+                        if (editorFrame_) { c.restore(); }
                     }
                 }
             } catch (Exception e) { }
@@ -581,4 +586,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-            }
+                         }
