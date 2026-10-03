@@ -1061,7 +1061,7 @@ private:
             if (!name.empty()) {
                 editor_->setProjectRoot(project_.rootPath);
                 if (editor_->saveAsPrefab(name)) lastMsg_ = "saved prefabs/" + name + ".prf";
-                else lastMsg_ = "prefab save failed: " + editor_->lastError();
+                else lastMsg_ = "prefab save failed";
             }
             pendingPrefabSave_ = false;
             buildEditorPanels(); input_.setUi(&editorScene_.ui);
