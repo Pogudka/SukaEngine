@@ -146,15 +146,10 @@ public:
                           "\" && mv -f \"" + src + "\" \"" + dst + "\"";
         system(cmd.c_str());
 
-        // Fallback on the render thread if the shell move did not happen.
         if (fileExists(src) && !fileExists(dst)) {
             std::rename(src.c_str(), dst.c_str());
         }
 
-        pendingImportCategory_.clear();
-        lastMsg_ = "imported " + category + ": " + relativePath;
-        buildEditorPanels();
-    }
         pendingImportCategory_.clear();
         lastMsg_ = "imported " + category + ": " + relativePath;
         buildEditorPanels();
