@@ -20,39 +20,29 @@ namespace suka {
 
 struct EditorUiInput {
     Editor* editor;
-
     bool scriptMode;
     float edZoom;
     Manip manip;
-
     bool pickParent;
     bool showCreate;
     bool showAssets;
     bool showSettings;
-
     int& hierScroll;
     int& fsScroll;
     int& assetScroll;
     int& scriptScroll;
-
     const std::set<std::string>& collapsed;
     const std::string& fsPath;
     const std::string& projectRoot;
-
     const std::string& scriptPath;
     const std::vector<std::string>& scriptLines;
-
     int curLine;
     int curCol;
-
     bool imeShown;
-
     const std::vector<std::string>& luaLog;
 };
 
-inline std::string editorDash(int depth) {
-    return depth > 0 ? std::string(depth, '-') + " " : std::string();
-}
+inline std::string editorDash(int depth) { return depth > 0 ? std::string(depth, '-') + " " : std::string(); }
 
 inline bool editorHasUiGroup(Scene* esc, const std::string& name) {
     if (!esc) return false;
@@ -88,7 +78,6 @@ inline void editorBuildTreeRows(
         bool open = collapsed.count(nm) == 0;
         Node2D* ch2d = dynamic_cast<Node2D*>(ch.get());
         std::string lockMark = (ch2d && ch2d->locked) ? " [L]" : "";
-
         EdRow r;
         r.text = editorDash(depth) + (kids ? (open ? "[-] " : "[+] ") : "    ") + nm + lockMark + "   " + std::string(ch->typeName());
         r.action = "ed_select:" + nm;
@@ -97,7 +86,6 @@ inline void editorBuildTreeRows(
         r.open = open;
         r.name = nm;
         rows.push_back(r);
-
         if (kids && open) {
             editorBuildTreeRows(esc, ch.get(), depth + 1, sel, selUi, rows, collapsed);
             for (auto& ub : esc->ui) {
@@ -106,9 +94,7 @@ inline void editorBuildTreeRows(
                     br.text = editorDash(depth + 1) + "    " + ub.touch.id + "   Button";
                     br.action = "ed_selectui:" + ub.touch.id;
                     br.sel = (selUi == ub.touch.id);
-                    br.hasKids = false;
-                    br.open = false;
-                    br.name = "";
+                    br.hasKids = false; br.open = false; br.name = "";
                     rows.push_back(br);
                 }
             }
@@ -119,17 +105,13 @@ inline void editorBuildTreeRows(
 inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
     Theme& th = currentTheme();
     const unsigned GO = 0xFF8800FFu;
-
     auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
         auto l = std::make_unique<Label>();
         l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y};
         s.root->addChild(std::move(l));
     };
-
     const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
-
     addLbl("ScHdr", "SCRIPTS", 10, 40, 18, th.ink);
-
     std::vector<FileEntry> ls = FileBrowser::list(in.projectRoot + "/scripts");
     int li = 0;
     for (auto& it : ls) {
@@ -145,34 +127,21 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         s.ui.push_back(b);
         ++li;
     }
-
-    {
-        UiButton b;
-        b.touch.id = "scnew";
-        b.touch.rect = Rect{8, 64 + (float)li * 28, 284, 26};
-        b.text = "+ NEW SCRIPT";
-        b.action = "snew";
-        b.color = th.accent;
-        s.ui.push_back(b);
-    }
-
+    { UiButton b; b.touch.id = "scnew"; b.touch.rect = Rect{8, 64 + (float)li * 28, 284, 26}; b.text = "+ NEW SCRIPT"; b.action = "snew"; b.color = th.accent; s.ui.push_back(b); }
     auto edbg = std::make_unique<Node2D>();
     edbg->name = "__scbg"; edbg->shape = "square"; edbg->color = 0x101018FF;
     edbg->w = VW; edbg->h = VH; edbg->position = Vec2{VX0 + VW / 2, VY0 + VH / 2};
     s.root->addChild(std::move(edbg));
-
     { UiButton b; b.touch.id = "ssave"; b.touch.rect = Rect{300, 34, 70, 26}; b.text = "SAVE"; b.action = "ssave"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "sclose"; b.touch.rect = Rect{374, 34, 70, 26}; b.text = "SCENE"; b.action = "tab_scene"; b.color = GO; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "kbtog"; b.touch.rect = Rect{448, 34, 80, 26}; b.text = in.imeShown ? "KB OFF" : "KB ON"; b.action = "kb_toggle"; b.color = in.imeShown ? th.button : th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "scu"; b.touch.rect = Rect{860, 70, 26, 26}; b.text = "^"; b.action = "scup"; b.color = th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "scd"; b.touch.rect = Rect{860, 100, 26, 26}; b.text = "v"; b.action = "scdn"; b.color = th.button; s.ui.push_back(b); }
-
     const int LINES = 24;
     const float LH = 19;
     int smax = (int)in.scriptLines.size() > LINES ? (int)in.scriptLines.size() - LINES : 0;
     if (in.scriptScroll < 0) in.scriptScroll = 0;
     if (in.scriptScroll > smax) in.scriptScroll = smax;
-
     for (int i = in.scriptScroll; i < (int)in.scriptLines.size() && i < in.scriptScroll + LINES; ++i) {
         float y = 70 + (float)(i - in.scriptScroll) * LH;
         std::string num = std::to_string(i + 1);
@@ -182,7 +151,6 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         if (txt.size() > 68) txt = txt.substr(0, 68);
         addLbl(("ScC" + std::to_string(i)).c_str(), txt, 340, y, 14, i == in.curLine ? parseColor("#FFD700") : parseColor("#D8E0F0"));
     }
-
     if (in.curLine >= in.scriptScroll && in.curLine < in.scriptScroll + LINES) {
         int cps = utf8ByteToCp(in.scriptLines[in.curLine], in.curCol);
         auto cur = std::make_unique<Node2D>();
@@ -192,7 +160,6 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
         cur->position = Vec2{cxp + 1, cyp};
         s.root->addChild(std::move(cur));
     }
-
     addLbl("ScInfo", in.scriptPath.empty() ? "(no script)" : in.scriptPath, 900, 64, 16, GO);
     addLbl("ScInfo2", "lines " + std::to_string((int)in.scriptLines.size()) + "   cur " + std::to_string(in.curLine + 1) + ":" + std::to_string(utf8ByteToCp(in.scriptLines.empty() ? std::string("") : in.scriptLines[in.curLine], in.curCol)), 900, 88, 14, th.ink);
     addLbl("ScInfo3", "tap line = cursor + keyboard", 900, 110, 14, th.ink);
@@ -202,12 +169,10 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
 inline Scene buildEditorScene(const EditorUiInput& in) {
     Theme& th = currentTheme();
     const unsigned GO = 0xFF8800FFu;
-
     Scene s;
     s.name = "Editor";
     s.root = std::make_unique<Node>();
     s.root->name = "EdRoot";
-
     auto addLbl = [&](const char* nm, const std::string& txt, float x, float y, float fs, unsigned col) {
         auto l = std::make_unique<Label>();
         l->name = nm; l->text = txt; l->fontSize = fs; l->color = col; l->position = Vec2{x, y};
@@ -307,7 +272,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             addLbl("InAng", "Angle " + std::to_string((int)ub->angle), 900, 244, 16, th.ink);
             addLbl("InTex", "Texture: " + (ub->texture.empty() ? std::string("(none)") : ub->texture), 900, 268, 16, th.ink);
             addLbl("InGrp", "Group: " + (ub->group.empty() ? std::string("(none)") : ub->group), 900, 292, 16, th.ink);
-
             const char* nl[6] = { "X", "Y", "W", "H", "R", "A" };
             const char* nk[6] = { "bx", "by", "bw", "bh", "bang", "balpha" };
             for (int k = 0; k < 6; ++k) {
@@ -334,17 +298,29 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             addLbl("InShp", "Shape  " + nd->shape, 900, 268, 16, th.ink);
             addLbl("InCol", "Color  " + colorToHex(nd->color) + "  (" + rgbStr(nd->color) + ")", 900, 292, 16, th.ink);
             addLbl("InTex", "Texture: " + (nd->texture.empty() ? std::string("(none)") : nd->texture), 900, 316, 16, th.ink);
-            addLbl("InAct", "Touch: " + (nd->action.empty() ? std::string("(none)") : nd->action), 900, 340, 16, th.ink);
 
+            {
+                std::string texNow = nd->texture;
+                if (texNow.empty() && std::string(nd->typeName()) == "Sprite2D") texNow = static_cast<Sprite2D*>(nd)->texturePath;
+                if (!texNow.empty()) {
+                    UiButton rb;
+                    rb.touch.id = "rmtex";
+                    rb.touch.rect = Rect{1092, 312, 88, 26};
+                    rb.text = "RM TEX";
+                    rb.action = "clear_tex";
+                    rb.color = parseColor("#D62828");
+                    s.ui.push_back(rb);
+                }
+            }
+
+            addLbl("InAct", "Touch: " + (nd->action.empty() ? std::string("(none)") : nd->action), 900, 340, 16, th.ink);
             if (std::string(nd->typeName()) == "Label") {
                 addLbl("InText", "Text: " + static_cast<Label*>(nd)->text, 900, 364, 16, th.ink);
             }
-
             if (std::string(nd->typeName()) == "Particle2D") {
                 Particle2D* pe = static_cast<Particle2D*>(nd);
                 std::string cur = in.editor->currentEmitterPreset(sel);
                 addLbl("InView", "View: " + (cur.empty() ? std::string("(custom)") : cur), 900, 364, 16, th.ink);
-
                 int vk = 0;
                 for (const auto& p : emitterPresets()) {
                     UiButton vb;
@@ -356,7 +332,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                     s.ui.push_back(vb);
                     ++vk;
                 }
-
                 const char* pl[7] = { "RT", "LF", "SZ", "SP", "GR", "CL", "ON" };
                 const char* pa[7] = { "pnum:rate", "pnum:life", "pnum:size", "pnum:spread", "pnum:gravity", "pcolor", "ponoff" };
                 for (int k = 0; k < 7; ++k) {
@@ -469,11 +444,9 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         addLbl("FsHdr", "FILES", 10, 384, 18, th.ink);
         { UiButton b; b.touch.id = "fsu"; b.touch.rect = Rect{248, 382, 20, 22}; b.text = "^"; b.action = "fscroll_up"; b.color = th.button; s.ui.push_back(b); }
         { UiButton b; b.touch.id = "fsd"; b.touch.rect = Rect{270, 382, 20, 22}; b.text = "v"; b.action = "fscroll_dn"; b.color = th.button; s.ui.push_back(b); }
-
         struct FsRow { std::string text; std::string action; unsigned col; };
         std::vector<FsRow> frows;
         if (!in.fsPath.empty()) frows.push_back({ "..", "fs_up", th.button });
-
         std::string abs = in.projectRoot + "/" + in.fsPath;
         for (const auto& it : FileBrowser::list(abs)) {
             if (it.name.rfind("snap_", 0) == 0) continue;
@@ -484,15 +457,12 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             r.col = it.isDir ? th.button : th.accent;
             frows.push_back(r);
         }
-
         const int FMAXROWS = 8;
         int fmax = (int)frows.size() > FMAXROWS ? (int)frows.size() - FMAXROWS : 0;
         if (in.fsScroll < 0) in.fsScroll = 0;
         if (in.fsScroll > fmax) in.fsScroll = fmax;
-
         std::string shown = in.fsPath.empty() ? std::string("res/") : ("res/" + in.fsPath);
         addLbl("FsPath", shown + "  (" + std::to_string((int)frows.size()) + ")", 10, 406, 15, GO);
-
         float fy = 428;
         const float STEP = 28;
         for (int i = in.fsScroll; i < (int)frows.size() && i < in.fsScroll + FMAXROWS; ++i) {
@@ -509,22 +479,18 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         addLbl("FsHdr", "ASSETS", 10, 384, 18, th.ink);
         { UiButton b; b.touch.id = "asu"; b.touch.rect = Rect{248, 382, 20, 22}; b.text = "^"; b.action = "assets_up"; b.color = th.button; s.ui.push_back(b); }
         { UiButton b; b.touch.id = "asd"; b.touch.rect = Rect{270, 382, 20, 22}; b.text = "v"; b.action = "assets_dn"; b.color = th.button; s.ui.push_back(b); }
-
         std::vector<std::string> imgs;
         for (const auto& it : FileBrowser::list(in.projectRoot + "/assets")) {
             if (it.isDir) continue;
             if (editorIsImageName(it.name)) imgs.push_back(it.name);
         }
         std::sort(imgs.begin(), imgs.end());
-
         const int AMAXROWS = 8;
         int amax = (int)imgs.size() > AMAXROWS ? (int)imgs.size() - AMAXROWS : 0;
         if (in.assetScroll < 0) in.assetScroll = 0;
         if (in.assetScroll > amax) in.assetScroll = amax;
-
         addLbl("FsPath", "assets/  (" + std::to_string((int)imgs.size()) + ")", 10, 406, 15, GO);
         if (imgs.empty()) addLbl("AsEmpty", "drop png/jpg into assets/", 12, 432, 14, th.ink);
-
         float ay = 428;
         const float ASTEP = 28;
         for (int i = in.assetScroll; i < (int)imgs.size() && i < in.assetScroll + AMAXROWS; ++i) {
@@ -540,10 +506,8 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         addLbl("AsHint", "tap = assign / create sprite", 10, 660, 12, th.ink);
     }
 
-    // Settings window built ONLY from buttons, added last => draws on top of everything.
     if (in.showSettings) {
         const unsigned BG = 0x14141CFF;
-
         auto btn = [&](const std::string& id, float x, float y, float w, float h,
                        const std::string& txt, const std::string& action, unsigned col) {
             UiButton b;
@@ -554,15 +518,12 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             b.color = col;
             s.ui.push_back(b);
         };
-
         btn("__stbg",    360,  80, 560, 560, "", "", BG);
         btn("__sttitle", 380,  92, 520,  56, "SETTINGS", "", BG);
         btn("st_close",  830,  96,  70,  32, "CLOSE", "settings_close", parseColor("#D62828"));
-
         const char* catName[5] = { "Fonts", "Sprites", "Videos", "Models", "Sounds" };
         const char* catKey[5]  = { "fonts", "sprites", "videos", "models", "sounds" };
         bool catReady[5]       = { true, true, false, false, false };
-
         for (int i = 0; i < 5; ++i) {
             float y = 170 + (float)i * 88;
             btn(std::string("__stcat") + std::to_string(i), 400, y, 200, 36, catName[i], "", BG);
@@ -571,7 +532,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 std::string("import_category:") + catKey[i],
                 catReady[i] ? th.accent : parseColor("#666666"));
         }
-
         btn("__sthint", 380, 600, 520, 28, "files are copied into assets/<category>/", "", BG);
     }
 
