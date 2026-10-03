@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
+#include <dirent.h>
 
 #include "Core.hpp"
 #include "Scene.hpp"
@@ -15,8 +17,9 @@
 // -----------------------------------------------------------------------------
 // Auto-detect Lua headers.
 //
-// If Lua headers are available, real Lua scripting is enabled.
-// If not, ScriptSystem becomes a safe stub so the project still builds.
+// If Lua headers are available (they become available once CMake downloads and
+// links Lua), real Lua scripting is enabled. If not, ScriptSystem is a safe
+// stub so the project still builds.
 // -----------------------------------------------------------------------------
 
 #ifndef SUKA_HAS_LUA
@@ -27,12 +30,6 @@
 #  elif __has_include("lua/lua.h") && __has_include("lua/lauxlib.h") && __has_include("lua/lualib.h")
 #   define SUKA_HAS_LUA 1
 #   define SUKA_LUA_MODE 2
-#  elif __has_include("../third_party/lua/lua.h") && __has_include("../third_party/lua/lauxlib.h") && __has_include("../third_party/lua/lualib.h")
-#   define SUKA_HAS_LUA 1
-#   define SUKA_LUA_MODE 3
-#  elif __has_include("third_party/lua/lua.h") && __has_include("third_party/lua/lauxlib.h") && __has_include("third_party/lua/lualib.h")
-#   define SUKA_HAS_LUA 1
-#   define SUKA_LUA_MODE 4
 #  else
 #   define SUKA_HAS_LUA 0
 #  endif
@@ -55,14 +52,6 @@ extern "C" {
 #  include "lua/lua.h"
 #  include "lua/lauxlib.h"
 #  include "lua/lualib.h"
-# elif SUKA_LUA_MODE == 3
-#  include "../third_party/lua/lua.h"
-#  include "../third_party/lua/lauxlib.h"
-#  include "../third_party/lua/lualib.h"
-# elif SUKA_LUA_MODE == 4
-#  include "third_party/lua/lua.h"
-#  include "third_party/lua/lauxlib.h"
-#  include "third_party/lua/lualib.h"
 # endif
 }
 #endif
@@ -85,6 +74,36 @@ static Node2D* scriptFindNode(const char* name) {
 
     Node* n = g_scriptScene->root->findNode(name);
     return dynamic_cast<Node2D*>(n);
+}
+
+// List *.lua files in a directory without depending on any FileBrowser type.
+static std::vector<std::string> listLuaFiles(const std::string& dir) {
+    std::vector<std::string> out;
+
+    DIR* d = opendir(dir.c_str());
+    if (!d) {
+        return out;
+    }
+
+    struct dirent* e;
+
+    while ((e = readdir(d)) != nullptr) {
+        std::string n = e->d_name;
+
+        if (n == "." || n == "..") {
+            continue;
+        }
+
+        if (n.size() >= 4 && n.compare(n.size() - 4, 4, ".lua") == 0) {
+            out.push_back(n);
+        }
+    }
+
+    closedir(d);
+
+    std::sort(out.begin(), out.end());
+
+    return out;
 }
 
 static int lua_print(lua_State* L) {
@@ -418,23 +437,13 @@ public:
         registerFunctions();
 
         std::string dir = root + "/scripts";
-        auto entries = FileBrowser::list(dir);
 
         std::string combined;
 
-        for (auto& e : entries) {
-            if (e.isDir) {
-                continue;
-            }
+        for (const auto& name : listLuaFiles(dir)) {
+            std::string path = dir + "/" + name;
 
-            if (e.name.size() < 4 ||
-                e.name.compare(e.name.size() - 4, 4, ".lua") != 0) {
-                continue;
-            }
-
-            std::string path = dir + "/" + e.name;
-
-            combined += "-- " + e.name + "\n";
+            combined += "-- " + name + "\n";
             combined += readFile(path);
             combined += "\n\n";
         }
