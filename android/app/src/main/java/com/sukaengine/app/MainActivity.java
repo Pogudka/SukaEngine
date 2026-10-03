@@ -480,7 +480,26 @@ public class MainActivity extends Activity {
                 if (p[0].equals("clipoff")) { c.restore(); return; }
                 if (p[0].equals("bg")) { c.drawColor(Color.parseColor(p[1])); return; }
 
-                if (p[0].equals("text")) {
+                if (p[0].equals("mtext")) {
+                    // Fixed-cell text: each code point advances exactly p[6] px.
+                    // Used for the script editor so the caret column math matches pixels.
+                    paint.setColor(Color.parseColor(p[5]));
+                    float fs = Float.parseFloat(p[4]);
+                    float cell = p.length > 6 ? Float.parseFloat(p[6]) : fs * 0.6f;
+                    paint.setTextSize(fs); paint.setTextAlign(Paint.Align.LEFT);
+                    if (typeface != null) paint.setTypeface(typeface);
+                    float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
+                    String t = p[1];
+                    float cx = x;
+                    int idx = 0;
+                    while (idx < t.length()) {
+                        int cp = t.codePointAt(idx);
+                        c.drawText(new String(Character.toChars(cp)), cx, y + fs, paint);
+                        cx += cell;
+                        idx += Character.charCount(cp);
+                    }
+                }
+                else if (p[0].equals("text")) {
                     paint.setColor(Color.parseColor(p[5]));
                     float fs = Float.parseFloat(p[4]);
                     paint.setTextSize(fs); paint.setTextAlign(Paint.Align.LEFT);
@@ -587,4 +606,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-    }
+                                                       }
