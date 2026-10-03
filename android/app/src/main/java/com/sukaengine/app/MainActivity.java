@@ -476,6 +476,8 @@ public class MainActivity extends Activity {
             if (!line.startsWith("DRAW ")) return;
             String[] p = line.substring(5).split("\\|", -1);
             try {
+                if (p[0].equals("clipon")) { c.save(); c.clipRect(300, 64, 892, 556); return; }
+                if (p[0].equals("clipoff")) { c.restore(); return; }
                 if (p[0].equals("bg")) { c.drawColor(Color.parseColor(p[1])); return; }
 
                 if (p[0].equals("text")) {
@@ -554,7 +556,6 @@ public class MainActivity extends Activity {
                         float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                         float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                         float ang = p.length > 6 ? Float.parseFloat(p[6]) : 0f;
-                        // In editor mode textures must not escape the viewport rect.
                         if (editorFrame_) { c.save(); c.clipRect(300, 64, 892, 556); }
                         if (ang != 0f) { c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang); c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint); c.restore(); }
                         else c.drawBitmap(bm, null, new RectF(x, y, x + w, y + h), paint);
@@ -586,4 +587,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                         }
+    }
