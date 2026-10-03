@@ -227,6 +227,7 @@ public:
     std::string extra() const override { return Node2D::extra() + " radius=" + std::to_string((int)radius); }
     std::unique_ptr<Node> cloneNode() const override { auto c = std::make_unique<Light2D>(); copyBase(*c); copyNode2D(*c); c->radius = radius; c->intensity = intensity; return c; }
 };
+
 class Particle2D : public Node2D {
 public:
     float rate = 15.0f;
@@ -289,4 +290,5 @@ public:
         return c;
     }
 };
+
 } // namespace suka
