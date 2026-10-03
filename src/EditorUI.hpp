@@ -547,7 +547,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 bool pending = (in.pendingDelete == frows[i].rel);
                 UiButton db;
                 db.touch.id = "fd" + std::to_string(i);
-                db.touch.rect = Rect{248, fy, pending ? 44 : 40, STEP - 2};
+                db.touch.rect = Rect{248, fy, pending ? 44.0f : 40.0f, STEP - 2};
                 db.text = pending ? "SURE?" : "X";
                 db.action = (pending ? "fs_del_yes:" : "fs_del_ask:") + frows[i].rel;
                 db.color = pending ? parseColor("#2E7D32") : parseColor("#D62828");
