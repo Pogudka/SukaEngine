@@ -489,14 +489,14 @@ public class MainActivity extends Activity {
         }
 
         // UTF-8 byte length of a single code point.
-        private static int utf8CpLen(int cp) {
+        private int utf8CpLen(int cp) {
             if (cp < 0x80) return 1;
             if (cp < 0x800) return 2;
             if (cp < 0x10000) return 3;
             return 4;
         }
         // Total UTF-8 byte length of a Java (UTF-16) string.
-        private static int utf8Len(String s) {
+        private int utf8Len(String s) {
             int n = 0; int i = 0; int len = s.length();
             while (i < len) { int cp = s.codePointAt(i); n += utf8CpLen(cp); i += Character.charCount(cp); }
             return n;
@@ -525,6 +525,9 @@ public class MainActivity extends Activity {
                     return;
                 }
                 else if (p[0].equals("caret")) {
+                    // Vertical bar placed exactly after the measured prefix, using the SAME
+                    // typeface and size (14px) as the proportional "text" command that drew
+                    // the code line. This guarantees the caret never drifts on long lines.
                     if (p.length < 6) return;
                     String pref = p[1];
                     float bx = Float.parseFloat(p[2]);
@@ -538,6 +541,8 @@ public class MainActivity extends Activity {
                     c.drawRect(bx + w, by + 1, bx + w + 2f, by + hh, paint);
                 }
                 else if (p[0].equals("mtext")) {
+                    // Legacy fixed-cell renderer. No longer emitted by the C++ side for code
+                    // (proportional text + caret is used now), but kept harmless for safety.
                     paint.setColor(Color.parseColor(p[5]));
                     float fs = Float.parseFloat(p[4]);
                     float cell = p.length > 6 ? Float.parseFloat(p[6]) : fs * 0.6f;
@@ -661,7 +666,7 @@ public class MainActivity extends Activity {
                 String t = clText.get(bi);
                 float target = lx - CODE_TEXT_X;
                 int totalBytes = utf8Len(t);
-                int col = totalBytes;
+                int col = 0;
                 if (target > 0f) {
                     measurePaint.setTextSize(CODE_FONT);
                     measurePaint.setTextAlign(Paint.Align.LEFT);
@@ -701,4 +706,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                }
+                    }
