@@ -59,7 +59,6 @@ public class MainActivity extends Activity {
     private volatile String pendingImportCategory = "";
     private volatile String lastImportMsg_ = "";
 
-    // Import result queue: filled on UI thread, consumed on render thread.
     private volatile boolean hasImportResult_ = false;
     private volatile String importCatRes_ = "";
     private volatile String importNameRes_ = "";
@@ -233,6 +232,7 @@ public class MainActivity extends Activity {
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
+        private volatile boolean running_ = false;
         private final Paint paint = new Paint();
         private final Map<String, Bitmap> bitmaps = new HashMap<>();
         private Typeface typeface;
@@ -287,16 +287,30 @@ public class MainActivity extends Activity {
             });
         }
 
-        @Override public void surfaceCreated(SurfaceHolder h) { thread = new Thread(this); thread.start(); }
+        // FIX: render thread must actually terminate, otherwise surfaceDestroyed's
+        // join() blocks the UI thread forever -> black screen / ANR.
+        @Override public void surfaceCreated(SurfaceHolder h) {
+            running_ = true;
+            thread = new Thread(this);
+            thread.start();
+        }
         @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) { }
-        @Override public void surfaceDestroyed(SurfaceHolder h) { try { if (thread != null) thread.join(); } catch (Exception e) { } }
+        @Override public void surfaceDestroyed(SurfaceHolder h) {
+            running_ = false;
+            try {
+                if (thread != null) {
+                    thread.interrupt();
+                    thread.join(500);
+                }
+            } catch (Exception e) { }
+            thread = null;
+        }
 
         @Override public void run() {
-            while (true) {
+            while (running_) {
               try {
                 if (g_dialog) { Thread.sleep(33); continue; }
 
-                // Apply import result HERE, on the render thread (no cross-thread mutation).
                 if (hasImportResult_) {
                     hasImportResult_ = false;
                     String ic = importCatRes_, inm = importNameRes_;
@@ -353,8 +367,8 @@ public class MainActivity extends Activity {
                 getHolder().unlockCanvasAndPost(c);
                 Thread.sleep(16);
               } catch (Throwable t) {
-                // Never let the render thread die: report and keep going.
                 lastImportMsg_ = "loop err: " + t;
+                if (!running_) return;
                 try { Thread.sleep(33); } catch (Exception e) { return; }
               }
             }
@@ -515,4 +529,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                              }
+        }
