@@ -5,8 +5,6 @@
 #include <set>
 #include <memory>
 #include <cmath>
-#include <cctype>
-#include <algorithm>
 
 #include "Scene.hpp"
 #include "Editor.hpp"
@@ -28,6 +26,7 @@ struct EditorUiInput {
     bool pickParent;
     bool showCreate;
     bool showAssets;
+    bool showSettings;
 
     int& hierScroll;
     int& fsScroll;
@@ -61,16 +60,6 @@ inline bool editorHasUiGroup(Scene* esc, const std::string& name) {
     }
 
     return false;
-}
-
-inline bool editorIsImageName(const std::string& n) {
-    size_t dot = n.find_last_of('.');
-    if (dot == std::string::npos || dot + 1 >= n.size()) return false;
-
-    std::string ext = n.substr(dot + 1);
-    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
-
-    return ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "bmp";
 }
 
 struct EdRow {
@@ -336,10 +325,22 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.root->addChild(std::move(l));
     };
 
+    // Settings button (top-left, next to title)
+    {
+        UiButton b;
+        b.touch.id = "settings_btn";
+        b.touch.rect = Rect{10, 4, 32, 26};
+        b.text = "⚙";
+        b.action = "settings_open";
+        b.color = GO;
+
+        s.ui.push_back(b);
+    }
+
     {
         UiButton b;
         b.touch.id = "tab_scene";
-        b.touch.rect = Rect{10, 4, 80, 26};
+        b.touch.rect = Rect{50, 4, 80, 26};
         b.text = "Scene";
         b.action = "tab_scene";
         b.color = in.scriptMode ? th.button : GO;
@@ -347,13 +348,13 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    addLbl("Tab2D", "2D", 110, 8, 20, th.ink);
-    addLbl("Tab3D", "3D", 160, 8, 20, th.ink);
+    addLbl("Tab2D", "2D", 140, 8, 20, th.ink);
+    addLbl("Tab3D", "3D", 190, 8, 20, th.ink);
 
     {
         UiButton b;
         b.touch.id = "tab_scripts";
-        b.touch.rect = Rect{200, 4, 90, 26};
+        b.touch.rect = Rect{230, 4, 90, 26};
         b.text = "Scripts";
         b.action = "tab_scripts";
         b.color = in.scriptMode ? GO : th.button;
@@ -361,7 +362,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    addLbl("TabAss", "AssetLib", 300, 8, 20, th.ink);
+    addLbl("TabAss", "AssetLib", 330, 8, 20, th.ink);
 
     if (in.scriptMode) {
         editorBuildScriptScene(in, s);
@@ -1027,6 +1028,95 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
             b.text = "PART";
             b.action = "create:Particle2D:none";
             b.color = parseColor("#FF69B4");
+
+            s.ui.push_back(b);
+        }
+    }
+
+    // Settings panel (centered, large)
+    if (in.showSettings) {
+        auto stbg = std::make_unique<Node2D>();
+        stbg->name = "__stbg";
+        stbg->shape = "square";
+        stbg->color = 0x1A1A1AFF;
+        stbg->w = 600;
+        stbg->h = 500;
+        stbg->position = Vec2{640, 360};
+
+        s.root->addChild(std::move(stbg));
+
+        addLbl("StTitle", "SETTINGS", 480, 140, 24, GO);
+
+        {
+            UiButton b;
+            b.touch.id = "st_close";
+            b.touch.rect = Rect{840, 130, 80, 36};
+            b.text = "CLOSE";
+            b.action = "settings_close";
+            b.color = parseColor("#D62828");
+
+            s.ui.push_back(b);
+        }
+
+        addLbl("StFonts", "Fonts", 480, 190, 20, th.ink);
+        {
+            UiButton b;
+            b.touch.id = "import_fonts";
+            b.touch.rect = Rect{480, 220, 160, 40};
+            b.text = "Import Fonts";
+            b.action = "import_category:fonts";
+            b.color = th.accent;
+
+            s.ui.push_back(b);
+        }
+
+        addLbl("StSprites", "Sprites", 480, 280, 20, th.ink);
+        {
+            UiButton b;
+            b.touch.id = "import_sprites";
+            b.touch.rect = Rect{480, 310, 160, 40};
+            b.text = "Import Sprites";
+            b.action = "import_category:sprites";
+            b.color = th.accent;
+
+            s.ui.push_back(b);
+        }
+
+        addLbl("StVideos", "Videos", 480, 370, 20, th.ink);
+        {
+            UiButton b;
+            b.touch.id = "import_videos";
+            b.touch.rect = Rect{480, 400, 160, 40};
+            b.text = "Import Videos";
+            b.action = "import_category:videos";
+            b.color = parseColor("#666666");
+            b.text = "Import Videos (soon)";
+
+            s.ui.push_back(b);
+        }
+
+        addLbl("StModels", "Models (OBJ/FBX)", 480, 460, 20, th.ink);
+        {
+            UiButton b;
+            b.touch.id = "import_models";
+            b.touch.rect = Rect{480, 490, 160, 40};
+            b.text = "Import Models";
+            b.action = "import_category:models";
+            b.color = parseColor("#666666");
+            b.text = "Import Models (soon)";
+
+            s.ui.push_back(b);
+        }
+
+        addLbl("StSounds", "Sounds", 480, 550, 20, th.ink);
+        {
+            UiButton b;
+            b.touch.id = "import_sounds";
+            b.touch.rect = Rect{480, 580, 160, 40};
+            b.text = "Import Sounds";
+            b.action = "import_category:sounds";
+            b.color = parseColor("#666666");
+            b.text = "Import Sounds (soon)";
 
             s.ui.push_back(b);
         }
