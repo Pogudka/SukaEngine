@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <set>
 #include <iostream>
 #include <fstream>
 #include <functional>
@@ -37,10 +38,30 @@ inline const std::vector<EmitterPreset>& emitterPresets() {
 class SceneWriter {
 public:
     static std::string writeNode(Node& n, int indent) { return nodeJson(n, indent); }
+    static std::string writeUiButton(const UiButton& b) {
+        std::string s = "    { ";
+        s += "\"id\": \"" + b.touch.id + "\", ";
+        s += "\"x\": " + std::to_string((int)b.touch.rect.x) + ", ";
+        s += "\"y\": " + std::to_string((int)b.touch.rect.y) + ", ";
+        s += "\"w\": " + std::to_string((int)b.touch.rect.w) + ", ";
+        s += "\"h\": " + std::to_string((int)b.touch.rect.h) + ", ";
+        s += "\"text\": \"" + b.text + "\", ";
+        s += "\"action\": \"" + b.action + "\", ";
+        s += "\"color\": \"" + colorToHex(b.color) + "\", ";
+        s += "\"angle\": " + std::to_string(b.angle);
+        if (!b.texture.empty()) s += ", \"texture\": \"" + b.texture + "\"";
+        if (!b.group.empty()) s += ", \"group\": \"" + b.group + "\"";
+        s += ", \"alpha\": " + std::to_string(b.alpha);
+        s += " }";
+        return s;
+    }
 
     static bool write(Scene& scene, const std::string& path) {
         std::ofstream f(path);
         if (!f.good()) return false;
+
+        std::set<std::string> skipUi;
+        if (scene.root) collectPrefabUiIds(*scene.root, skipUi);
 
         f << "{\n";
         f << "  \"name\": \"" << scene.name << "\",\n";
@@ -56,21 +77,8 @@ public:
 
         std::vector<std::string> uiparts;
         for (const auto& b : scene.ui) {
-            std::string s = "    { ";
-            s += "\"id\": \"" + b.touch.id + "\", ";
-            s += "\"x\": " + std::to_string((int)b.touch.rect.x) + ", ";
-            s += "\"y\": " + std::to_string((int)b.touch.rect.y) + ", ";
-            s += "\"w\": " + std::to_string((int)b.touch.rect.w) + ", ";
-            s += "\"h\": " + std::to_string((int)b.touch.rect.h) + ", ";
-            s += "\"text\": \"" + b.text + "\", ";
-            s += "\"action\": \"" + b.action + "\", ";
-            s += "\"color\": \"" + colorToHex(b.color) + "\", ";
-            s += "\"angle\": " + std::to_string(b.angle);
-            if (!b.texture.empty()) s += ", \"texture\": \"" + b.texture + "\"";
-            if (!b.group.empty()) s += ", \"group\": \"" + b.group + "\"";
-            s += ", \"alpha\": " + std::to_string(b.alpha);
-            s += " }";
-            uiparts.push_back(s);
+            if (skipUi.count(b.touch.id)) continue;
+            uiparts.push_back(writeUiButton(b));
         }
         for (size_t i = 0; i < uiparts.size(); ++i) f << uiparts[i] << (i + 1 < uiparts.size() ? ",\n" : "\n");
 
@@ -79,6 +87,12 @@ public:
     }
 
 private:
+    static void collectPrefabUiIds(Node& n, std::set<std::string>& out) {
+        Prefab2D* pf = dynamic_cast<Prefab2D*>(&n);
+        if (pf) for (auto& id : pf->instUiIds) out.insert(id);
+        for (auto& c : n.getChildren()) collectPrefabUiIds(*c, out);
+    }
+
     static std::string nodeJson(Node& n, int indent) {
         std::string pad(indent, ' ');
 
@@ -269,18 +283,12 @@ public:
         if (!pe) return "";
         for (const auto& p : emitterPresets()) {
             if (p.glyph == pe->glyph &&
-                std::abs(p.rate - pe->rate) < 0.01f &&
-                p.burst == pe->burst &&
-                std::abs(p.vx - pe->vx) < 0.01f &&
-                std::abs(p.vy - pe->vy) < 0.01f &&
-                std::abs(p.spread - pe->spread) < 0.01f &&
-                std::abs(p.gravity - pe->gravity) < 0.01f &&
-                std::abs(p.life - pe->life) < 0.01f &&
-                std::abs(p.lifeSpread - pe->lifeSpread) < 0.01f &&
-                std::abs(p.size - pe->size) < 0.01f &&
-                std::abs(p.sizeEnd - pe->sizeEnd) < 0.01f &&
-                std::abs(p.drag - pe->drag) < 0.01f &&
-                p.color == pe->color) {
+                std::abs(p.rate - pe->rate) < 0.01f && p.burst == pe->burst &&
+                std::abs(p.vx - pe->vx) < 0.01f && std::abs(p.vy - pe->vy) < 0.01f &&
+                std::abs(p.spread - pe->spread) < 0.01f && std::abs(p.gravity - pe->gravity) < 0.01f &&
+                std::abs(p.life - pe->life) < 0.01f && std::abs(p.lifeSpread - pe->lifeSpread) < 0.01f &&
+                std::abs(p.size - pe->size) < 0.01f && std::abs(p.sizeEnd - pe->sizeEnd) < 0.01f &&
+                std::abs(p.drag - pe->drag) < 0.01f && p.color == pe->color) {
                 return p.name;
             }
         }
@@ -289,6 +297,8 @@ public:
 
     void setProjectRoot(const std::string& root) { projectRoot_ = root; }
 
+    // Writes selected subtree + its grouped ui buttons into a .prf file,
+    // then replaces the subtree with a Prefab2D referencing it.
     bool makePrefabFromSelected(const std::string& fullPath, const std::string& relPath) {
         if (!scene_ || !scene_->root || !selected_) return false;
         Node* sel = selected_;
@@ -303,14 +313,30 @@ public:
             system(cmd.c_str());
         }
 
+        // Take grouped ui buttons out of the scene; they go into the .prf.
+        std::vector<std::string> names;
+        collectNames(sel, names);
+        std::vector<UiButton> takenUi;
+        for (auto it = scene_->ui.begin(); it != scene_->ui.end(); ) {
+            bool match = false;
+            for (auto& nm : names) if (it->group == nm) { match = true; break; }
+            if (match) { takenUi.push_back(*it); it = scene_->ui.erase(it); }
+            else ++it;
+        }
+
         std::string nameOnly = relPath;
         size_t sl2 = nameOnly.find_last_of('/');
         if (sl2 != std::string::npos) nameOnly = nameOnly.substr(sl2 + 1);
-        if (nameOnly.size() > 5 && nameOnly.compare(nameOnly.size() - 5, 5, ".json") == 0)
-            nameOnly = nameOnly.substr(0, nameOnly.size() - 5);
+        if (nameOnly.size() > 4 && nameOnly.compare(nameOnly.size() - 4, 4, ".prf") == 0)
+            nameOnly = nameOnly.substr(0, nameOnly.size() - 4);
 
         std::string json = "{\n  \"name\": \"" + nameOnly + "\",\n  \"nodes\": [\n"
-                         + SceneWriter::writeNode(*sel, 4) + "\n  ]\n}\n";
+                         + SceneWriter::writeNode(*sel, 4) + "\n  ],\n  \"ui\": [\n";
+        for (size_t i = 0; i < takenUi.size(); ++i) {
+            json += SceneWriter::writeUiButton(takenUi[i]);
+            json += (i + 1 < takenUi.size() ? ",\n" : "\n");
+        }
+        json += "  ]\n}\n";
         { std::ofstream f(fullPath); if (!f.good()) return false; f << json; }
 
         auto up = owner->takeChild(sel->name);
@@ -324,6 +350,7 @@ public:
 
         auto kids = up->takeAllChildren();
         for (auto& k : kids) pf->addChild(std::move(k));
+        for (auto& b : takenUi) pf->instUiIds.push_back(b.touch.id);
 
         Node* pfRaw = pf.get();
         owner->addChild(std::move(pf));
@@ -333,7 +360,7 @@ public:
 
     bool saveAsPrefab(const std::string& prefabName) {
         if (projectRoot_.empty()) return false;
-        std::string relPath = "prefabs/" + prefabName + ".json";
+        std::string relPath = "prefabs/" + prefabName + ".prf";
         std::string full = projectRoot_ + "/" + relPath;
         return makePrefabFromSelected(full, relPath);
     }
@@ -374,6 +401,11 @@ public:
     bool save(const std::string& path) { if (!scene_) return false; return SceneWriter::write(*scene_, path); }
 
 private:
+    static void collectNames(Node* n, std::vector<std::string>& out) {
+        out.push_back(n->name);
+        for (auto& c : n->getChildren()) collectNames(c.get(), out);
+    }
+
     Scene* scene_ = nullptr;
     Node* selected_ = nullptr;
     std::string selectedUi_;
