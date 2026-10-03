@@ -289,9 +289,6 @@ public:
 
     void setProjectRoot(const std::string& root) { projectRoot_ = root; }
 
-    // Core operation: write the selected subtree to fullPath as a scene-format
-    // json, then replace the original node in the tree with a Prefab2D that
-    // references relPath. Used by both the "->PF" button and SAVE PREFAB.
     bool makePrefabFromSelected(const std::string& fullPath, const std::string& relPath) {
         if (!scene_ || !scene_->root || !selected_) return false;
         Node* sel = selected_;
@@ -334,7 +331,6 @@ public:
         return true;
     }
 
-    // Convenience wrapper: prefabs/<name>.json under the project root.
     bool saveAsPrefab(const std::string& prefabName) {
         if (projectRoot_.empty()) return false;
         std::string relPath = "prefabs/" + prefabName + ".json";
@@ -342,7 +338,6 @@ public:
         return makePrefabFromSelected(full, relPath);
     }
 
-    // Saves the whole current scene to scenes/<name>.json.
     bool saveScene(const std::string& sceneName) {
         if (!scene_) return false;
         if (projectRoot_.empty()) return false;
