@@ -59,6 +59,11 @@ public class MainActivity extends Activity {
     private volatile String pendingImportCategory = "";
     private volatile String lastImportMsg_ = "";
 
+    // Import result queue: filled on UI thread, consumed on render thread.
+    private volatile boolean hasImportResult_ = false;
+    private volatile String importCatRes_ = "";
+    private volatile String importNameRes_ = "";
+
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
@@ -139,7 +144,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    // FIX: pause render thread (g_dialog) + launch picker on UI thread only.
     private void startImport(final String category) {
         pendingImportCategory = category;
         g_dialog = true;
@@ -152,7 +156,7 @@ public class MainActivity extends Activity {
                 else if (category.equals("sounds")) intent.setType("audio/*");
                 else intent.setType("*/*");
                 startActivityForResult(intent, IMPORT_REQUEST_CODE);
-            } catch (Exception e) {
+            } catch (Throwable t) {
                 lastImportMsg_ = "no file picker";
                 g_dialog = false;
             }
@@ -177,15 +181,17 @@ public class MainActivity extends Activity {
                     byte[] buf = new byte[8192]; int n;
                     while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                     out.close(); in.close();
-                    lastImportMsg_ = "imported " + safeName + " -> " + pendingImportCategory;
-                    nativeImportFile(pendingImportCategory, safeName);
+                    importCatRes_ = pendingImportCategory;
+                    importNameRes_ = safeName;
+                    hasImportResult_ = true;
+                    lastImportMsg_ = "copied " + safeName;
                 } else {
                     lastImportMsg_ = "cannot read file";
                 }
             } else {
                 lastImportMsg_ = "import cancelled";
             }
-        } catch (Exception e) {
+        } catch (Throwable t) {
             lastImportMsg_ = "import failed";
         }
         pendingImportCategory = "";
@@ -287,7 +293,18 @@ public class MainActivity extends Activity {
 
         @Override public void run() {
             while (true) {
-                if (g_dialog) { try { Thread.sleep(33); } catch (Exception e) { return; } continue; }
+              try {
+                if (g_dialog) { Thread.sleep(33); continue; }
+
+                // Apply import result HERE, on the render thread (no cross-thread mutation).
+                if (hasImportResult_) {
+                    hasImportResult_ = false;
+                    String ic = importCatRes_, inm = importNameRes_;
+                    importCatRes_ = ""; importNameRes_ = "";
+                    try { nativeImportFile(ic, inm); lastImportMsg_ = "ok: " + inm; }
+                    catch (Throwable t) { lastImportMsg_ = "jni err: " + t; }
+                }
+
                 String frame = nativeStep(); if (frame == null) frame = "";
                 g_stepLen = frame.length();
                 g_stepHead = frame.replace("\n", "|");
@@ -322,7 +339,7 @@ public class MainActivity extends Activity {
                 }
 
                 Canvas c = getHolder().lockCanvas();
-                if (c == null) { try { Thread.sleep(8); continue; } catch (Exception e) { return; } }
+                if (c == null) { Thread.sleep(8); continue; }
                 int rw = getWidth(), rh = getHeight();
                 c.drawColor(Color.rgb(18, 18, 24));
                 if (rw > 0 && rh > 0) { c.save(); c.scale(rw / LOGIC_W, rh / LOGIC_H); for (String line : frame.split("\n")) drawLine(c, line); c.restore(); }
@@ -332,9 +349,14 @@ public class MainActivity extends Activity {
                 boolean hubOrMenu = frame.contains("PROJECTS") || frame.contains("START") || frame.contains("Play")
                                  || frame.contains("NEW") || frame.contains("Theme") || frame.contains("MENU");
                 if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
-                if (frame.contains("PROJECTS")) drawDiag(c, rw, rh);
+                if (frame.contains("PROJECTS") || frame.isEmpty()) drawDiag(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
-                try { Thread.sleep(16); } catch (Exception e) { return; }
+                Thread.sleep(16);
+              } catch (Throwable t) {
+                // Never let the render thread die: report and keep going.
+                lastImportMsg_ = "loop err: " + t;
+                try { Thread.sleep(33); } catch (Exception e) { return; }
+              }
             }
         }
 
@@ -493,4 +515,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                          }
+                                              }
