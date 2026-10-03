@@ -130,19 +130,31 @@ public:
 
     void submitImportFile(const std::string& category, const std::string& relativePath) {
         if (category.empty() || relativePath.empty()) return;
+
         std::string targetDir;
-        if (category == "fonts") targetDir = "assets/fonts/";
-        else if (category == "sprites") targetDir = "assets/sprites/";
+        if (category == "sprites") targetDir = "assets/";
+        else if (category == "fonts") targetDir = "assets/fonts/";
+        else if (category == "sounds") targetDir = "assets/sounds/";
         else if (category == "videos") targetDir = "assets/videos/";
         else if (category == "models") targetDir = "assets/models/";
-        else if (category == "sounds") targetDir = "assets/sounds/";
         else return;
-        std::string fullTarget = project_.rootPath + "/" + targetDir + relativePath;
-        std::string fullSource = project_.rootPath + "/temp_import/" + relativePath;
-        if (fileExists(fullSource)) {
-            std::string cmd = "mkdir -p \"" + project_.rootPath + "/" + targetDir + "\" && mv \"" + fullSource + "\" \"" + fullTarget + "\"";
-            system(cmd.c_str());
+
+        std::string src = project_.rootPath + "/temp_import/" + relativePath;
+        std::string dst = project_.rootPath + "/" + targetDir + relativePath;
+
+        std::string cmd = "mkdir -p \"" + project_.rootPath + "/" + targetDir +
+                          "\" && mv -f \"" + src + "\" \"" + dst + "\"";
+        system(cmd.c_str());
+
+        // Fallback on the render thread if the shell move did not happen.
+        if (fileExists(src) && !fileExists(dst)) {
+            std::rename(src.c_str(), dst.c_str());
         }
+
+        pendingImportCategory_.clear();
+        lastMsg_ = "imported " + category + ": " + relativePath;
+        buildEditorPanels();
+    }
         pendingImportCategory_.clear();
         lastMsg_ = "imported " + category + ": " + relativePath;
         buildEditorPanels();
