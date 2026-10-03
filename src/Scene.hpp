@@ -117,6 +117,24 @@ public:
         else if (type == "Solid2D") { auto s = std::make_unique<Solid2D>(); float w = 0, h = 0; if (jsonGetNumber(obj, "w", w)) s->w = w; if (jsonGetNumber(obj, "h", h)) s->h = h; node2d = std::move(s); }
         else if (type == "Camera2D") { auto c = std::make_unique<Camera2D>(); jsonGetString(obj, "follow", c->followName); float z = 0; if (jsonGetNumber(obj, "zoom", z)) c->zoom = z; node2d = std::move(c); }
         else if (type == "Light2D") { auto l = std::make_unique<Light2D>(); float r = 0; if (jsonGetNumber(obj, "radius", r)) l->radius = r; float i = 0; if (jsonGetNumber(obj, "intensity", i)) l->intensity = i; node2d = std::move(l); }
+        else if (type == "Particle2D") {
+            auto pe = std::make_unique<Particle2D>();
+            float f = 0;
+            if (jsonGetNumber(obj, "rate", f)) pe->rate = f;
+            if (jsonGetNumber(obj, "burst", f)) pe->burst = (int)f;
+            if (jsonGetNumber(obj, "vx", f)) pe->vx = f;
+            if (jsonGetNumber(obj, "vy", f)) pe->vy = f;
+            if (jsonGetNumber(obj, "spread", f)) pe->spread = f;
+            if (jsonGetNumber(obj, "gravity", f)) pe->gravity = f;
+            if (jsonGetNumber(obj, "life", f)) pe->life = f;
+            if (jsonGetNumber(obj, "life_spread", f)) pe->lifeSpread = f;
+            if (jsonGetNumber(obj, "size", f)) pe->size = f;
+            if (jsonGetNumber(obj, "size_end", f)) pe->sizeEnd = f;
+            if (jsonGetNumber(obj, "drag", f)) pe->drag = f;
+            jsonGetString(obj, "glyph", pe->glyph);
+            float em = 0; if (jsonGetNumber(obj, "emitting", em)) pe->emitting = (em != 0);
+            node2d = std::move(pe);
+        }
         else node2d = std::make_unique<Node2D>();
 
         jsonGetString(obj, "name", node2d->name);
