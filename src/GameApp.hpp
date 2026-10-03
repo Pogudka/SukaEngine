@@ -1411,6 +1411,45 @@ private:
         renderer.render(*sceneMgr_->current(), &ctx_);
 
         out += gameBackend_.str();
+        // --- B6-lite: draw particles (world -> screen via camera) ---
+        if (sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
+            Scene* ps = sceneMgr_->current();
+
+            float camX = 0, camY = 0, camZ = 1;
+            Node* cn = ps->root->findByType("Camera2D");
+            if (cn) {
+                Camera2D* cam = static_cast<Camera2D*>(cn);
+                camZ = cam->zoom > 0.01f ? cam->zoom : 1.0f;
+                camX = cam->position.x;
+                camY = cam->position.y;
+            }
+
+            const std::vector<Particle>& plist = g_particles.list();
+
+            for (const Particle& pp : plist) {
+                float t = pp.maxLife > 0.0f ? (1.0f - pp.life / pp.maxLife) : 1.0f;
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+
+                float sz = pp.size * (1.0f - t) + pp.sizeEnd * t;
+                if (sz < 1.0f) sz = 1.0f;
+
+                float sx = (pp.x - camX) * camZ + 640.0f;
+                float sy = (pp.y - camY) * camZ + 360.0f;
+
+                out += "DRAW text|";
+                out += pp.glyph;
+                out += "|";
+                out += std::to_string((int)sx);
+                out += "|";
+                out += std::to_string((int)sy);
+                out += "|";
+                out += std::to_string((int)sz);
+                out += "|";
+                out += colorToHex(pp.color);
+                out += "|0\n";
+            }
+        }
 
         if (dbg_) {
             nodeCount_ = countNodes(sceneMgr_->current()->root.get());
