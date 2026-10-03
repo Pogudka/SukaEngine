@@ -6,6 +6,8 @@
 #include <fstream>
 #include <functional>
 #include <cstdio>
+#include <cstdlib>
+#include <cmath>
 
 #include "Scene.hpp"
 
@@ -287,29 +289,32 @@ public:
 
     void setProjectRoot(const std::string& root) { projectRoot_ = root; }
 
-    // Makes a prefab out of the selected subtree.
-    // Writes the subtree as a standalone scene-format JSON in prefabs/<name>.json,
-    // then replaces the original node with a Prefab2D referencing it.
-    bool saveAsPrefab(const std::string& prefabName) {
+    // Core operation: write the selected subtree to fullPath as a scene-format
+    // json, then replace the original node in the tree with a Prefab2D that
+    // references relPath. Used by both the "->PF" button and SAVE PREFAB.
+    bool makePrefabFromSelected(const std::string& fullPath, const std::string& relPath) {
         if (!scene_ || !scene_->root || !selected_) return false;
         Node* sel = selected_;
         if (sel == scene_->root.get()) return false;
         Node* owner = scene_->root->findParentOf(sel->name);
         if (!owner) return false;
 
-        std::string relPath = "prefabs/" + prefabName + ".json";
-        std::string full = projectRoot_ + "/" + relPath;
-
-        size_t slash = full.find_last_of('/');
+        size_t slash = fullPath.find_last_of('/');
         if (slash != std::string::npos) {
-            std::string dir = full.substr(0, slash);
+            std::string dir = fullPath.substr(0, slash);
             std::string cmd = "mkdir -p \"" + dir + "\"";
             system(cmd.c_str());
         }
 
-        std::string json = "{\n  \"name\": \"" + prefabName + "\",\n  \"nodes\": [\n"
+        std::string nameOnly = relPath;
+        size_t sl2 = nameOnly.find_last_of('/');
+        if (sl2 != std::string::npos) nameOnly = nameOnly.substr(sl2 + 1);
+        if (nameOnly.size() > 5 && nameOnly.compare(nameOnly.size() - 5, 5, ".json") == 0)
+            nameOnly = nameOnly.substr(0, nameOnly.size() - 5);
+
+        std::string json = "{\n  \"name\": \"" + nameOnly + "\",\n  \"nodes\": [\n"
                          + SceneWriter::writeNode(*sel, 4) + "\n  ]\n}\n";
-        { std::ofstream f(full); if (!f.good()) return false; f << json; }
+        { std::ofstream f(fullPath); if (!f.good()) return false; f << json; }
 
         auto up = owner->takeChild(sel->name);
         if (!up) return false;
@@ -329,7 +334,15 @@ public:
         return true;
     }
 
-    // Saves the current scene to scenes/<name>.json.
+    // Convenience wrapper: prefabs/<name>.json under the project root.
+    bool saveAsPrefab(const std::string& prefabName) {
+        if (projectRoot_.empty()) return false;
+        std::string relPath = "prefabs/" + prefabName + ".json";
+        std::string full = projectRoot_ + "/" + relPath;
+        return makePrefabFromSelected(full, relPath);
+    }
+
+    // Saves the whole current scene to scenes/<name>.json.
     bool saveScene(const std::string& sceneName) {
         if (!scene_) return false;
         if (projectRoot_.empty()) return false;
