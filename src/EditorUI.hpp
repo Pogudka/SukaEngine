@@ -161,21 +161,11 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
     edbg->w = VW; edbg->h = VH; edbg->position = Vec2{VX0 + VW / 2, VY0 + VH / 2};
     s.root->addChild(std::move(edbg));
 
-    {
-        UiButton b; b.touch.id = "ssave"; b.touch.rect = Rect{300, 34, 70, 26}; b.text = "SAVE"; b.action = "ssave"; b.color = parseColor("#2E7D32"); s.ui.push_back(b);
-    }
-    {
-        UiButton b; b.touch.id = "sclose"; b.touch.rect = Rect{374, 34, 70, 26}; b.text = "SCENE"; b.action = "tab_scene"; b.color = GO; s.ui.push_back(b);
-    }
-    {
-        UiButton b; b.touch.id = "kbtog"; b.touch.rect = Rect{448, 34, 80, 26}; b.text = in.imeShown ? "KB OFF" : "KB ON"; b.action = "kb_toggle"; b.color = in.imeShown ? th.button : th.accent; s.ui.push_back(b);
-    }
-    {
-        UiButton b; b.touch.id = "scu"; b.touch.rect = Rect{860, 70, 26, 26}; b.text = "^"; b.action = "scup"; b.color = th.button; s.ui.push_back(b);
-    }
-    {
-        UiButton b; b.touch.id = "scd"; b.touch.rect = Rect{860, 100, 26, 26}; b.text = "v"; b.action = "scdn"; b.color = th.button; s.ui.push_back(b);
-    }
+    { UiButton b; b.touch.id = "ssave"; b.touch.rect = Rect{300, 34, 70, 26}; b.text = "SAVE"; b.action = "ssave"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "sclose"; b.touch.rect = Rect{374, 34, 70, 26}; b.text = "SCENE"; b.action = "tab_scene"; b.color = GO; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "kbtog"; b.touch.rect = Rect{448, 34, 80, 26}; b.text = in.imeShown ? "KB OFF" : "KB ON"; b.action = "kb_toggle"; b.color = in.imeShown ? th.button : th.accent; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "scu"; b.touch.rect = Rect{860, 70, 26, 26}; b.text = "^"; b.action = "scup"; b.color = th.button; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "scd"; b.touch.rect = Rect{860, 100, 26, 26}; b.text = "v"; b.action = "scdn"; b.color = th.button; s.ui.push_back(b); }
 
     const int LINES = 24;
     const float LH = 19;
@@ -224,17 +214,11 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.root->addChild(std::move(l));
     };
 
-    {
-        UiButton b; b.touch.id = "settings_btn"; b.touch.rect = Rect{10, 4, 32, 26}; b.text = "*"; b.action = "settings_open"; b.color = GO; s.ui.push_back(b);
-    }
-    {
-        UiButton b; b.touch.id = "tab_scene"; b.touch.rect = Rect{50, 4, 80, 26}; b.text = "Scene"; b.action = "tab_scene"; b.color = in.scriptMode ? th.button : GO; s.ui.push_back(b);
-    }
+    { UiButton b; b.touch.id = "settings_btn"; b.touch.rect = Rect{10, 4, 32, 26}; b.text = "*"; b.action = "settings_open"; b.color = GO; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "tab_scene"; b.touch.rect = Rect{50, 4, 80, 26}; b.text = "Scene"; b.action = "tab_scene"; b.color = in.scriptMode ? th.button : GO; s.ui.push_back(b); }
     addLbl("Tab2D", "2D", 140, 8, 20, th.ink);
     addLbl("Tab3D", "3D", 190, 8, 20, th.ink);
-    {
-        UiButton b; b.touch.id = "tab_scripts"; b.touch.rect = Rect{230, 4, 90, 26}; b.text = "Scripts"; b.action = "tab_scripts"; b.color = in.scriptMode ? GO : th.button; s.ui.push_back(b);
-    }
+    { UiButton b; b.touch.id = "tab_scripts"; b.touch.rect = Rect{230, 4, 90, 26}; b.text = "Scripts"; b.action = "tab_scripts"; b.color = in.scriptMode ? GO : th.button; s.ui.push_back(b); }
     addLbl("TabAss", "AssetLib", 330, 8, 20, th.ink);
 
     if (in.scriptMode) { editorBuildScriptScene(in, s); return s; }
@@ -556,49 +540,39 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         addLbl("AsHint", "tap = assign / create sprite", 10, ay + 4, 12, th.ink);
     }
 
-    // Settings window: drawn LAST so it sits on top of everything.
-    // Window box: x 360..920, y 80..640. All children kept inside.
+    // Settings window built ONLY from buttons, added last => draws on top of everything.
     if (in.showSettings) {
-        auto stbg = std::make_unique<Node2D>();
-        stbg->name = "__stbg";
-        stbg->shape = "square";
-        stbg->color = 0x14141CFF;
-        stbg->w = 560;
-        stbg->h = 560;
-        stbg->position = Vec2{640, 360};
-        s.root->addChild(std::move(stbg));
+        const unsigned BG = 0x14141CFF;
 
-        addLbl("StTitle", "SETTINGS", 400, 100, 24, GO);
-
-        {
+        auto btn = [&](const std::string& id, float x, float y, float w, float h,
+                       const std::string& txt, const std::string& action, unsigned col) {
             UiButton b;
-            b.touch.id = "st_close";
-            b.touch.rect = Rect{830, 92, 70, 32};
-            b.text = "CLOSE";
-            b.action = "settings_close";
-            b.color = parseColor("#D62828");
+            b.touch.id = id;
+            b.touch.rect = Rect{x, y, w, h};
+            b.text = txt;
+            b.action = action;
+            b.color = col;
             s.ui.push_back(b);
-        }
+        };
+
+        btn("__stbg",    360,  80, 560, 560, "", "", BG);
+        btn("__sttitle", 380,  92, 520,  56, "SETTINGS", "", BG);
+        btn("st_close",  830,  96,  70,  32, "CLOSE", "settings_close", parseColor("#D62828"));
 
         const char* catName[5] = { "Fonts", "Sprites", "Videos", "Models", "Sounds" };
         const char* catKey[5]  = { "fonts", "sprites", "videos", "models", "sounds" };
         bool catReady[5]       = { true, true, false, false, false };
 
         for (int i = 0; i < 5; ++i) {
-            float y = 150 + (float)i * 92;
-
-            addLbl(("StCat" + std::to_string(i)).c_str(), catName[i], 400, y, 20, th.ink);
-
-            UiButton b;
-            b.touch.id = "st_imp" + std::to_string(i);
-            b.touch.rect = Rect{400, y + 26, 220, 40};
-            b.text = std::string("Import ") + catName[i] + (catReady[i] ? "" : " (soon)");
-            b.action = std::string("import_category:") + catKey[i];
-            b.color = catReady[i] ? th.accent : parseColor("#666666");
-            s.ui.push_back(b);
+            float y = 170 + (float)i * 88;
+            btn(std::string("__stcat") + std::to_string(i), 400, y, 200, 36, catName[i], "", BG);
+            btn(std::string("st_imp") + std::to_string(i), 400, y + 40, 220, 40,
+                std::string("Import ") + catName[i] + (catReady[i] ? "" : " (soon)"),
+                std::string("import_category:") + catKey[i],
+                catReady[i] ? th.accent : parseColor("#666666"));
         }
 
-        addLbl("StHint", "files are copied into assets/<category>/", 400, 600, 14, th.ink);
+        btn("__sthint", 380, 600, 520, 28, "files are copied into assets/<category>/", "", BG);
     }
 
     return s;
