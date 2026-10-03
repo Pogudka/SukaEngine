@@ -15,49 +15,54 @@
 // -----------------------------------------------------------------------------
 // Auto-detect Lua headers.
 //
-// If Lua is not available, ScriptSystem becomes a safe stub:
-// - scripts do nothing;
-// - build still works;
-// - Tween engine still works internally.
-//
-// If Lua headers are found, real Lua bindings are enabled.
+// If Lua headers are available, real Lua scripting is enabled.
+// If not, ScriptSystem becomes a safe stub so the project still builds.
 // -----------------------------------------------------------------------------
 
-#if defined(SUKA_NO_LUA)
-# define SUKA_HAS_LUA 0
-#elif defined(__has_include)
-# if __has_include(<lua.h>) && __has_include(<lauxlib.h>) && __has_include(<lualib.h>)
-#  define SUKA_HAS_LUA 1
-#  define SUKA_LUA_INCLUDE_SYSTEM 1
-# elif __has_include("lua/lua.h") && __has_include("lua/lauxlib.h") && __has_include("lua/lualib.h")
-#  define SUKA_HAS_LUA 1
-#  define SUKA_LUA_INCLUDE_SUBDIR 1
-# elif __has_include("../third_party/lua/lua.h") &&
-       __has_include("../third_party/lua/lauxlib.h") &&
-       __has_include("../third_party/lua/lualib.h")
-#  define SUKA_HAS_LUA 1
-#  define SUKA_LUA_INCLUDE_THIRD_PARTY 1
+#ifndef SUKA_HAS_LUA
+# if defined(__has_include)
+#  if __has_include(<lua.h>) && __has_include(<lauxlib.h>) && __has_include(<lualib.h>)
+#   define SUKA_HAS_LUA 1
+#   define SUKA_LUA_MODE 1
+#  elif __has_include("lua/lua.h") && __has_include("lua/lauxlib.h") && __has_include("lua/lualib.h")
+#   define SUKA_HAS_LUA 1
+#   define SUKA_LUA_MODE 2
+#  elif __has_include("../third_party/lua/lua.h") && __has_include("../third_party/lua/lauxlib.h") && __has_include("../third_party/lua/lualib.h")
+#   define SUKA_HAS_LUA 1
+#   define SUKA_LUA_MODE 3
+#  elif __has_include("third_party/lua/lua.h") && __has_include("third_party/lua/lauxlib.h") && __has_include("third_party/lua/lualib.h")
+#   define SUKA_HAS_LUA 1
+#   define SUKA_LUA_MODE 4
+#  else
+#   define SUKA_HAS_LUA 0
+#  endif
 # else
 #  define SUKA_HAS_LUA 0
 # endif
-#else
-# define SUKA_HAS_LUA 0
 #endif
 
 #if SUKA_HAS_LUA
+# if !defined(SUKA_LUA_MODE)
+#  define SUKA_LUA_MODE 1
+# endif
+
 extern "C" {
-# if defined(SUKA_LUA_INCLUDE_SYSTEM)
+# if SUKA_LUA_MODE == 1
 #  include <lua.h>
 #  include <lauxlib.h>
 #  include <lualib.h>
-# elif defined(SUKA_LUA_INCLUDE_SUBDIR)
+# elif SUKA_LUA_MODE == 2
 #  include "lua/lua.h"
 #  include "lua/lauxlib.h"
 #  include "lua/lualib.h"
-# elif defined(SUKA_LUA_INCLUDE_THIRD_PARTY)
+# elif SUKA_LUA_MODE == 3
 #  include "../third_party/lua/lua.h"
 #  include "../third_party/lua/lauxlib.h"
 #  include "../third_party/lua/lualib.h"
+# elif SUKA_LUA_MODE == 4
+#  include "third_party/lua/lua.h"
+#  include "third_party/lua/lauxlib.h"
+#  include "third_party/lua/lualib.h"
 # endif
 }
 #endif
@@ -585,7 +590,7 @@ private:
 #else
 
 // Safe no-Lua fallback.
-// Build works, but .lua scripts are ignored.
+// The build succeeds, but .lua scripts are ignored.
 class ScriptSystem {
 public:
     void load(const std::string&) {}
