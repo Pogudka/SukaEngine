@@ -1,3 +1,5 @@
+#pragma once
+
 #include <string>
 #include <vector>
 #include <map>
@@ -23,7 +25,7 @@ extern "C" {
 
 namespace suka {
 
-std::vector<std::string> g_luaLog;
+inline std::vector<std::string> g_luaLog;
 
 using VarMap = decltype(std::declval<Context&>().vars);
 
