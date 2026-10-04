@@ -22,14 +22,14 @@ struct Body {
     float mass = 1.0f;
     float vx = 0.0f, vy = 0.0f;
     bool gravity = true;
-    float restitution = 0.0f;   // 0..1 упругость
-    float friction = 0.0f;      // гашение vx на земле
+    float restitution = 0.0f;
+    float friction = 0.0f;
     bool onGround = false;
 };
 
 inline std::map<std::string, Body> g_bodies;
 inline std::mutex g_bodiesMtx;
-inline float g_gravity = 900.0f;                       // px/s^2
+inline float g_gravity = 900.0f;
 inline std::vector<std::pair<std::string, std::string>> g_collideEvents;
 inline std::mutex g_collideMtx;
 
@@ -50,9 +50,13 @@ inline void bodyRemove(const std::string& nm) {
     g_bodies.erase(nm);
 }
 
-inline void physicsUpdate(Scene& sc, float dt) {
-    if (dt <= 0.0f) return;
-    if (dt > 0.05f) dt = 0.05f;
+inline void pushCollideEvent(const std::string& a, const std::string& b) {
+    std::lock_guard<std::mutex> lk(g_collideMtx);
+    for (const auto& p : g_collideEvents) if (p.first == a && p.second == b) return;
+    g_collideEvents.push_back(std::make_pair(a, b));
+}
+
+inline void physicsStepOnce(Scene& sc, float dt) {
     if (!sc.root) return;
 
     struct Ent { std::string nm; Node2D* n; Body* b; float hw, hh; };
@@ -74,17 +78,20 @@ inline void physicsUpdate(Scene& sc, float dt) {
         }
     }
 
-    // Интегрирование динамических тел
+    // Интегрирование с ограничением скорости (меньше туннелирования)
     for (auto& e : ents) {
         if (e.b->isStatic) continue;
         if (e.b->gravity) e.b->vy += g_gravity * dt;
+        if (e.b->vy >  1600.0f) e.b->vy =  1600.0f;
+        if (e.b->vy < -1600.0f) e.b->vy = -1600.0f;
+        if (e.b->vx >  2000.0f) e.b->vx =  2000.0f;
+        if (e.b->vx < -2000.0f) e.b->vx = -2000.0f;
         e.n->position.x += e.b->vx * dt;
         e.n->position.y += e.b->vy * dt;
         e.b->onGround = false;
     }
 
-    // Попарные AABB-коллизии
-    std::set<std::pair<std::string, std::string>> fired;
+    // Попарные AABB-коллизии с полным выталкиванием
     for (size_t i = 0; i < ents.size(); ++i) {
         for (size_t j = i + 1; j < ents.size(); ++j) {
             Ent& A = ents[i];
@@ -97,16 +104,11 @@ inline void physicsUpdate(Scene& sc, float dt) {
             float oy = (A.hh + B.hh) - std::fabs(dy);
             if (ox <= 0.0f || oy <= 0.0f) continue;
 
-            auto key = std::make_pair(A.nm, B.nm);
-            if (fired.insert(key).second) {
-                std::lock_guard<std::mutex> lk(g_collideMtx);
-                g_collideEvents.push_back(key);
-            }
+            pushCollideEvent(A.nm, B.nm);
 
             float rest = std::max(A.b->restitution, B.b->restitution);
 
             if (ox < oy) {
-                // Разрешение по X
                 float s = dx > 0.0f ? 1.0f : -1.0f;
                 if (A.b->isStatic) { B.n->position.x += ox * s; B.b->vx = -B.b->vx * rest; }
                 else if (B.b->isStatic) { A.n->position.x -= ox * s; A.b->vx = -A.b->vx * rest; }
@@ -116,24 +118,26 @@ inline void physicsUpdate(Scene& sc, float dt) {
                     A.n->position.x -= ox * s * wa;
                     B.n->position.x += ox * s * wb;
                     float va = A.b->vx, vb = B.b->vx;
-                    A.b->vx = vb * rest + va * (1.0f - rest) * 0.0f;
-                    B.b->vx = va * rest + vb * (1.0f - rest) * 0.0f;
-                    std::swap(A.b->vx, B.b->vx);
                     A.b->vx = -va * rest; B.b->vx = -vb * rest;
                 }
             } else {
-                // Разрешение по Y
                 float s = dy > 0.0f ? 1.0f : -1.0f;
                 if (A.b->isStatic) {
                     B.n->position.y += oy * s;
-                    if (s < 0.0f) { B.b->onGround = true; if (B.b->friction > 0.0f) B.b->vx *= std::max(0.0f, 1.0f - B.b->friction * dt * 10.0f); }
+                    if (s < 0.0f) {
+                        B.b->onGround = true;
+                        if (B.b->friction > 0.0f) B.b->vx *= std::max(0.0f, 1.0f - B.b->friction * dt * 10.0f);
+                    }
                     B.b->vy = -B.b->vy * rest;
-                    if (std::fabs(B.b->vy) < 20.0f) B.b->vy = 0.0f;
+                    if (std::fabs(B.b->vy) < 40.0f) B.b->vy = 0.0f;
                 } else if (B.b->isStatic) {
                     A.n->position.y -= oy * s;
-                    if (s > 0.0f) { A.b->onGround = true; if (A.b->friction > 0.0f) A.b->vx *= std::max(0.0f, 1.0f - A.b->friction * dt * 10.0f); }
+                    if (s > 0.0f) {
+                        A.b->onGround = true;
+                        if (A.b->friction > 0.0f) A.b->vx *= std::max(0.0f, 1.0f - A.b->friction * dt * 10.0f);
+                    }
                     A.b->vy = -A.b->vy * rest;
-                    if (std::fabs(A.b->vy) < 20.0f) A.b->vy = 0.0f;
+                    if (std::fabs(A.b->vy) < 40.0f) A.b->vy = 0.0f;
                 } else {
                     float wa = B.b->mass / (A.b->mass + B.b->mass);
                     float wb = 1.0f - wa;
@@ -145,6 +149,14 @@ inline void physicsUpdate(Scene& sc, float dt) {
             }
         }
     }
+}
+
+inline void physicsUpdate(Scene& sc, float dt) {
+    if (dt <= 0.0f) return;
+    if (dt > 0.05f) dt = 0.05f;
+    // Два подшага: меньше проваливаний на быстрых падениях.
+    physicsStepOnce(sc, dt * 0.5f);
+    physicsStepOnce(sc, dt * 0.5f);
 }
 
 // ================= Lua-биндинги физики =================
