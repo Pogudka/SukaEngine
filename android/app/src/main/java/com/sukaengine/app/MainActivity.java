@@ -322,22 +322,10 @@ public class MainActivity extends Activity {
             outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE;
             outAttrs.imeOptions |= EditorInfo.IME_FLAG_NO_EXTRACT_UI;
             return new BaseInputConnection(this, false) {
-                @Override public boolean commitText(CharSequence text, int newCursorPosition) {
-                    nativeScriptText(text.toString());
-                    return true;
-                }
-                @Override public boolean setComposingText(CharSequence text, int newCursorPosition) {
-                    nativeScriptCompose(text.toString());
-                    return true;
-                }
-                @Override public boolean finishComposingText() {
-                    nativeScriptFinish();
-                    return true;
-                }
-                @Override public boolean deleteSurroundingText(int before, int after) {
-                    for (int i = 0; i < before; ++i) nativeScriptKey(67);
-                    return true;
-                }
+                @Override public boolean commitText(CharSequence text, int newCursorPosition) { nativeScriptText(text.toString()); return true; }
+                @Override public boolean setComposingText(CharSequence text, int newCursorPosition) { nativeScriptCompose(text.toString()); return true; }
+                @Override public boolean finishComposingText() { nativeScriptFinish(); return true; }
+                @Override public boolean deleteSurroundingText(int before, int after) { for (int i = 0; i < before; ++i) nativeScriptKey(67); return true; }
                 @Override public boolean sendKeyEvent(KeyEvent event) {
                     if (event.getAction() == KeyEvent.ACTION_DOWN) {
                         int c = event.getKeyCode();
@@ -364,20 +352,11 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> { try { setRequestedOrientation(orient); } catch (Throwable t) { } });
         }
 
-        @Override public void surfaceCreated(SurfaceHolder h) {
-            running_ = true;
-            thread = new Thread(this);
-            thread.start();
-        }
+        @Override public void surfaceCreated(SurfaceHolder h) { running_ = true; thread = new Thread(this); thread.start(); }
         @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) { }
         @Override public void surfaceDestroyed(SurfaceHolder h) {
             running_ = false;
-            try {
-                if (thread != null) {
-                    thread.interrupt();
-                    thread.join(500);
-                }
-            } catch (Exception e) { }
+            try { if (thread != null) { thread.interrupt(); thread.join(500); } } catch (Exception e) { }
             thread = null;
         }
 
@@ -408,9 +387,7 @@ public class MainActivity extends Activity {
                             try {
                                 float nw = Float.parseFloat(rp[1]);
                                 float nh = Float.parseFloat(rp[2]);
-                                if (nw >= 160f && nw <= 2160f && nh >= 160f && nh <= 2160f) {
-                                    logicW = nw; logicH = nh;
-                                }
+                                if (nw >= 160f && nw <= 2160f && nh >= 160f && nh <= 2160f) { logicW = nw; logicH = nh; }
                             } catch (Throwable t) { }
                         }
                     } else if (line.startsWith("ORIENT|")) {
@@ -464,9 +441,18 @@ public class MainActivity extends Activity {
                 clIdx.clear(); clText.clear(); clY.clear();
                 int rw = getWidth(), rh = getHeight();
                 c.drawColor(Color.rgb(18, 18, 24));
+
+                // CONTAIN‑вписывание: единый масштаб по обеим осям + центрирование.
+                // Раньше было c.scale(rw/logicW, rh/logicH) -> разные коэффициенты ->
+                // искажение и "уезд" кнопок в портрете ("Чили"). Теперь пропорции целые,
+                // свободное пространство — чёрные поля (фон уже залит выше).
                 if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
+                    float s  = Math.min(rw / logicW, rh / logicH);
+                    float ox = (rw - logicW * s) * 0.5f;
+                    float oy = (rh - logicH * s) * 0.5f;
                     c.save();
-                    c.scale(rw / logicW, rh / logicH);
+                    c.translate(ox, oy);
+                    c.scale(s, s);
                     for (String line : frame.split("\n")) drawLine(c, line);
                     c.restore();
                 } else {
@@ -679,8 +665,14 @@ public class MainActivity extends Activity {
             int a = e.getActionMasked();
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
-            float lx = rw > 0 ? e.getX() * logicW / rw : e.getX();
-            float ly = rh > 0 ? e.getY() * logicH / rh : e.getY();
+            // Маппинг тапа в логику должен совпадать с contain‑вписыванием выше:
+            // тот же масштаб s и те же смещения ox/oy, иначе тапы "уедут" в портрете.
+            float s = (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f)
+                    ? Math.min(rw / logicW, rh / logicH) : 1.0f;
+            float ox = (rw - logicW * s) * 0.5f;
+            float oy = (rh - logicH * s) * 0.5f;
+            float lx = (e.getX() - ox) / s;
+            float ly = (e.getY() - oy) / s;
 
             if (a == MotionEvent.ACTION_DOWN && count == 1 && !clIdx.isEmpty()
                     && lx >= CODE_X0 && lx <= CODE_X1 && ly >= CODE_Y0 && ly <= CODE_Y1) {
@@ -719,10 +711,8 @@ public class MainActivity extends Activity {
             }
 
             if (count >= 2) {
-                float x0 = rw > 0 ? e.getX(0) * logicW / rw : e.getX(0);
-                float y0 = rh > 0 ? e.getY(0) * logicH / rh : e.getY(0);
-                float x1 = rw > 0 ? e.getX(1) * logicW / rw : e.getX(1);
-                float y1 = rh > 0 ? e.getY(1) * logicH / rh : e.getY(1);
+                float x0 = (e.getX(0) - ox) / s, y0 = (e.getY(0) - oy) / s;
+                float x1 = (e.getX(1) - ox) / s, y1 = (e.getY(1) - oy) / s;
                 int ph = (a == MotionEvent.ACTION_POINTER_DOWN || a == MotionEvent.ACTION_DOWN) ? 1
                        : (a == MotionEvent.ACTION_POINTER_UP   || a == MotionEvent.ACTION_UP)   ? 3 : 2;
                 nativeMultiTouch(ph, x0, y0, x1, y1);
@@ -734,4 +724,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                                                     }
+        }
