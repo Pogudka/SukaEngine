@@ -215,6 +215,11 @@ public:
         return true;
     }
 
+    // Оверлейные кнопки (X / DBG) рисуются в Java в экранных координатах и шлют
+    // сюда действие строкой ("close:" / "dbg:"). Отдельный вход, чтобы не зависеть
+    // от координат холста и поворотов.
+    void overlayAction(const std::string& a) { runAction(a); }
+
     void submitText(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); textRes_ = t; hasText_ = true; }
     void submitName(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); nameRes_ = t; hasName_ = true; }
     void submitAction(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); actionRes_ = t; hasAction_ = true; }
@@ -328,10 +333,9 @@ public:
                     return;
                 }
                 if (y >= CAM_BTN_O_Y0 && y <= CAM_BTN_O_Y1) {
-                    // ROT = ориентация ОКНА (как держит телефон игрок). Размер холста
-                    // (W/H) НЕ трогаем: свап мира ломал свёрстанную сцену (обрезка
-                    // справа). Рассогласование окна и холста лечит Java поворотом
-                    // кадра на 90 градусов -> сцена видна целиком во весь экран.
+                    // ROT = ориентация ОКНА (как держит телефон). Холст (W/H) НЕ трогаем:
+                    // свап мира ломал свёрстанную сцену. Рассогласование окна и холста
+                    // даёт аккуратные поля, а кнопки/лог — экранный оверлей (всегда норм.).
                     projVertical_ = !projVertical_;
                     saveProjCamera();
                     return;
@@ -494,7 +498,6 @@ private:
         if (h < 160.0) h = 160.0; if (h > 2160.0) h = 2160.0;
         projCamW_ = (float)w; projCamH_ = (float)h;
         // "vertical" = ориентация ОКНА (независимый флаг), НЕ выводится из W/H.
-        // Рассогласование окна и холста теперь безопасно: Java поворачивает кадр.
         projVertical_ = jsonBool(s, "\"vertical\"", false);
     }
     void saveProjCamera() {
@@ -561,16 +564,10 @@ private:
         if (cmd.transition) startTransition(cmd.type, cmd.scene, cmd.duration);
     }
 
+    // close/dbg теперь рисует Java как экранный оверлей, поэтому в сцену их не кладём.
     void ensureGameButtons() {
         Scene* sc = (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
         if (!sc) return;
-        bool hasClose = false, hasDbg = false;
-        for (auto& b : sc->ui) {
-            if (b.touch.id == "close") { hasClose = true; b.touch.rect = Rect{logicW_ - 100.0f, 10.0f, 90.0f, 70.0f}; b.text = "X"; b.action = playFromEditor_ ? "editor_return:" : "hub:"; b.color = parseColor("#D62828"); }
-            else if (b.touch.id == "dbg") { hasDbg = true; b.touch.rect = Rect{logicW_ - 200.0f, 10.0f, 90.0f, 70.0f}; b.text = "DBG"; b.action = "dbg:"; b.color = parseColor("#808080"); }
-        }
-        if (!hasClose) { UiButton c; c.touch.id = "close"; c.touch.rect = Rect{logicW_ - 100.0f, 10.0f, 90.0f, 70.0f}; c.text = "X"; c.action = playFromEditor_ ? "editor_return:" : "hub:"; c.color = parseColor("#D62828"); sc->ui.push_back(c); }
-        if (!hasDbg) { UiButton d; d.touch.id = "dbg"; d.touch.rect = Rect{logicW_ - 200.0f, 10.0f, 90.0f, 70.0f}; d.text = "DBG"; d.action = "dbg:"; d.color = parseColor("#808080"); sc->ui.push_back(d); }
         input_.setUi(&sc->ui);
     }
 
@@ -893,6 +890,7 @@ private:
         logicW_ = projCamW_; logicH_ = projCamH_; orientVertical_ = projVertical_;
         input_.screenWidth = logicW_; input_.screenHeight = logicH_;
         orientName_ = orientVertical_ ? "portrait" : "landscape";
+        emitOrient_ = true;
         clearTransition();
 
         ensureGameButtons();
@@ -969,29 +967,36 @@ private:
             out += ab; out += "000000|0\n";
         }
 
+        // DBG-статистика и лог Lua уходят в экранный оверлей (OVSTAT/OVLOG), чтобы
+        // читались горизонтально и не зависели от ориентации/полей. В координатах
+        // холста их больше не рисуем.
         if (dbg_ && sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
             nodeCount_ = countNodes(sceneMgr_->current()->root.get()); lastDraws_ = 0;
             for (size_t i = 0; i + 4 < out.size(); ++i) if (out[i] == 'D' && out[i + 1] == 'R' && out[i + 2] == 'A' && out[i + 3] == 'W') ++lastDraws_;
-            out += "DRAW text|fps " + std::to_string((int)fps_) + "  nodes " + std::to_string(nodeCount_) + "  draws " + std::to_string(lastDraws_) + "  parts " + std::to_string((int)g_particles.count()) + "|20|100|18|#FFD700|0\n";
-            out += "DRAW text|vars " + std::to_string((int)ctx_.vars.size()) + "  score " + std::to_string(ctx_.score) + "|20|124|18|#FFD700|0\n";
-            size_t ln = g_luaLog.size(); int show = ln > 4 ? 4 : (int)ln;
-            for (int i = 0; i < show; ++i) out += "DRAW text|" + g_luaLog[ln - show + i] + "|20|" + std::to_string(148 + i * 20) + "|16|#87CEEB|0\n";
+            out += "OVSTAT|fps " + std::to_string((int)fps_) + "  nodes " + std::to_string(nodeCount_) + "  draws " + std::to_string(lastDraws_) + "  parts " + std::to_string((int)g_particles.count()) + "  vars " + std::to_string((int)ctx_.vars.size()) + "  score " + std::to_string(ctx_.score) + "\n";
+            size_t ln = g_luaLog.size(); int show = ln > 6 ? 6 : (int)ln;
+            for (int i = 0; i < show; ++i) out += "OVLOG|" + g_luaLog[ln - show + i] + "\n";
         }
 
         out += "MODE|game\n";
         out += "RES|" + std::to_string((int)logicW_) + "|" + std::to_string((int)logicH_) + "\n";
-        // ORIENT эмитится КАЖДЫЙ кадр в игре: Java по нему ставит ориентацию ОКНА,
-        // а поворот кадра (если окно != холст) считает сам. Без этого Java терял бы
-        // желание автора после первого кадра.
-        out += "ORIENT|" + orientName_ + "\n";
+        if (emitOrient_) { out += "ORIENT|" + orientName_ + "\n"; emitOrient_ = false; }
         input_.endFrame(); return out;
     }
 
     void runAction(const std::string& act) {
-        Scene* sc = sceneMgr_ ? sceneMgr_->current() : nullptr; if (!sc) return;
+        Scene* sc = sceneMgr_ ? sceneMgr_->current() : nullptr; if (!sc && act != "dbg:") { /* dbg toggle ok without scene */ }
         if (act == "dbg:") { dbg_ = !dbg_; return; }
         const std::string pReturn = "editor_return:";
-        const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:";
+        const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:", pClose = "close:";
+        if (act == pClose) {
+            // Кнопка X оверлея: возврат в редактор (если играли из него) или в хаб.
+            if (saveVarsEnabled_) saveVars();
+            clearTransition();
+            if (playFromEditor_) { playFromEditor_ = false; enterEditor(lastEditorDir_); }
+            else { playFromEditor_ = false; appMode_ = AppMode::Hub; pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear(); clearDialogResults(); rebuildHub(); }
+            return;
+        }
         if (act.rfind(pReturn, 0) == 0) {
             playFromEditor_ = false;
             if (saveVarsEnabled_) saveVars();
@@ -1010,7 +1015,7 @@ private:
         }
         else if (act.rfind(pRestart, 0) == 0) { startTransition(3, act.substr(pRestart.size()), 0.0f); }
         else if (act.rfind(pChange, 0) == 0) { startTransition(3, act.substr(pChange.size()), 0.0f); }
-        else if (act.rfind(pCall, 0) == 0) scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars, sc);
+        else if (act.rfind(pCall, 0) == 0) { if (sc) scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars, sc); }
         else if (act.rfind(pAdd, 0) == 0 || act.rfind(pSet, 0) == 0) {
             bool isAdd = act.rfind(pAdd, 0) == 0;
             std::string rest = act.substr(isAdd ? pAdd.size() : pSet.size());
@@ -1437,7 +1442,6 @@ private:
             emitEditorGizmos(*editor_->scene(), out, makeEditorRenderInput());
             out += "DRAW clipoff\n";
 
-            // Camera panel overlay (top-right of viewport). Drawn here, handled in feedTouch.
             std::string wTxt = "W " + std::to_string((int)projCamW_);
             std::string hTxt = "H " + std::to_string((int)projCamH_);
             std::string oTxt = projVertical_ ? "ROT:PORT" : "ROT:LAND";
