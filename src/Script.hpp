@@ -1,1105 +1,287 @@
-#pragma once
-
 #include <string>
 #include <vector>
 #include <map>
+#include <fstream>
+#include <sstream>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <cmath>
 #include <algorithm>
+#include <utility>
+#include <mutex>
 #include <dirent.h>
 
-#include "Core.hpp"
-#include "Scene.hpp"
-#include "Resources.hpp"
-#include "Tween.hpp"
-#include "UiUtils.hpp"
-#include "Particles.hpp"
-
-// -----------------------------------------------------------------------------
-// Auto-detect Lua headers.
-//
-// If Lua headers are available (they become available once CMake downloads and
-// links Lua), real Lua scripting is enabled. If not, ScriptSystem is a safe
-// stub so the project still builds.
-// -----------------------------------------------------------------------------
-
-#ifndef SUKA_HAS_LUA
-# if defined(__has_include)
-#  if __has_include(<lua.h>) && __has_include(<lauxlib.h>) && __has_include(<lualib.h>)
-#   define SUKA_HAS_LUA 1
-#   define SUKA_LUA_MODE 1
-#  elif __has_include("lua/lua.h") && __has_include("lua/lauxlib.h") && __has_include("lua/lualib.h")
-#   define SUKA_HAS_LUA 1
-#   define SUKA_LUA_MODE 2
-#  else
-#   define SUKA_HAS_LUA 0
-#  endif
-# else
-#  define SUKA_HAS_LUA 0
-# endif
-#endif
-
-#if SUKA_HAS_LUA
-# if !defined(SUKA_LUA_MODE)
-#  define SUKA_LUA_MODE 1
-# endif
-
 extern "C" {
-# if SUKA_LUA_MODE == 1
-#  include <lua.h>
-#  include <lauxlib.h>
-#  include <lualib.h>
-# elif SUKA_LUA_MODE == 2
-#  include "lua/lua.h"
-#  include "lua/lauxlib.h"
-#  include "lua/lualib.h"
-# endif
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
 }
-#endif
+
+#include "Script.hpp"
+#include "LuaGameApi.hpp"
+#include "Scene.hpp"
 
 namespace suka {
 
-inline std::vector<std::string> g_luaLog;
+std::vector<std::string> g_luaLog;
 
-#if SUKA_HAS_LUA
+using VarMap = decltype(std::declval<Context&>().vars);
 
-inline Context* g_scriptCtx = nullptr;
-inline Scene* g_scriptScene = nullptr;
-inline SceneManager* g_scriptMgr = nullptr;
-inline std::map<std::string, double>* g_scriptVars = nullptr;
+static Context* g_ctx = nullptr;
+static SceneManager* g_sm = nullptr;
+static Scene* g_scene = nullptr;
+static VarMap* g_vars = nullptr;
 
-static Node2D* scriptFindNode(const char* name) {
-    if (!g_scriptScene || !g_scriptScene->root || !name) {
-        return nullptr;
-    }
-
-    Node* n = g_scriptScene->root->findNode(name);
-    return dynamic_cast<Node2D*>(n);
+static void logLua(const std::string& s) {
+    g_luaLog.push_back(s);
+    if (g_luaLog.size() > 80) g_luaLog.erase(g_luaLog.begin());
 }
 
-// List *.lua files in a directory without depending on any FileBrowser type.
-static std::vector<std::string> listLuaFiles(const std::string& dir) {
-    std::vector<std::string> out;
-
-    DIR* d = opendir(dir.c_str());
-    if (!d) {
-        return out;
+static std::string luaValueToString(lua_State* L, int idx) {
+    int t = lua_type(L, idx);
+    if (t == LUA_TNIL) return "nil";
+    if (t == LUA_TBOOLEAN) return lua_toboolean(L, idx) ? "true" : "false";
+    if (t == LUA_TNUMBER) {
+        double n = lua_tonumber(L, idx);
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%g", n);
+        return std::string(buf);
     }
-
-    struct dirent* e;
-
-    while ((e = readdir(d)) != nullptr) {
-        std::string n = e->d_name;
-
-        if (n == "." || n == "..") {
-            continue;
-        }
-
-        if (n.size() >= 4 && n.compare(n.size() - 4, 4, ".lua") == 0) {
-            out.push_back(n);
-        }
-    }
-
-    closedir(d);
-
-    std::sort(out.begin(), out.end());
-
-    return out;
-}
-
-static int lua_print(lua_State* L) {
-    int n = lua_gettop(L);
-    std::string line;
-
-    for (int i = 1; i <= n; ++i) {
+    if (t == LUA_TSTRING) {
         size_t len = 0;
-        const char* s = luaL_tolstring(L, i, &len);
-
-        if (i > 1) {
-            line += "\t";
-        }
-
-        line += s;
-        lua_pop(L, 1);
+        const char* s = lua_tolstring(L, idx, &len);
+        if (!s) return "";
+        return std::string(s, len);
     }
+    return std::string("<") + lua_typename(L, t) + ">";
+}
 
-    g_luaLog.push_back(line);
-
-    if (g_luaLog.size() > 64) {
-        g_luaLog.erase(g_luaLog.begin());
+static int l_print(lua_State* L) {
+    int n = lua_gettop(L);
+    std::string out;
+    for (int i = 1; i <= n; ++i) {
+        if (i > 1) out += " ";
+        out += luaValueToString(L, i);
     }
-
+    logLua(out);
     return 0;
 }
 
-// FIX 1: integer when whole, so ".." prints "6" not "6.0".
-static int lua_get_var(lua_State* L) {
-    const char* name = luaL_checkstring(L, 1);
+static int l_log(lua_State* L) {
+    int n = lua_gettop(L);
+    std::string out;
+    for (int i = 1; i <= n; ++i) {
+        if (i > 1) out += " ";
+        out += luaValueToString(L, i);
+    }
+    logLua(out);
+    return 0;
+}
 
-    if (g_scriptVars) {
-        auto it = g_scriptVars->find(name);
+static int l_set_var(lua_State* L) {
+    const char* k = luaL_checkstring(L, 1);
+    double v = luaL_checknumber(L, 2);
+    if (g_vars && k) (*g_vars)[k] = v;
+    return 0;
+}
 
-        if (it != g_scriptVars->end()) {
-            double v = it->second;
-
-            if (v == std::floor(v) && std::fabs(v) < 1e15) {
-                lua_pushinteger(L, (lua_Integer)v);
-            } else {
-                lua_pushnumber(L, v);
-            }
-
+static int l_get_var(lua_State* L) {
+    const char* k = luaL_checkstring(L, 1);
+    if (g_vars && k) {
+        auto it = g_vars->find(k);
+        if (it != g_vars->end()) {
+            lua_pushnumber(L, it->second);
             return 1;
         }
     }
-
-    lua_pushinteger(L, 0);
+    lua_pushnumber(L, 0.0);
     return 1;
 }
 
-static int lua_set_var(lua_State* L) {
-    const char* name = luaL_checkstring(L, 1);
+static int l_add_var(lua_State* L) {
+    const char* k = luaL_checkstring(L, 1);
     double v = luaL_checknumber(L, 2);
-
-    if (g_scriptVars) {
-        (*g_scriptVars)[name] = v;
+    if (g_vars && k) {
+        auto it = g_vars->find(k);
+        if (it != g_vars->end()) it->second += v;
+        else (*g_vars)[k] = v;
     }
-
     return 0;
 }
 
-static int lua_add_var(lua_State* L) {
-    const char* name = luaL_checkstring(L, 1);
-    double v = luaL_checknumber(L, 2);
-
-    if (g_scriptVars) {
-        (*g_scriptVars)[name] += v;
-    }
-
-    return 0;
-}
-
-static int lua_get_score(lua_State* L) {
-    lua_pushinteger(L, g_scriptCtx ? g_scriptCtx->score : 0);
+static int l_get_score(lua_State* L) {
+    lua_pushinteger(L, g_ctx ? (lua_Integer)g_ctx->score : 0);
     return 1;
 }
 
-static int lua_add_score(lua_State* L) {
-    int v = (int)luaL_checkinteger(L, 1);
-
-    if (g_scriptCtx) {
-        g_scriptCtx->score += v;
-    }
-
+static int l_set_score(lua_State* L) {
+    double v = luaL_checknumber(L, 1);
+    if (g_ctx) g_ctx->score = (int)v;
     return 0;
 }
 
-static int lua_coin_collected(lua_State* L) {
-    if (g_scriptCtx) {
-        g_scriptCtx->coinCollectedThisFrame = true;
-    }
-
+static int l_add_score(lua_State* L) {
+    double v = luaL_checknumber(L, 1);
+    if (g_ctx) g_ctx->score += (int)v;
     return 0;
 }
 
-static int lua_jump_pressed(lua_State* L) {
-    if (g_scriptCtx) {
-        g_scriptCtx->jumpPressedThisFrame = true;
+static bool endsWith(const std::string& s, const std::string& suffix) {
+    if (suffix.size() > s.size()) return false;
+    return s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+static std::string readFileToString(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.good()) return std::string();
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+static std::vector<std::string> listLuaFiles(const std::string& dir) {
+    std::vector<std::string> files;
+    DIR* d = opendir(dir.c_str());
+    if (!d) return files;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != nullptr) {
+        std::string name = ent->d_name;
+        if (name == "." || name == "..") continue;
+        if (endsWith(name, ".lua")) files.push_back(name);
+    }
+    closedir(d);
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+static void registerApi(lua_State* L) {
+    if (!L) return;
+
+    lua_register(L, "print", l_print);
+    lua_register(L, "log", l_log);
+
+    lua_register(L, "set_var", l_set_var);
+    lua_register(L, "get_var", l_get_var);
+    lua_register(L, "add_var", l_add_var);
+
+    lua_register(L, "get_score", l_get_score);
+    lua_register(L, "set_score", l_set_score);
+    lua_register(L, "add_score", l_add_score);
+
+    registerGameLuaApi(L);
+}
+
+void ScriptSystem::load(const std::string& root) {
+    if (L) {
+        g_ctx = nullptr;
+        g_sm = nullptr;
+        g_scene = nullptr;
+        g_vars = nullptr;
+        lua_close(L);
+        L = nullptr;
     }
 
-    return 0;
-}
-
-static int lua_node_exists(lua_State* L) {
-    const char* name = luaL_checkstring(L, 1);
-
-    lua_pushboolean(L, scriptFindNode(name) != nullptr);
-    return 1;
-}
-
-static int lua_get_node_x(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->position.x : 0);
-    return 1;
-}
-
-static int lua_set_node_x(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->position.x = (float)luaL_checknumber(L, 2);
+    {
+        std::lock_guard<std::mutex> lk(g_luaCmdMtx);
+        g_luaCmd = LuaGameCmd{};
     }
 
-    return 0;
-}
-
-static int lua_get_node_y(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->position.y : 0);
-    return 1;
-}
-
-static int lua_set_node_y(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->position.y = (float)luaL_checknumber(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_get_node_rotation(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->rotation * 180.0 / TWEEN_PI : 0);
-    return 1;
-}
-
-static int lua_set_node_rotation(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->rotation = (float)(luaL_checknumber(L, 2) * TWEEN_PI / 180.0);
-    }
-
-    return 0;
-}
-
-static int lua_get_node_scale(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? (n->scale.x + n->scale.y) * 0.5 : 1);
-    return 1;
-}
-
-static int lua_set_node_scale(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-    float s = (float)luaL_checknumber(L, 2);
-
-    if (n) {
-        n->scale.x = s;
-        n->scale.y = s;
-    }
-
-    return 0;
-}
-
-static int lua_get_node_alpha(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->alpha : 1);
-    return 1;
-}
-
-static int lua_set_node_alpha(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->alpha = (float)luaL_checknumber(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_get_node_width(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->w : 0);
-    return 1;
-}
-
-static int lua_set_node_width(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->w = (float)luaL_checknumber(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_get_node_height(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->h : 0);
-    return 1;
-}
-
-static int lua_set_node_height(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->h = (float)luaL_checknumber(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_change_scene(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
-
-    if (g_scriptMgr) {
-        g_scriptMgr->requestChange(path, false);
-    }
-
-    return 0;
-}
-
-static int lua_restart_scene(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
-
-    if (g_scriptMgr) {
-        g_scriptMgr->requestChange(path, true);
-    }
-
-    return 0;
-}
-
-static int lua_tween_to(lua_State* L) {
-    const char* node = luaL_checkstring(L, 1);
-    const char* prop = luaL_checkstring(L, 2);
-
-    double to = luaL_checknumber(L, 3);
-    float dur = (float)luaL_checknumber(L, 4);
-
-    const char* easing = "linear";
-    bool loop = false;
-    bool yoyo = false;
-    const char* onComplete = "";
-
-    int top = lua_gettop(L);
-
-    if (top >= 5 && lua_isstring(L, 5)) {
-        easing = lua_tostring(L, 5);
-    }
-
-    if (top >= 6) {
-        loop = lua_toboolean(L, 6) != 0;
-    }
-
-    if (top >= 7) {
-        yoyo = lua_toboolean(L, 7) != 0;
-    }
-
-    if (top >= 8 && lua_isstring(L, 8)) {
-        onComplete = lua_tostring(L, 8);
-    }
-
-    int id = g_tweens.add(
-        node ? node : "",
-        prop ? prop : "",
-        to,
-        dur,
-        easing ? easing : "linear",
-        loop,
-        yoyo,
-        onComplete ? onComplete : ""
-    );
-
-    lua_pushinteger(L, id);
-    return 1;
-}
-
-static int lua_tween_stop(lua_State* L) {
-    g_tweens.stop((int)luaL_checkinteger(L, 1));
-    return 0;
-}
-
-static int lua_tween_stop_node(lua_State* L) {
-    g_tweens.stopNode(luaL_checkstring(L, 1));
-    return 0;
-}
-
-static int lua_tween_clear(lua_State* L) {
-    g_tweens.clear();
-    return 0;
-}
-
-static int lua_tween_count(lua_State* L) {
-    lua_pushinteger(L, (lua_Integer)g_tweens.count());
-    return 1;
-}
-
-static int lua_tween_is_active(lua_State* L) {
-    lua_pushboolean(L, g_tweens.isActive((int)luaL_checkinteger(L, 1)));
-    return 1;
-}
-
-// -----------------------------------------------------------------------------
-// Shared tolerant color parser: "#RRGGBB" -> parseColor, "r,g,b" -> parseRgb,
-// otherwise fall back to parseColor. Used by set_color, emit opts and
-// particle_config so every path packs color identically to the editor.
-// -----------------------------------------------------------------------------
-
-static unsigned parseColorTolerant(const std::string& s) {
-    if (!s.empty() && s[0] == '#') {
-        return parseColor(s);
-    }
-
-    unsigned u = 0;
-    if (parseRgb(s, u)) {
-        return u;
-    }
-
-    return parseColor(s);
-}
-
-// -----------------------------------------------------------------------------
-// Short aliases + color, matching the API the demo main.lua was written against.
-// -----------------------------------------------------------------------------
-
-static int lua_set_pos(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->position.x = (float)luaL_checknumber(L, 2);
-        n->position.y = (float)luaL_checknumber(L, 3);
-    }
-
-    return 0;
-}
-
-static int lua_get_pos(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->position.x : 0);
-    lua_pushnumber(L, n ? n->position.y : 0);
-    return 2;
-}
-
-static int lua_set_rot(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->rotation = (float)(luaL_checknumber(L, 2) * TWEEN_PI / 180.0);
-    }
-
-    return 0;
-}
-
-static int lua_get_rot(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->rotation * 180.0 / TWEEN_PI : 0);
-    return 1;
-}
-
-// FIX 2: accept (node, sx, sy) like the demo calls it, fall back to uniform.
-static int lua_set_scale(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-    if (!n) {
-        return 0;
-    }
-
-    float sx = (float)luaL_checknumber(L, 2);
-
-    int top = lua_gettop(L);
-    float sy = (top >= 3 && lua_isnumber(L, 3))
-        ? (float)lua_tonumber(L, 3)
-        : sx;
-
-    n->scale.x = sx;
-    n->scale.y = sy;
-
-    return 0;
-}
-
-// FIX 3: return real (sx, sy) instead of averaged scalar.
-static int lua_get_scale(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->scale.x : 1);
-    lua_pushnumber(L, n ? n->scale.y : 1);
-    return 2;
-}
-
-static int lua_set_alpha(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->alpha = (float)luaL_checknumber(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_get_alpha(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? n->alpha : 1);
-    return 1;
-}
-
-static int lua_set_size(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->w = (float)luaL_checknumber(L, 2);
-        n->h = (float)luaL_checknumber(L, 3);
-    }
-
-    return 0;
-}
-
-static int lua_set_w(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->w = (float)luaL_checknumber(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_set_h(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->h = (float)luaL_checknumber(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_set_text(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n && std::string(n->typeName()) == "Label") {
-        static_cast<Label*>(n)->text = luaL_checkstring(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_get_text(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n && std::string(n->typeName()) == "Label") {
-        lua_pushstring(L, static_cast<Label*>(n)->text.c_str());
-    } else {
-        lua_pushstring(L, "");
-    }
-
-    return 1;
-}
-
-static int lua_set_texture(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->texture = luaL_checkstring(L, 2);
-    }
-
-    return 0;
-}
-
-static int lua_set_action(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    if (n) {
-        n->action = luaL_checkstring(L, 2);
-    }
-
-    return 0;
-}
-
-// Tolerant color setter:
-//   set_color(node, "#RRGGBB")      -> parseColor
-//   set_color(node, "r,g,b")        -> parseRgb
-//   set_color(node, r, g, b)        -> normalized to 0..255, then parseRgb
-//   set_color(node, packedNumber)   -> assigned as-is
-static int lua_set_color(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-    if (!n) {
-        return 0;
-    }
-
-    int top = lua_gettop(L);
-
-    if (top >= 2 && lua_isstring(L, 2)) {
-        std::string s = lua_tostring(L, 2);
-        n->color = parseColorTolerant(s);
-        return 0;
-    }
-
-    if (top >= 4 && lua_isnumber(L, 2) && lua_isnumber(L, 3) && lua_isnumber(L, 4)) {
-        double r = lua_tonumber(L, 2);
-        double g = lua_tonumber(L, 3);
-        double b = lua_tonumber(L, 4);
-
-        bool frac = (r != std::floor(r)) || (g != std::floor(g)) || (b != std::floor(b));
-        bool unit = (r >= 0.0 && r <= 1.0 && g >= 0.0 && g <= 1.0 && b >= 0.0 && b <= 1.0);
-
-        if (frac && unit) {
-            r *= 255.0;
-            g *= 255.0;
-            b *= 255.0;
-        }
-
-        auto clamp255 = [](double v) -> int {
-            int i = (int)(v + (v >= 0 ? 0.5 : -0.5));
-            if (i < 0) i = 0;
-            if (i > 255) i = 255;
-            return i;
-        };
-
-        std::string rgb =
-            std::to_string(clamp255(r)) + "," +
-            std::to_string(clamp255(g)) + "," +
-            std::to_string(clamp255(b));
-
-        unsigned c = 0;
-        if (parseRgb(rgb, c)) {
-            n->color = c;
-        }
-
-        return 0;
-    }
-
-    if (top >= 2 && lua_isnumber(L, 2)) {
-        n->color = (unsigned)lua_tonumber(L, 2);
-        return 0;
-    }
-
-    return 0;
-}
-
-static int lua_get_color(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-
-    lua_pushnumber(L, n ? (double)n->color : 0);
-    return 1;
-}
-
-// -----------------------------------------------------------------------------
-// B6-lite: particles. opts is a Lua table. All fields optional; missing ones
-// keep defaults. color may be a string ("#RRGGBB" or "r,g,b") or a table {r,g,b}.
-// -----------------------------------------------------------------------------
-
-static double optNum(lua_State* L, int tbl, const char* k, double def) {
-    lua_getfield(L, tbl, k);
-    double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : def;
-    lua_pop(L, 1);
-    return v;
-}
-
-static bool optStr(lua_State* L, int tbl, const char* k, std::string& out) {
-    lua_getfield(L, tbl, k);
-    bool ok = lua_isstring(L, -1);
-    if (ok) {
-        out = lua_tostring(L, -1);
-    }
-    lua_pop(L, 1);
-    return ok;
-}
-
-static void readOpts(lua_State* L, int oi, SpawnOpts& o) {
-    if (oi <= 0 || !lua_istable(L, oi)) {
+    L = luaL_newstate();
+    if (!L) {
+        logLua("lua: failed to create state");
         return;
     }
 
-    o.vx = (float)optNum(L, oi, "vx", o.vx);
-    o.vy = (float)optNum(L, oi, "vy", o.vy);
-    o.spread = (float)optNum(L, oi, "spread", o.spread);
-    o.gravity = (float)optNum(L, oi, "gravity", o.gravity);
-    o.life = (float)optNum(L, oi, "life", o.life);
-    o.lifeSpread = (float)optNum(L, oi, "lifeSpread", o.lifeSpread);
-    o.size = (float)optNum(L, oi, "size", o.size);
-    o.sizeEnd = (float)optNum(L, oi, "sizeEnd", o.sizeEnd);
-    o.drag = (float)optNum(L, oi, "drag", o.drag);
+    luaL_openlibs(L);
+    registerApi(L);
 
-    // color
-    lua_getfield(L, oi, "color");
-    if (lua_isstring(L, -1)) {
-        std::string c = lua_tostring(L, -1);
-        o.color = parseColorTolerant(c);
-    } else if (lua_istable(L, -1)) {
-        double comp[3] = {255, 255, 255};
-        for (int i = 1; i <= 3; ++i) {
-            lua_rawgeti(L, -1, i);
-            if (lua_isnumber(L, -1)) {
-                comp[i - 1] = lua_tonumber(L, -1);
-            }
+    std::string dir = root + "/scripts";
+    std::vector<std::string> files = listLuaFiles(dir);
+
+    for (const std::string& f : files) {
+        std::string path = dir + "/" + f;
+        std::string src = readFileToString(path);
+        if (src.empty()) continue;
+
+        if (luaL_loadbuffer(L, src.c_str(), src.size(), path.c_str()) != 0) {
+            const char* err = lua_tostring(L, -1);
+            logLua(std::string("lua load error: ") + (err ? err : "?"));
+            lua_pop(L, 1);
+            continue;
+        }
+
+        if (lua_pcall(L, 0, 0, 0) != 0) {
+            const char* err = lua_tostring(L, -1);
+            logLua(std::string("lua run error: ") + (err ? err : "?"));
             lua_pop(L, 1);
         }
-        auto clamp255 = [](double v) -> int {
-            int i = (int)(v + (v >= 0 ? 0.5 : -0.5));
-            if (i < 0) i = 0;
-            if (i > 255) i = 255;
-            return i;
-        };
-        std::string rgb =
-            std::to_string(clamp255(comp[0])) + "," +
-            std::to_string(clamp255(comp[1])) + "," +
-            std::to_string(clamp255(comp[2]));
-        unsigned u = 0;
-        if (parseRgb(rgb, u)) {
-            o.color = u;
-        }
     }
-    lua_pop(L, 1);
 
-    // glyph
-    std::string g;
-    if (optStr(L, oi, "glyph", g) && !g.empty()) {
-        std::memset(o.glyph, 0, sizeof(o.glyph));
-        std::strncpy(o.glyph, g.c_str(), 7);
-        o.glyph[7] = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_luaCmdMtx);
+        g_luaCmd = LuaGameCmd{};
     }
 }
 
-static int lua_emit(lua_State* L) {
-    Node2D* n = scriptFindNode(luaL_checkstring(L, 1));
-    if (!n) {
-        lua_pushinteger(L, 0);
-        return 1;
+void ScriptSystem::update(Scene& scene, Context& ctx, float dt, SceneManager& sm, VarMap& vars) {
+    if (!L) return;
+
+    g_ctx = &ctx;
+    g_sm = &sm;
+    g_scene = &scene;
+    g_vars = &vars;
+
+    lua_getglobal(L, "on_update");
+    if (lua_isfunction(L, -1)) {
+        lua_pushnumber(L, dt);
+        if (lua_pcall(L, 1, 0, 0) != 0) {
+            const char* err = lua_tostring(L, -1);
+            logLua(std::string("lua on_update error: ") + (err ? err : "?"));
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pop(L, 1);
     }
 
-    int count = (int)luaL_checkinteger(L, 2);
-
-    SpawnOpts o;
-    readOpts(L, 3, o);
-
-    g_particles.spawn(n->position.x, n->position.y, count, o);
-
-    lua_pushinteger(L, count);
-    return 1;
+    g_ctx = nullptr;
+    g_sm = nullptr;
+    g_scene = nullptr;
+    g_vars = nullptr;
 }
 
-static int lua_emit_at(lua_State* L) {
-    float x = (float)luaL_checknumber(L, 1);
-    float y = (float)luaL_checknumber(L, 2);
-    int count = (int)luaL_checkinteger(L, 3);
+void ScriptSystem::callGlobal(const std::string& name, Context& ctx, SceneManager& sm, VarMap& vars, Scene* scene) {
+    if (!L || name.empty()) return;
 
-    SpawnOpts o;
-    readOpts(L, 4, o);
+    g_ctx = &ctx;
+    g_sm = &sm;
+    g_scene = scene;
+    g_vars = &vars;
 
-    g_particles.spawn(x, y, count, o);
+    lua_getglobal(L, name.c_str());
+    if (lua_isfunction(L, -1)) {
+        if (lua_pcall(L, 0, 0, 0) != 0) {
+            const char* err = lua_tostring(L, -1);
+            logLua(std::string("lua call error ") + name + ": " + (err ? err : "?"));
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pop(L, 1);
+        logLua("lua: missing function " + name);
+    }
 
-    lua_pushinteger(L, count);
-    return 1;
+    g_ctx = nullptr;
+    g_sm = nullptr;
+    g_scene = nullptr;
+    g_vars = nullptr;
 }
 
-static int lua_particles_clear(lua_State* L) {
-    g_particles.clear();
-    return 0;
-}
-
-static int lua_particles_count(lua_State* L) {
-    lua_pushinteger(L, (lua_Integer)g_particles.count());
-    return 1;
-}
-
-// -----------------------------------------------------------------------------
-// B6-full: Particle2D emitter node control from Lua.
-// -----------------------------------------------------------------------------
-
-static Particle2D* scriptFindEmitter(const char* name) {
-    Node2D* n = scriptFindNode(name);
-    return n ? dynamic_cast<Particle2D*>(n) : nullptr;
-}
-
-static int lua_set_emitting(lua_State* L) {
-    Particle2D* pe = scriptFindEmitter(luaL_checkstring(L, 1));
-    if (!pe) {
-        return 0;
-    }
-
-    bool on = lua_toboolean(L, 2) != 0;
-
-    // Turning on fires one immediate burst so a tap feels responsive.
-    if (on && !pe->emitting) {
-        pe->burstPending = true;
-    }
-
-    pe->emitting = on;
-    return 0;
-}
-
-static int lua_particle_config(lua_State* L) {
-    Particle2D* pe = scriptFindEmitter(luaL_checkstring(L, 1));
-    if (!pe || !lua_istable(L, 2)) {
-        return 0;
-    }
-
-    int t = 2;
-
-    #define PSET(field, key) { \
-        lua_getfield(L, t, key); \
-        if (lua_isnumber(L, -1)) { \
-            pe->field = (decltype(pe->field))lua_tonumber(L, -1); \
-        } \
-        lua_pop(L, 1); \
-    }
-
-    PSET(rate, "rate")
-    PSET(burst, "burst")
-    PSET(vx, "vx")
-    PSET(vy, "vy")
-    PSET(spread, "spread")
-    PSET(gravity, "gravity")
-    PSET(life, "life")
-    PSET(lifeSpread, "life_spread")
-    PSET(size, "size")
-    PSET(sizeEnd, "size_end")
-    PSET(drag, "drag")
-
-    #undef PSET
-
-    lua_getfield(L, t, "glyph");
-    if (lua_isstring(L, -1)) {
-        pe->glyph = lua_tostring(L, -1);
-    }
-    lua_pop(L, 1);
-
-    lua_getfield(L, t, "color");
-    if (lua_isstring(L, -1)) {
-        std::string c = lua_tostring(L, -1);
-        pe->color = parseColorTolerant(c);
-    }
-    lua_pop(L, 1);
-
-    return 0;
-}
-
-class ScriptSystem {
-public:
-    ~ScriptSystem() {
-        if (L_) {
-            lua_close(L_);
-        }
-    }
-
-    void load(const std::string& root) {
-        if (L_) {
-            lua_close(L_);
-            L_ = nullptr;
-        }
-
-        L_ = luaL_newstate();
-        luaL_openlibs(L_);
-        registerFunctions();
-
-        std::string dir = root + "/scripts";
-
-        std::string combined;
-
-        for (const auto& name : listLuaFiles(dir)) {
-            std::string path = dir + "/" + name;
-
-            combined += "-- " + name + "\n";
-            combined += readFile(path);
-            combined += "\n\n";
-        }
-
-        if (!combined.empty()) {
-            if (luaL_dostring(L_, combined.c_str()) != LUA_OK) {
-                const char* err = lua_tostring(L_, -1);
-
-                g_luaLog.push_back(
-                    std::string("lua load error: ") + (err ? err : "?")
-                );
-
-                lua_pop(L_, 1);
-            }
-        }
-
-        started_ = false;
-    }
-
-    void update(
-        Scene& scene,
-        Context& ctx,
-        float dt,
-        SceneManager& mgr,
-        std::map<std::string, double>& vars
-    ) {
-        if (!L_) {
-            return;
-        }
-
-        g_scriptCtx = &ctx;
-        g_scriptScene = &scene;
-        g_scriptMgr = &mgr;
-        g_scriptVars = &vars;
-
-        if (!started_) {
-            callFunction("on_start");
-            started_ = true;
-        }
-
-        callFunctionWithDt("on_update", dt);
-
-        // B6-lite: advance particles every frame (real Lua branch only).
-        g_particles.update(dt);
-    }
-
-    void callGlobal(
-        const std::string& fn,
-        Context& ctx,
-        SceneManager& mgr,
-        std::map<std::string, double>& vars,
-        Scene* scene = nullptr
-    ) {
-        if (!L_ || fn.empty()) {
-            return;
-        }
-
-        g_scriptCtx = &ctx;
-        g_scriptScene = scene;
-        g_scriptMgr = &mgr;
-        g_scriptVars = &vars;
-
-        callFunction(fn);
-    }
-
-private:
-    void registerFunctions() {
-        lua_register(L_, "print", lua_print);
-
-        lua_register(L_, "get_var", lua_get_var);
-        lua_register(L_, "set_var", lua_set_var);
-        lua_register(L_, "add_var", lua_add_var);
-
-        lua_register(L_, "get_score", lua_get_score);
-        lua_register(L_, "add_score", lua_add_score);
-
-        lua_register(L_, "coin_collected", lua_coin_collected);
-        lua_register(L_, "jump_pressed", lua_jump_pressed);
-
-        lua_register(L_, "node_exists", lua_node_exists);
-
-        lua_register(L_, "get_node_x", lua_get_node_x);
-        lua_register(L_, "set_node_x", lua_set_node_x);
-
-        lua_register(L_, "get_node_y", lua_get_node_y);
-        lua_register(L_, "set_node_y", lua_set_node_y);
-
-        lua_register(L_, "get_node_rotation", lua_get_node_rotation);
-        lua_register(L_, "set_node_rotation", lua_set_node_rotation);
-
-        lua_register(L_, "get_node_scale", lua_get_node_scale);
-        lua_register(L_, "set_node_scale", lua_set_node_scale);
-
-        lua_register(L_, "get_node_alpha", lua_get_node_alpha);
-        lua_register(L_, "set_node_alpha", lua_set_node_alpha);
-
-        lua_register(L_, "get_node_width", lua_get_node_width);
-        lua_register(L_, "set_node_width", lua_set_node_width);
-
-        lua_register(L_, "get_node_height", lua_get_node_height);
-        lua_register(L_, "set_node_height", lua_set_node_height);
-
-        lua_register(L_, "change_scene", lua_change_scene);
-        lua_register(L_, "restart_scene", lua_restart_scene);
-
-        lua_register(L_, "tween_to", lua_tween_to);
-        lua_register(L_, "tween_stop", lua_tween_stop);
-        lua_register(L_, "tween_stop_node", lua_tween_stop_node);
-        lua_register(L_, "tween_clear", lua_tween_clear);
-        lua_register(L_, "tween_count", lua_tween_count);
-        lua_register(L_, "tween_is_active", lua_tween_is_active);
-
-        // Short aliases the demo expects.
-        lua_register(L_, "set_pos", lua_set_pos);
-        lua_register(L_, "get_pos", lua_get_pos);
-        lua_register(L_, "set_rot", lua_set_rot);
-        lua_register(L_, "get_rot", lua_get_rot);
-        lua_register(L_, "set_scale", lua_set_scale);
-        lua_register(L_, "get_scale", lua_get_scale);
-        lua_register(L_, "set_alpha", lua_set_alpha);
-        lua_register(L_, "get_alpha", lua_get_alpha);
-        lua_register(L_, "set_size", lua_set_size);
-        lua_register(L_, "set_w", lua_set_w);
-        lua_register(L_, "set_h", lua_set_h);
-        lua_register(L_, "set_text", lua_set_text);
-        lua_register(L_, "get_text", lua_get_text);
-        lua_register(L_, "set_texture", lua_set_texture);
-        lua_register(L_, "set_action", lua_set_action);
-        lua_register(L_, "set_color", lua_set_color);
-        lua_register(L_, "get_color", lua_get_color);
-
-        // B6-lite particles.
-        lua_register(L_, "emit", lua_emit);
-        lua_register(L_, "emit_at", lua_emit_at);
-        lua_register(L_, "particles_clear", lua_particles_clear);
-        lua_register(L_, "particles_count", lua_particles_count);
-
-        // B6-full emitter node.
-        lua_register(L_, "set_emitting", lua_set_emitting);
-        lua_register(L_, "particle_config", lua_particle_config);
-    }
-
-    void callFunction(const std::string& fn) {
-        lua_getglobal(L_, fn.c_str());
-
-        if (lua_isfunction(L_, -1)) {
-            if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
-                const char* err = lua_tostring(L_, -1);
-
-                g_luaLog.push_back(
-                    fn + " error: " + (err ? err : "?")
-                );
-
-                lua_pop(L_, 1);
-            }
-        } else {
-            lua_pop(L_, 1);
-        }
-    }
-
-    void callFunctionWithDt(const std::string& fn, float dt) {
-        lua_getglobal(L_, fn.c_str());
-
-        if (lua_isfunction(L_, -1)) {
-            lua_pushnumber(L_, dt);
-
-            if (lua_pcall(L_, 1, 0, 0) != LUA_OK) {
-                const char* err = lua_tostring(L_, -1);
-
-                g_luaLog.push_back(
-                    fn + " error: " + (err ? err : "?")
-                );
-
-                lua_pop(L_, 1);
-            }
-        } else {
-            lua_pop(L_, 1);
-        }
-    }
-
-    lua_State* L_ = nullptr;
-    bool started_ = false;
-};
-
-#else
-
-// Safe no-Lua fallback.
-// The build succeeds, but .lua scripts are ignored.
-class ScriptSystem {
-public:
-    void load(const std::string&) {}
-
-    void update(
-        Scene&,
-        Context&,
-        float,
-        SceneManager&,
-        std::map<std::string, double>&
-    ) {}
-
-    void callGlobal(
-        const std::string&,
-        Context&,
-        SceneManager&,
-        std::map<std::string, double>&,
-        Scene* = nullptr
-    ) {}
-};
-
-#endif
+// Если в твоём Script.hpp объявлен деструктор ~ScriptSystem(), раскомментируй это:
+//
+// ScriptSystem::~ScriptSystem() {
+//     if (L) {
+//         lua_close(L);
+//         L = nullptr;
+//     }
+// }
 
 } // namespace suka
