@@ -55,8 +55,8 @@ public class MainActivity extends Activity {
     private static final float CODE_TEXT_X = 340f;
     private static final float CODE_FONT = 14f;
 
-    // Границы вьюпорта редактора (совпадают с C++: 300,64 .. 892,712).
-    private static final float EDV_X0 = 300f, EDV_Y0 = 64f, EDV_X1 = 892f, EDV_Y1 = 712f;
+    // Границы вьюпорта редактора (совпадают с C++: 300,64 .. 892,556).
+    private static final float EDV_X0 = 300f, EDV_Y0 = 64f, EDV_X1 = 892f, EDV_Y1 = 556f;
 
     // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH на весь экран (инструмент).
     // game -> CONTAIN; при совпадении пропорций кадра и экрана полос нет вообще.
