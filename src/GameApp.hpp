@@ -568,7 +568,7 @@ private:
 
     // Оверлейные кнопки шлют действие ЧЕРЕЗ существующий nativeSetAction с префиксом
     // "ov:" (новый JNI-символ не нужен -> краш от отсутствия символа невозможен).
-    // Вызывается ПЕРВОЙ в stepGame, до clearDialogResults, чтобы нажатие не затерлось.
+    // Вызывается ПЕРВОЙ в stepGame, до clearDialogResults, чтобы нажатие не затёрлось.
     void consumeOverlayAction() {
         std::string a; bool hit = false;
         { std::lock_guard<std::mutex> lk(dlgMtx_);
@@ -811,7 +811,7 @@ private:
             curLine_, curCol_, imeShown_, g_luaLog
         };
     }
-    EditorRenderInput makeEditorRenderInput() { return EditorRenderInput{ editor_.get(), edZoom_, manip_, pickParent_, pickChild_, lastMsg_, fps_ }; }
+    EditorRenderInput makeEditorRenderInput() { return EditorRenderInput{ editor_.get(), edZoom_, manip_, pickParent_, pickChild_, lastMsg_, fps_, projCamW_, projCamH_ }; }
     void buildEditorPanels() { editorScene_ = buildEditorScene(makeEditorUiInput()); input_.setUi(&editorScene_.ui); }
 
     std::string stepHub() {
@@ -1252,6 +1252,11 @@ private:
                 else if (pendingNumKind_ == "bh") pendingNumCur_ = ub ? std::to_string((int)ub->touch.rect.h) : "50";
                 else if (pendingNumKind_ == "bang") pendingNumCur_ = ub ? std::to_string((int)ub->angle) : "0";
                 else if (pendingNumKind_ == "balpha") pendingNumCur_ = ub ? std::to_string((int)(ub->alpha * 100)) : "100";
+                else if (pendingNumKind_ == "camzoom") {
+                    Node* cn = editor_->scene() && editor_->scene()->root ? editor_->scene()->root->findByType("Camera2D") : nullptr;
+                    Camera2D* cm = cn ? static_cast<Camera2D*>(cn) : nullptr;
+                    pendingNumCur_ = cm ? std::to_string((int)(cm->zoom * 100)) : "100";
+                }
                 else pendingNumCur_ = "0";
             }
             return 0;
@@ -1359,7 +1364,14 @@ private:
             else { Node* s = editor_->selected(); Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr; if (n2) { pushUndo(); n2->action = act; } }
         }
         if (hnum) {
-            if (pendingNumKind_ == "camw" || pendingNumKind_ == "camh") {
+            if (pendingNumKind_ == "camzoom") {
+                float v = (float)atof(num.c_str());
+                if (v < 5.0f) v = 5.0f; if (v > 1000.0f) v = 1000.0f;
+                Node* cn = editor_->scene() && editor_->scene()->root ? editor_->scene()->root->findByType("Camera2D") : nullptr;
+                Camera2D* cm = cn ? static_cast<Camera2D*>(cn) : nullptr;
+                if (cm) { pushUndo(); cm->zoom = v / 100.0f; }
+                pendingNumKind_.clear();
+            } else if (pendingNumKind_ == "camw" || pendingNumKind_ == "camh") {
                 float v = (float)atof(num.c_str());
                 if (v < 160.0f) v = 160.0f; if (v > 2160.0f) v = 2160.0f;
                 if (pendingNumKind_ == "camw") projCamW_ = v; else projCamH_ = v;
