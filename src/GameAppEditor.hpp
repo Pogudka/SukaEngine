@@ -470,6 +470,7 @@ inline int GameApp::applyEditorAction(const std::string& act) {
             }
             return 0;
         }
+        // Звуковой файл: назначить на Sound-объект, иначе подсказать (НЕ как текстуру).
         {
             size_t dpos = rel.find_last_of('.');
             if (dpos != std::string::npos) {
@@ -486,6 +487,8 @@ inline int GameApp::applyEditorAction(const std::string& act) {
                         lastMsg_ = "sound " + base + " -> " + sn3->name;
                         rebuild(); return 1;
                     }
+                    lastMsg_ = "audio file: select a Sound object or use SET";
+                    rebuild(); return 0;
                 }
             }
         }
@@ -713,6 +716,9 @@ inline std::string GameApp::stepEditor() {
         clearTransition();
         appMode_ = AppMode::Hub; rebuildHub(); return "";
     }
+    // Меню создания и меню функций не могут быть открыты одновременно.
+    if (showCreate_ && showFuncs_) showFuncs_ = false;
+
     consumeDialogResults();
     if (scriptMode_) imeApply();
     if (dragging_ || gizmoRot_ || gizmoSclX_ || gizmoSclY_ || gizmoRotUi_) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
@@ -749,8 +755,45 @@ inline std::string GameApp::stepEditor() {
             WorldXf ident;
             drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
             drawTexturePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY);
+
+            // Маркеры объектов звука — ВНУТРИ клипа вьюпорта, имя обрезано.
+            std::vector<Node*> stack;
+            stack.push_back(es->root.get());
+            while (!stack.empty()) {
+                Node* nd = stack.back(); stack.pop_back();
+                for (auto& ch : nd->getChildren()) {
+                    Node* cn = ch.get();
+                    stack.push_back(cn);
+                    Node2D* n2 = dynamic_cast<Node2D*>(cn);
+                    if (!n2) continue;
+                    auto sit = projSounds_.find(n2->name);
+                    if (sit == projSounds_.end()) continue;
+                    float sx = 0, sy = 0; proj(*es, n2->position.x, n2->position.y, sx, sy);
+                    out += "DRAW rect|" + std::to_string((int)(sx - 14)) + "|" + std::to_string((int)(sy - 14)) + "|28|28|#2EC4B6|0\n";
+                    out += "DRAW text|SND|" + std::to_string((int)(sx - 12)) + "|" + std::to_string((int)(sy - 6)) + "|12|#1A1A2E|0\n";
+                    if (!sit->second.snd.empty()) {
+                        std::string snm = sit->second.snd;
+                        if (snm.size() > 12) snm = snm.substr(0, 12);
+                        out += "DRAW text|" + snm + "|" + std::to_string((int)(sx - 20)) + "|" + std::to_string((int)(sy + 18)) + "|12|#2EC4B6|0\n";
+                    }
+                }
+            }
         }
         emitEditorGizmos(*editor_->scene(), out, makeEditorRenderInput());
+
+        // Панель звука выделенного Sound-объекта — тоже внутри вьюпорта.
+        {
+            Node* snp = editor_->selected();
+            if (snp && projSounds_.count(snp->name)) {
+                SoundDef& sd = projSounds_[snp->name];
+                out += "DRAW text|sound: " + (sd.snd.empty() ? std::string("-") : sd.snd) + "|310|498|14|#2EC4B6|0\n";
+                out += "DRAW button|SET|310|516|56|26|#2EC4B6|0|\n";
+                out += "DRAW button|LOOP|370|516|62|26|" + std::string(sd.loop ? "#FFD700" : "#3A4A6B") + "|0|\n";
+                out += "DRAW button|AUTO|436|516|62|26|" + std::string(sd.autoplay ? "#FFD700" : "#3A4A6B") + "|0|\n";
+                out += "DRAW button|PLAY|502|516|62|26|#40C040|0|\n";
+                out += "DRAW button|STOP|568|516|62|26|#D62828|0|\n";
+            }
+        }
         out += "DRAW clipoff\n";
 
         std::string wTxt = "W " + std::to_string((int)projCamW_);
@@ -764,53 +807,18 @@ inline std::string GameApp::stepEditor() {
         out += "DRAW text|" + oTxt + "|" + std::to_string((int)CAM_PX0 + 6) + "|" + std::to_string((int)CAM_BTN_O_Y0 + 2) + "|14|#FFD700|0\n";
     }
 
-    // Маркеры объектов звука в вьюпорте + панель звука в инспекторе
+    // Кнопка FN в стиле тулбара (скруглённая) + ряд функций внизу (y=652, не пересекает меню создания)
     if (!scriptMode_) {
-        Scene* esm = editor_->scene();
-        if (esm && esm->root) {
-            std::vector<Node*> stack;
-            stack.push_back(esm->root.get());
-            while (!stack.empty()) {
-                Node* nd = stack.back(); stack.pop_back();
-                for (auto& ch : nd->getChildren()) {
-                    Node* cn = ch.get();
-                    stack.push_back(cn);
-                    Node2D* n2 = dynamic_cast<Node2D*>(cn);
-                    if (!n2) continue;
-                    auto sit = projSounds_.find(n2->name);
-                    if (sit == projSounds_.end()) continue;
-                    float sx = 0, sy = 0; proj(*esm, n2->position.x, n2->position.y, sx, sy);
-                    out += "DRAW rect|" + std::to_string((int)(sx - 14)) + "|" + std::to_string((int)(sy - 14)) + "|28|28|#2EC4B6|0\n";
-                    out += "DRAW text|SND|" + std::to_string((int)(sx - 12)) + "|" + std::to_string((int)(sy - 6)) + "|12|#1A1A2E|0\n";
-                    if (!sit->second.snd.empty())
-                        out += "DRAW text|" + sit->second.snd + "|" + std::to_string((int)(sx - 20)) + "|" + std::to_string((int)(sy + 18)) + "|12|#2EC4B6|0\n";
-                }
-            }
-        }
-        Node* snp = editor_ ? editor_->selected() : nullptr;
-        if (snp && projSounds_.count(snp->name)) {
-            SoundDef& sd = projSounds_[snp->name];
-            out += "DRAW text|sound: " + (sd.snd.empty() ? std::string("-") : sd.snd) + "|900|344|16|#2EC4B6|0\n";
-            out += "DRAW rect|900|360|56|26|#2EC4B6|0\n";   out += "DRAW text|SET|916|364|14|#1A1A2E|0\n";
-            out += "DRAW rect|960|360|62|26|" + std::string(sd.loop ? "#FFD700" : "#3A4A6B") + "|0\n"; out += "DRAW text|LOOP|972|364|14|#FFFFFF|0\n";
-            out += "DRAW rect|1026|360|62|26|" + std::string(sd.autoplay ? "#FFD700" : "#3A4A6B") + "|0\n"; out += "DRAW text|AUTO|1038|364|14|#FFFFFF|0\n";
-            out += "DRAW rect|1092|360|62|26|#40C040|0\n";   out += "DRAW text|PLAY|1104|364|14|#1A1A2E|0\n";
-            out += "DRAW rect|1158|360|62|26|#D62828|0\n";   out += "DRAW text|STOP|1170|364|14|#FFFFFF|0\n";
-        }
-    }
-
-    // Панель функций F
-    if (!scriptMode_) {
-        out += "DRAW rect|" + std::to_string((int)FN_BTN_X) + "|" + std::to_string((int)FN_BTN_Y) + "|" + std::to_string((int)FN_BTN_W) + "|" + std::to_string((int)FN_BTN_H) + "|" + (showFuncs_ ? "#FFD700" : "#FF8800") + "|0\n";
-        out += "DRAW text|F|" + std::to_string((int)(FN_BTN_X + 9)) + "|" + std::to_string((int)(FN_BTN_Y + 4)) + "|16|#1A1A2E|0\n";
+        out += "DRAW button|FN|" + std::to_string((int)FN_BTN_X) + "|" + std::to_string((int)FN_BTN_Y) + "|" + std::to_string((int)FN_BTN_W) + "|" + std::to_string((int)FN_BTN_H) + "|" + (showFuncs_ ? "#FFD700" : "#FF8800") + "|0|\n";
         if (showFuncs_) {
-            out += "DRAW rect|300|600|592|26|#20202A|0\n";
-            out += "DRAW rect|300|600|110|26|#8E44AD|0\n"; out += "DRAW text|RIGIDBODY|306|604|14|#FFFFFF|0\n";
-            out += "DRAW rect|414|600|110|26|#8E44AD|0\n"; out += "DRAW text|STATICBODY|420|604|14|#FFFFFF|0\n";
-            out += "DRAW rect|528|600|80|26|#8E44AD|0\n";  out += "DRAW text|NOGRAV|534|604|14|#FFFFFF|0\n";
-            out += "DRAW rect|612|600|80|26|#8E44AD|0\n";  out += "DRAW text|BOUNCY|618|604|14|#FFFFFF|0\n";
-            out += "DRAW rect|696|600|70|26|#555566|0\n";  out += "DRAW text|CLEAR|702|604|14|#FFFFFF|0\n";
-            out += "DRAW rect|860|600|32|26|#D62828|0\n";  out += "DRAW text|X|872|604|14|#FFFFFF|0\n";
+            int fy = (int)FNR_Y;
+            out += "DRAW rect|300|" + std::to_string(fy) + "|592|26|#20202A|0\n";
+            out += "DRAW button|RIGIDBODY|300|" + std::to_string(fy) + "|110|26|#8E44AD|0|\n";
+            out += "DRAW button|STATICBODY|414|" + std::to_string(fy) + "|110|26|#8E44AD|0|\n";
+            out += "DRAW button|NOGRAV|528|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
+            out += "DRAW button|BOUNCY|612|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
+            out += "DRAW button|CLEAR|696|" + std::to_string(fy) + "|70|26|#555566|0|\n";
+            out += "DRAW button|X|860|" + std::to_string(fy) + "|32|26|#D62828|0|\n";
         }
         if (funcMsgTimer_ > 0) {
             --funcMsgTimer_;
