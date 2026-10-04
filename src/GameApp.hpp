@@ -384,6 +384,10 @@ public:
     }
 
     std::string stepFrame() {
+        // Служебные sys:-сообщения (пропорции экрана) читаются В ЛЮБОМ режиме сразу,
+        // чтобы хаб/редактор не стирали их до того, как игра успеет применить.
+        consumeSysRatio();
+
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
         if (lastMs_ > 0) { float dt = (ms - lastMs_) / 1000.0f; if (dt > 0.0001f) fps_ = fps_ * 0.9f + (1.0f / dt) * 0.1f; }
         lastMs_ = ms;
@@ -400,6 +404,16 @@ private:
         if (appMode_ == AppMode::Hub) return &hubScene_;
         if (appMode_ == AppMode::Editor) return &editorScene_;
         return (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
+    }
+
+    void consumeSysRatio() {
+        std::lock_guard<std::mutex> lk(dlgMtx_);
+        if (hasAction_ && !actionRes_.empty() && actionRes_.rfind("sys:ratio|", 0) == 0) {
+            float r = (float)atof(actionRes_.c_str() + 10);
+            screenRatio_ = (r > 0.2f && r < 5.0f) ? r : 0.0f;
+            hasAction_ = false;
+            actionRes_.clear();
+        }
     }
 
     static double jsonNum(const std::string& s, const std::string& key, double def) {
@@ -444,17 +458,17 @@ private:
         f.close();
     }
 
-    // Подгон логического кадра игры под реальное отношение сторон экрана.
-    // Высота кадра = H проекта, ширина = H * ratio экрана (или наоборот в портрете):
-    // масштаб остаётся РАВНОМЕРНЫМ (ничего не плющится), а кадр заполняет экран целиком.
+    // Кадр игры подгоняется под реальные пропорции экрана: высота = H проекта,
+    // ширина = H * ratio. Масштаб остаётся равномерным (ничего не плющится),
+    // а contain-вписывание даёт нулевые поля => игра на весь экран.
     void applyScreenRatio() {
         if (screenRatio_ <= 0.0f) return;
-        float w, h;
-        if (projVertical_) { h = projCamH_; w = h * screenRatio_; }
-        else { h = projCamH_; w = h * screenRatio_; }
-        if (w < 160.0f) w = 160.0f; if (w > 2160.0f) w = 2160.0f;
-        if (h < 160.0f) h = 160.0f; if (h > 2160.0f) h = 2160.0f;
-        logicW_ = w; logicH_ = h;
+        float h = projCamH_;
+        float w = h * screenRatio_;
+        if (w < 160.0f) w = 160.0f;
+        if (w > 2160.0f) w = 2160.0f;
+        logicW_ = w;
+        logicH_ = h;
         input_.screenWidth = logicW_;
         input_.screenHeight = logicH_;
     }
@@ -520,19 +534,12 @@ private:
         input_.setUi(&sc->ui);
     }
 
-    // Служебные сообщения с Java: "ov:..." (оверлей) и "sys:ratio|..." (отношение сторон).
     void consumeOverlayAction() {
         std::string a; bool hit = false;
         { std::lock_guard<std::mutex> lk(dlgMtx_);
-          if (hasAction_ && !actionRes_.empty()) {
-              if (actionRes_.rfind("ov:", 0) == 0) {
-                  a = actionRes_.substr(3); hit = true;
-              } else if (actionRes_.rfind("sys:ratio|", 0) == 0) {
-                  float r = (float)atof(actionRes_.c_str() + 10);
-                  if (r > 0.2f && r < 5.0f) screenRatio_ = r; else screenRatio_ = 0.0f;
-                  hit = true;
-              }
-              if (hit) { hasAction_ = false; actionRes_.clear(); }
+          if (hasAction_ && !actionRes_.empty() && actionRes_.rfind("ov:", 0) == 0) {
+              a = actionRes_.substr(3); hit = true;
+              hasAction_ = false; actionRes_.clear();
           }
         }
         if (hit && !a.empty()) runAction(a);
@@ -855,7 +862,7 @@ private:
 
         loadProjCamera(project_.rootPath);
         logicW_ = projCamW_; logicH_ = projCamH_; orientVertical_ = projVertical_;
-        applyScreenRatio();   // если ratio уже известен — сразу кадр под экран
+        applyScreenRatio();
         input_.screenWidth = logicW_; input_.screenHeight = logicH_;
         orientName_ = orientVertical_ ? "portrait" : "landscape";
         emitOrient_ = true;
@@ -873,7 +880,7 @@ private:
 
     std::string stepGame() {
         consumeOverlayAction();
-        applyScreenRatio();   // каждый кадр держим кадр игры = пропорции экрана
+        applyScreenRatio();
         if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
         consumeLuaCmd();
         if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
@@ -1122,7 +1129,7 @@ private:
         if (act.rfind("import_category:", 0) == 0) {
             std::string category = act.substr(16);
             if (category == "fonts" || category == "sprites") pendingImportCategory_ = category;
-            else lastMsg_ = category + ": coming soon";
+            else lastMsg_ = category + ": unavailable";
             return 0;
         }
         if (act == "col_rgb") { if (!lk) { pendingRgb_ = 1; pendingText_ = true; pendingTextCur_ = ub ? rgbStr(ub->color) : (s2 ? rgbStr(s2->color) : std::string("255,255,255")); } return 0; }
@@ -1278,8 +1285,7 @@ private:
         bool ht = false, hn = false, ha = false, hnum = false;
         { std::lock_guard<std::mutex> lk(dlgMtx_); ht = hasText_; hn = hasName_; ha = hasAction_; hnum = hasNum_; txt = textRes_; nm = nameRes_; act = actionRes_; num = numRes_; hasText_ = false; hasName_ = false; hasAction_ = false; hasNum_ = false; }
         if (!editor_) return;
-        // Служебные sys:-сообщения не должны попадать в диалог действия редактора.
-        if (ha && act.rfind("sys:", 0) == 0) ha = false;
+        if (ha && (act.rfind("sys:", 0) == 0 || act.rfind("ov:", 0) == 0)) ha = false;
 
         if (ht && pendingSceneSave_) {
             std::string name = sanitizeProjectDirName(txt);
@@ -1571,7 +1577,7 @@ private:
     float projCamW_ = 1280.0f;
     float projCamH_ = 720.0f;
     bool projVertical_ = false;
-    float screenRatio_ = 0.0f;   // реальное отношение сторон экрана (ширина/высота), шлёт Java
+    float screenRatio_ = 0.0f;
 
     bool transActive_ = false;
     int transType_ = 0;
