@@ -611,7 +611,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         btn("st_close",  830,  96,  70,  32, "CLOSE", "settings_close", parseColor("#D62828"));
         const char* catName[5] = { "Fonts", "Sprites", "Videos", "Models", "Sounds" };
         const char* catKey[5]  = { "fonts", "sprites", "videos", "models", "sounds" };
-        bool catReady[5]       = { true, true, false, false, false };
+        bool catReady[5]       = { true, true, false, false, true };
         for (int i = 0; i < 5; ++i) {
             float y = 170 + (float)i * 88;
             btn(std::string("__stcat") + std::to_string(i), 400, y, 200, 36, catName[i], "", BG);
