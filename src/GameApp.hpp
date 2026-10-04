@@ -67,6 +67,7 @@ static void walkEmitters(Node& n, const WorldXf& parent, float dt) {
     for (const auto& c : n2->getChildren()) walkEmitters(*c, w, dt);
 }
 
+// Центр вьюпорта редактора: (596, 310) — вьюпорт 300,64 .. 892,556.
 static void projEditor(float wx, float wy, float& sx, float& sy, float zoom, float camX, float camY) {
     float S = 0.46875f * zoom;
     sx = 596 + (wx - camX - 640) * S;
@@ -127,9 +128,6 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
     for (const auto& c : n2->getChildren()) drawTexturePreviewTree(*c, w, out, zoom, camX, camY);
 }
 
-static std::string shiftDrawLineX(const std::string& line, float dx);
-static void shiftOutputX(std::string& out, float dx);
-
 // Hit-зоны панелей редактора (логические 1280x720).
 static const float CAM_PX0 = 792.0f, CAM_PX1 = 888.0f;
 static const float CAM_BTN_W_Y0 = 66.0f,  CAM_BTN_W_Y1 = 90.0f;
@@ -137,7 +135,7 @@ static const float CAM_BTN_H_Y0 = 92.0f,  CAM_BTN_H_Y1 = 116.0f;
 static const float CAM_BTN_O_Y0 = 118.0f, CAM_BTN_O_Y1 = 142.0f;
 
 static const float FN_BTN_X = 864.0f, FN_BTN_Y = 34.0f, FN_BTN_W = 28.0f, FN_BTN_H = 26.0f;
-static const float FNR_Y = 600.0f, FNR_H = 26.0f;
+static const float FNR_Y = 652.0f, FNR_H = 26.0f;
 static const float FNR_RIG_X0 = 300.0f, FNR_RIG_X1 = 410.0f;
 static const float FNR_STA_X0 = 414.0f, FNR_STA_X1 = 524.0f;
 static const float FNR_NOG_X0 = 528.0f, FNR_NOG_X1 = 608.0f;
@@ -145,12 +143,13 @@ static const float FNR_BOU_X0 = 612.0f, FNR_BOU_X1 = 692.0f;
 static const float FNR_CLR_X0 = 696.0f, FNR_CLR_X1 = 766.0f;
 static const float FNR_X_X0  = 860.0f, FNR_X_X1  = 892.0f;
 
-static const float SNP_Y0 = 360.0f, SNP_Y1 = 386.0f;
-static const float SNP_SET_X0 = 900.0f,  SNP_SET_X1 = 956.0f;
-static const float SNP_LOOP_X0 = 960.0f, SNP_LOOP_X1 = 1022.0f;
-static const float SNP_AUTO_X0 = 1026.0f, SNP_AUTO_X1 = 1088.0f;
-static const float SNP_PLAY_X0 = 1092.0f, SNP_PLAY_X1 = 1154.0f;
-static const float SNP_STOP_X0 = 1158.0f, SNP_STOP_X1 = 1220.0f;
+// Панель звука — ВНУТРИ вьюпорта (низ), чтобы не налезала на инспектор.
+static const float SNP_Y0 = 516.0f, SNP_Y1 = 542.0f;
+static const float SNP_SET_X0 = 310.0f,  SNP_SET_X1 = 366.0f;
+static const float SNP_LOOP_X0 = 370.0f, SNP_LOOP_X1 = 432.0f;
+static const float SNP_AUTO_X0 = 436.0f, SNP_AUTO_X1 = 498.0f;
+static const float SNP_PLAY_X0 = 502.0f, SNP_PLAY_X1 = 564.0f;
+static const float SNP_STOP_X0 = 568.0f, SNP_STOP_X1 = 630.0f;
 
 class GameApp {
 public:
@@ -208,7 +207,6 @@ public:
     ProjectInfo& project() { return project_; }
 
 private:
-    // ---- мелкие inline-хелперы ----
     Scene* uiScene() {
         if (appMode_ == AppMode::Hub) return &hubScene_;
         if (appMode_ == AppMode::Editor) return &editorScene_;
@@ -302,6 +300,13 @@ private:
         if (dragPSX_ < 0.01f) dragPSX_ = 1; if (dragPSY_ < 0.01f) dragPSY_ = 1;
     }
     void setNodeTexture(const std::string& name, const std::string& rel) {
+        // Аудиофайлы текстурой не назначаются: объект бы «исчез» (shape=none, битмапа нет).
+        size_t dguard = rel.find_last_of('.');
+        if (dguard != std::string::npos) {
+            std::string exg = rel.substr(dguard + 1);
+            for (auto& cg : exg) cg = (char)std::tolower((unsigned char)cg);
+            if (exg == "mp3" || exg == "ogg" || exg == "wav") return;
+        }
         editor_->setTexture(name, rel);
         Node2D* n = editor_->find2d(name);
         if (!n) return;
@@ -309,17 +314,6 @@ private:
         if (sp) sp->texturePath = rel;
         if (!rel.empty()) n->shape = "none";
     }
-    void attachChildTo(const std::string& child, const std::string& parent);
-    void detachChild(const std::string& child);
-    void pushUndo();
-    bool loadSnap(const std::string& rel);
-    bool doUndo();
-    bool doRedo();
-    void loadScript(const std::string& rel);
-    void saveScript();
-    void attachScript(const std::string& name);
-    void saveVars();
-    void loadVars();
     void clearDialogResults() {
         std::lock_guard<std::mutex> lk(dlgMtx_);
         hasText_ = false; hasName_ = false; hasAction_ = false; hasNum_ = false;
@@ -328,14 +322,6 @@ private:
         std::lock_guard<std::mutex> lk(dlgMtx_);
         if (!hasName_) return false; out = nameRes_; hasName_ = false; return true;
     }
-    void scTypeChar(char c);
-    void scCompose(const std::string& text);
-    void scCommit(const std::string& text);
-    void scFinish() { compAnchor_ = -1; }
-    void scBackspace();
-    void scMove(int d);
-    void scClampView();
-    void imeApply();
     EditorUiInput makeEditorUiInput() {
         return EditorUiInput{
             editor_.get(), scriptMode_, edZoom_, manip_, pickParent_, showCreate_, showAssets_, showSettings_, showPrefabs_, showFiles_,
@@ -344,17 +330,11 @@ private:
             curLine_, curCol_, imeShown_, g_luaLog
         };
     }
-    EditorRenderInput makeEditorRenderInput() { return EditorRenderInput{ editor_.get(), edZoom_, manip_, pickParent_, pickChild_, lastMsg_, fps_, projCamW_, projCamH_ }; }
+    EditorRenderInput makeEditorRenderInput() { return EditorRenderInput{ editor_.get(), edZoom_, manip_, pickParent_, pickChild_, lastMsg_, fps_, projCamW_, projCamH_, projVertical_, screenRatio_ }; }
     void buildEditorPanels() { editorScene_ = buildEditorScene(makeEditorUiInput()); input_.setUi(&editorScene_.ui); }
-
     std::string funcsOf(const std::string& nm) { auto it = projFuncs_.find(nm); return it == projFuncs_.end() ? std::string() : it->second; }
-    void addFuncToSelected(const std::string& fn);
-    void clearFuncsSelected();
-    void loadProjFuncs();
-    void saveProjFuncs();
-    void applyProjFuncs();
 
-    // ---- крупные методы, тела в файлах-частях ----
+    // ---- объявления крупных методов (тела в файлах-частях) ----
     void rebuildHub();
     std::string stepHub();
     bool enterGame(const std::string& dir);
@@ -374,6 +354,30 @@ private:
     void drainSoundCmds(std::string& out);
     void drainCollideEvents();
     void consumeOverlayAction();
+    void attachChildTo(const std::string& child, const std::string& parent);
+    void detachChild(const std::string& child);
+    void pushUndo();
+    bool loadSnap(const std::string& rel);
+    bool doUndo();
+    bool doRedo();
+    void loadScript(const std::string& rel);
+    void saveScript();
+    void attachScript(const std::string& name);
+    void saveVars();
+    void loadVars();
+    void scTypeChar(char c);
+    void scCompose(const std::string& text);
+    void scCommit(const std::string& text);
+    void scFinish() { compAnchor_ = -1; }
+    void scBackspace();
+    void scMove(int d);
+    void scClampView();
+    void imeApply();
+    void addFuncToSelected(const std::string& fn);
+    void clearFuncsSelected();
+    void loadProjFuncs();
+    void saveProjFuncs();
+    void applyProjFuncs();
 
 public:
     // ---- поля ----
