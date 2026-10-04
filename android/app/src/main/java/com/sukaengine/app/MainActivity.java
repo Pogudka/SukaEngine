@@ -55,6 +55,9 @@ public class MainActivity extends Activity {
     private static final float CODE_TEXT_X = 340f;
     private static final float CODE_FONT = 14f;
 
+    // Границы вьюпорта редактора (совпадают с C++: 300,64 .. 892,712).
+    private static final float EDV_X0 = 300f, EDV_Y0 = 64f, EDV_X1 = 892f, EDV_Y1 = 712f;
+
     // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH на весь экран (инструмент).
     // game -> CONTAIN; при совпадении пропорций кадра и экрана полос нет вообще.
     private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
@@ -689,7 +692,7 @@ public class MainActivity extends Activity {
             if (!line.startsWith("DRAW ")) return;
             String[] p = line.substring(5).split("\\|", -1);
             try {
-                if (p[0].equals("clipon")) { c.save(); c.clipRect(300, 64, 892, 556); return; }
+                if (p[0].equals("clipon")) { c.save(); c.clipRect(EDV_X0, EDV_Y0, EDV_X1, EDV_Y1); return; }
                 if (p[0].equals("clipoff")) { c.restore(); return; }
                 if (p[0].equals("bg")) {
                     // Фон сцены рисуем ВНУТРИ игрового прямоугольника (логические координаты).
@@ -814,7 +817,7 @@ public class MainActivity extends Activity {
                         float x = Float.parseFloat(p[2]), y = Float.parseFloat(p[3]);
                         float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                         float ang = p.length > 6 ? Float.parseFloat(p[6]) : 0f;
-                        if (editorFrame_) { c.save(); c.clipRect(300, 64, 892, 556); }
+                        if (editorFrame_) { c.save(); c.clipRect(EDV_X0, EDV_Y0, EDV_X1, EDV_Y1); }
                         if (ang != 0f) { c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang); c.drawBitmap(bm, null, new RectF(-w/2, -h/2, w/2, h/2), paint); c.restore(); }
                         else c.drawBitmap(bm, null, new RectF(x, y, x + w, y + h), paint);
                         if (editorFrame_) { c.restore(); }
@@ -916,4 +919,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                }
+                        }
