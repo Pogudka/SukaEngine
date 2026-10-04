@@ -21,16 +21,16 @@ struct EditorRenderInput {
     float fps;
     float viewW;
     float viewH;
+    bool viewVert;    // ROT:PORT -> рамка камеры вертикальная
+    float viewRatio;  // отношение сторон текущего окна (для расчёта вертикальной рамки)
 };
 
-// Геометрия вьюпорта редактора: 300,64 .. 892,556 (центр 596,310) — как раньше,
-// чтобы меню создания и панели под вьюпортом оставались видимыми и кликабельными.
 static const float EDV_X0 = 300.0f;
 static const float EDV_Y0 = 64.0f;
 static const float EDV_W  = 592.0f;
 static const float EDV_H  = 492.0f;
-static const float EDV_CX = EDV_X0 + EDV_W * 0.5f;   // 596
-static const float EDV_CY = EDV_Y0 + EDV_H * 0.5f;   // 310
+static const float EDV_CX = EDV_X0 + EDV_W * 0.5f;
+static const float EDV_CY = EDV_Y0 + EDV_H * 0.5f;
 
 inline void emitNodePreview(
     const Node* n,
@@ -158,10 +158,7 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
            std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" +
            std::to_string((int)VH) + "|#23232B|0\n";
 
-    // ==== БЕСКОНЕЧНАЯ КАРТА: адаптивная сетка на всей видимой области ====
-    // Видимый мировой прямоугольник считается из камеры и зума; линии рисуются
-    // на любых координатах (включая отрицательные). Шаг удваивается при отдалении
-    // и уменьшается при приближении, поэтому сетка читаема на любом зуме 0.01x..256x.
+    // Бесконечная адаптивная сетка + оси мира
     {
         float wx0 = sc.camX + 640.0f + (VX0 - CX) / S;
         float wx1 = sc.camX + 640.0f + (VX0 + VW - CX) / S;
@@ -185,7 +182,6 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
                    "|1|#33333D|0\n";
         }
 
-        // оси мира (x=0 / y=0) ярче, чтобы не теряться на бесконечной карте
         float ax = CX + (0.0f - sc.camX - 640.0f) * S;
         if (ax >= VX0 && ax <= VX0 + VW) {
             out += "DRAW rect|" + std::to_string((int)ax) + "|" +
@@ -216,10 +212,14 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
                std::to_string(b.angle) + "|" + resolveAssetPath(b.texture) + "\n";
     }
 
-    // ==== РАМКА КАМЕРЫ: граница видимой игроком области ====
+    // ==== РАМКА КАМЕРЫ: при ROT:PORT показывает вертикальные пропорции ====
     {
         float vw = in.viewW > 1.0f ? in.viewW : 1280.0f;
         float vh = in.viewH > 1.0f ? in.viewH : 720.0f;
+        if (in.viewVert) {
+            float r = in.viewRatio > 0.01f ? in.viewRatio : 1.7777f;
+            vw = vh / r;   // вертикальное окно: ширина меньше высоты
+        }
         float cxw = vw * 0.5f, cyw = vh * 0.5f, z = 1.0f;
         bool hasCam = false;
         Node* camN = sc.root ? const_cast<Scene&>(sc).root->findByType("Camera2D") : nullptr;
