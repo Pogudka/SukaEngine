@@ -125,60 +125,6 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
     for (const auto& c : n2->getChildren()) drawTexturePreviewTree(*c, w, out, zoom, camX, camY);
 }
 
-static std::vector<std::string> splitPipe(const std::string& s) {
-    std::vector<std::string> v;
-    size_t start = 0;
-    while (true) {
-        size_t p = s.find('|', start);
-        if (p == std::string::npos) { v.push_back(s.substr(start)); break; }
-        v.push_back(s.substr(start, p - start));
-        start = p + 1;
-    }
-    return v;
-}
-
-static std::string joinPipe(const std::vector<std::string>& v) {
-    std::string out;
-    for (size_t i = 0; i < v.size(); ++i) { if (i) out += '|'; out += v[i]; }
-    return out;
-}
-
-static std::string shiftDrawLineX(const std::string& line, float dx) {
-    if (line.rfind("DRAW ", 0) != 0) return line;
-    std::string body = line.substr(5);
-    size_t tp = body.find('|');
-    if (tp == std::string::npos) return line;
-    std::string type = body.substr(0, tp);
-    int xIndex = -1;
-    if (type == "text") xIndex = 2;
-    else if (type == "rect") xIndex = 1;
-    else if (type == "shape") xIndex = 2;
-    else if (type == "button") xIndex = 2;
-    else if (type == "tex") xIndex = 2;
-    else return line;
-    std::vector<std::string> parts = splitPipe(body);
-    if ((int)parts.size() <= xIndex) return line;
-    float x = (float)std::atof(parts[xIndex].c_str()) + dx;
-    parts[xIndex] = std::to_string(x);
-    return "DRAW " + joinPipe(parts);
-}
-
-static void shiftOutputX(std::string& out, float dx) {
-    if (std::fabs(dx) < 0.01f) return;
-    std::string res;
-    res.reserve(out.size());
-    size_t pos = 0;
-    while (pos < out.size()) {
-        size_t nl = out.find('\n', pos);
-        std::string line;
-        if (nl == std::string::npos) { line = out.substr(pos); pos = out.size(); }
-        else { line = out.substr(pos, nl - pos); pos = nl + 1; }
-        res += shiftDrawLineX(line, dx);
-        if (nl != std::string::npos) res += '\n';
-    }
-    out.swap(res);
-}
-
 // Camera-panel hit zones in editor logical coords (1280x720). Top-right of viewport.
 static const float CAM_PX0 = 792.0f, CAM_PX1 = 888.0f;
 static const float CAM_BTN_W_Y0 = 66.0f,  CAM_BTN_W_Y1 = 90.0f;
@@ -314,7 +260,6 @@ public:
         }
 
         if (appMode_ == AppMode::Editor && !scriptMode_ && !showCreate_) {
-            // Camera panel has priority over viewport dragging (top-right corner).
             if (t.action == RawTouch::Action::Down && !showSettings_ && !showPrefabs_ && !showAssets_
                 && x >= CAM_PX0 && x <= CAM_PX1) {
                 if (y >= CAM_BTN_W_Y0 && y <= CAM_BTN_W_Y1) {
@@ -328,9 +273,6 @@ public:
                     return;
                 }
                 if (y >= CAM_BTN_O_Y0 && y <= CAM_BTN_O_Y1) {
-                    // ROT = ориентация ОКНА (как держит телефон). Холст (W/H) НЕ трогаем:
-                    // свап мира ломал свёрстанную сцену. Рассогласование окна и холста
-                    // даёт аккуратные поля, а кнопки/лог — экранный оверлей (всегда норм.).
                     projVertical_ = !projVertical_;
                     saveProjCamera();
                     return;
@@ -460,7 +402,6 @@ private:
         return (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
     }
 
-    // ---- project camera settings (editor_camera.json) ----
     static double jsonNum(const std::string& s, const std::string& key, double def) {
         size_t p = s.find(key);
         if (p == std::string::npos) return def;
@@ -492,7 +433,6 @@ private:
         if (w < 160.0) w = 160.0; if (w > 2160.0) w = 2160.0;
         if (h < 160.0) h = 160.0; if (h > 2160.0) h = 2160.0;
         projCamW_ = (float)w; projCamH_ = (float)h;
-        // "vertical" = ориентация ОКНА (независимый флаг), НЕ выводится из W/H.
         projVertical_ = jsonBool(s, "\"vertical\"", false);
     }
     void saveProjCamera() {
@@ -559,16 +499,12 @@ private:
         if (cmd.transition) startTransition(cmd.type, cmd.scene, cmd.duration);
     }
 
-    // close/dbg рисует Java как экранный оверлей; в сцену их не кладём (иначе дубли).
     void ensureGameButtons() {
         Scene* sc = (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
         if (!sc) return;
         input_.setUi(&sc->ui);
     }
 
-    // Оверлейные кнопки шлют действие ЧЕРЕЗ существующий nativeSetAction с префиксом
-    // "ov:" (новый JNI-символ не нужен -> краш от отсутствия символа невозможен).
-    // Вызывается ПЕРВОЙ в stepGame, до clearDialogResults, чтобы нажатие не затёрлось.
     void consumeOverlayAction() {
         std::string a; bool hit = false;
         { std::lock_guard<std::mutex> lk(dlgMtx_);
@@ -912,7 +848,6 @@ private:
     }
 
     std::string stepGame() {
-        // ПЕРВОЕ дело: снять нажатия оверлея (X/DBG), пока их не затёр clearDialogResults.
         consumeOverlayAction();
         if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
         consumeLuaCmd();
@@ -969,16 +904,15 @@ private:
             }
         }
 
-        if (std::fabs(transOffset_) > 0.01f) shiftOutputX(out, transOffset_);
-        if (transAlpha_ > 0.001f) {
-            int ai = (int)(transAlpha_ * 255.0f + 0.5f); if (ai < 0) ai = 0; if (ai > 255) ai = 255;
-            char ab[3]; std::snprintf(ab, sizeof(ab), "%02X", (unsigned)ai);
-            out += "DRAW rect|0|0|" + std::to_string((int)logicW_) + "|" + std::to_string((int)logicH_) + "|#";
-            out += ab; out += "000000|0\n";
+        // Транзишены больше НЕ рисуются в логических координатах (иначе fade не покрывал
+        // оверлей/поля, а slide открывал letterbox-«рамки»). Шлём состояние в Java,
+        // которая сдвинет contain-кадр и затемнит ВЕСЬ экран поверх всего.
+        if (transActive_) {
+            out += "TRANS|" + std::to_string(transType_) + "|" + std::to_string(transPhase_) + "|" + std::to_string(transProgress_) + "\n";
+        } else {
+            out += "TRANS|0|0|0\n";
         }
 
-        // DBG-стат и лог Lua -> экранный оверлей (OVSTAT/OVLOG), читаются горизонтально
-        // и не зависят от ориентации/полей. В координатах холста больше не рисуем.
         if (dbg_ && sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
             nodeCount_ = countNodes(sceneMgr_->current()->root.get()); lastDraws_ = 0;
             for (size_t i = 0; i + 4 < out.size(); ++i) if (out[i] == 'D' && out[i + 1] == 'R' && out[i + 2] == 'A' && out[i + 3] == 'W') ++lastDraws_;
@@ -999,7 +933,6 @@ private:
         const std::string pReturn = "editor_return:";
         const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:", pClose = "close:";
         if (act == pClose) {
-            // Кнопка X оверлея: возврат в редактор (если играли из него) или в хаб.
             if (saveVarsEnabled_) saveVars();
             clearTransition();
             if (playFromEditor_) { playFromEditor_ = false; enterEditor(lastEditorDir_); }
@@ -1375,7 +1308,6 @@ private:
                 float v = (float)atof(num.c_str());
                 if (v < 160.0f) v = 160.0f; if (v > 2160.0f) v = 2160.0f;
                 if (pendingNumKind_ == "camw") projCamW_ = v; else projCamH_ = v;
-                // НЕ трогаем projVertical_: W/H = холст, vertical = ориентация окна.
                 saveProjCamera();
                 pendingNumKind_.clear();
             } else {
