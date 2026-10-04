@@ -65,10 +65,11 @@ static void walkEmitters(Node& n, const WorldXf& parent, float dt) {
     for (const auto& c : n2->getChildren()) walkEmitters(*c, w, dt);
 }
 
+// Центр вьюпорта редактора: (596, 388) — вьюпорт расширен до 64..712 по Y.
 static void projEditor(float wx, float wy, float& sx, float& sy, float zoom, float camX, float camY) {
     float S = 0.46875f * zoom;
     sx = 596 + (wx - camX - 640) * S;
-    sy = 310 + (wy - camY - 360) * S;
+    sy = 388 + (wy - camY - 360) * S;
 }
 
 static void drawParticlePreviewTree(Node& n, const WorldXf& parent, std::string& out,
@@ -125,6 +126,61 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
     for (const auto& c : n2->getChildren()) drawTexturePreviewTree(*c, w, out, zoom, camX, camY);
 }
 
+static std::vector<std::string> splitPipe(const std::string& s) {
+    std::vector<std::string> v;
+    size_t start = 0;
+    while (true) {
+        size_t p = s.find('|', start);
+        if (p == std::string::npos) { v.push_back(s.substr(start)); break; }
+        v.push_back(s.substr(start, p - start));
+        start = p + 1;
+    }
+    return v;
+}
+
+static std::string joinPipe(const std::vector<std::string>& v) {
+    std::string out;
+    for (size_t i = 0; i < v.size(); ++i) { if (i) out += '|'; out += v[i]; }
+    return out;
+}
+
+static std::string shiftDrawLineX(const std::string& line, float dx) {
+    if (line.rfind("DRAW ", 0) != 0) return line;
+    std::string body = line.substr(5);
+    size_t tp = body.find('|');
+    if (tp == std::string::npos) return line;
+    std::string type = body.substr(0, tp);
+    int xIndex = -1;
+    if (type == "text") xIndex = 2;
+    else if (type == "rect") xIndex = 1;
+    else if (type == "shape") xIndex = 2;
+    else if (type == "button") xIndex = 2;
+    else if (type == "tex") xIndex = 2;
+    else return line;
+    std::vector<std::string> parts = splitPipe(body);
+    if ((int)parts.size() <= xIndex) return line;
+    float x = (float)std::atof(parts[xIndex].c_str()) + dx;
+    parts[xIndex] = std::to_string(x);
+    return "DRAW " + joinPipe(parts);
+}
+
+static void shiftOutputX(std::string& out, float dx) {
+    if (std::fabs(dx) < 0.01f) return;
+    std::string res;
+    res.reserve(out.size());
+    size_t pos = 0;
+    while (pos < out.size()) {
+        size_t nl = out.find('\n', pos);
+        std::string line;
+        if (nl == std::string::npos) { line = out.substr(pos); pos = out.size(); }
+        else { line = out.substr(pos, nl - pos); pos = nl + 1; }
+        res += shiftDrawLineX(line, dx);
+        if (nl != std::string::npos) res += '\n';
+    }
+    out.swap(res);
+}
+
+// Camera-panel hit zones in editor logical coords (1280x720). Top-right of viewport.
 static const float CAM_PX0 = 792.0f, CAM_PX1 = 888.0f;
 static const float CAM_BTN_W_Y0 = 66.0f,  CAM_BTN_W_Y1 = 90.0f;
 static const float CAM_BTN_H_Y0 = 92.0f,  CAM_BTN_H_Y1 = 116.0f;
@@ -187,7 +243,7 @@ public:
             pinching_ = true; pinchDist0_ = dist; pinchZoom0_ = edZoom_;
             float S = 0.46875f * edZoom_;
             pinchAX_ = 640 + es->camX + (mx - 596) / S;
-            pinchAY_ = 360 + es->camY + (my - 310) / S;
+            pinchAY_ = 360 + es->camY + (my - 388) / S;
             return;
         }
         if (phase == 3) { pinching_ = false; return; }
@@ -195,11 +251,11 @@ public:
         float z = pinchZoom0_;
         if (pinchDist0_ > 4 && dist > 4) {
             z = pinchZoom0_ * (dist / pinchDist0_);
-            if (z < 0.4f) z = 0.4f; if (z > 3.0f) z = 3.0f;
+            if (z < 0.01f) z = 0.01f; if (z > 256.0f) z = 256.0f;
         }
         float S = 0.46875f * z;
         es->camX = pinchAX_ - 640 - (mx - 596) / S;
-        es->camY = pinchAY_ - 360 - (my - 310) / S;
+        es->camY = pinchAY_ - 360 - (my - 388) / S;
         edZoom_ = z;
     }
 
@@ -347,7 +403,7 @@ public:
                 } else if (t.action == RawTouch::Action::Up) { gizmoRot_ = false; gizmoSclX_ = false; gizmoSclY_ = false; lockAxis_ = 0; }
             }
 
-            const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
+            const float VX0 = 300, VY0 = 64, VW = 592, VH = 648;
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
             if (t.action == RawTouch::Action::Down && inVP && es) {
                 float wx, wy; unproj(*es, x, y, wx, wy);
@@ -458,9 +514,6 @@ private:
         f.close();
     }
 
-    // Кадр игры подгоняется под реальные пропорции экрана: высота = H проекта,
-    // ширина = H * ratio. Масштаб остаётся равномерным (ничего не плющится),
-    // а contain-вписывание даёт нулевые поля => игра на весь экран.
     void applyScreenRatio() {
         if (screenRatio_ <= 0.0f) return;
         float h = projCamH_;
@@ -545,8 +598,8 @@ private:
         if (hit && !a.empty()) runAction(a);
     }
 
-    void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) { float S = 0.46875f * edZoom_; sx = 596 + (wx - sc.camX - 640) * S; sy = 310 + (wy - sc.camY - 360) * S; }
-    void unproj(const Scene& sc, float sx, float sy, float& wx, float& wy) { float S = 0.46875f * edZoom_; wx = 640 + sc.camX + (sx - 596) / S; wy = 360 + sc.camY + (sy - 310) / S; }
+    void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) { float S = 0.46875f * edZoom_; sx = 596 + (wx - sc.camX - 640) * S; sy = 388 + (wy - sc.camY - 360) * S; }
+    void unproj(const Scene& sc, float sx, float sy, float& wx, float& wy) { float S = 0.46875f * edZoom_; wx = 640 + sc.camX + (sx - 596) / S; wy = 360 + sc.camY + (sy - 388) / S; }
     void unprojGame(const Scene& sc, float sx, float sy, float& wx, float& wy) {
         float hx = logicW_ * 0.5f, hy = logicH_ * 0.5f;
         Node* cn = sc.root ? sc.root->findByType("Camera2D") : nullptr;
