@@ -313,8 +313,9 @@ public:
                     return;
                 }
                 if (y >= CAM_BTN_O_Y0 && y <= CAM_BTN_O_Y1) {
-                    std::swap(projCamW_, projCamH_);
-                    projVertical_ = (projCamH_ > projCamW_);
+                    // ROT меняет ТОЛЬКО ориентацию окна, размер мира (W/H) не трогает.
+                    // Раньше тут был swap(W,H) -> мир искажался/уезжал ("Чили").
+                    projVertical_ = !projVertical_;
                     saveProjCamera();
                     return;
                 }
