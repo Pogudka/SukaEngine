@@ -19,7 +19,9 @@ struct EditorRenderInput {
     const std::string& pickChild;
     const std::string& lastMsg;
     float fps;
-};;
+    float viewW;   // размер игрового холста (projCamW), для рамки камеры
+    float viewH;   // (projCamH)
+};
 
 inline void emitNodePreview(
     const Node* n,
@@ -131,7 +133,7 @@ inline void emitNodePreview(
     }
 }
 
-// Background, grid, nodes, scene buttons. NO gizmos here (they go on top later).
+// Background, grid, nodes, scene buttons, and the CAMERA FRAME on top of them.
 inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRenderInput& in) {
     const float VX0 = 300;
     const float VY0 = 64;
@@ -182,6 +184,55 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
                std::to_string((int)bw) + "|" + std::to_string((int)bh) + "|" +
                colorToHexA(withAlpha(b.color, b.alpha)) + "|" +
                std::to_string(b.angle) + "|" + resolveAssetPath(b.texture) + "\n";
+    }
+
+    // ==== CAMERA FRAME ====
+    // Точная область, которую увидит игрок: центр = позиция Camera2D (если узла нет —
+    // центр холста), размер = viewW/viewH, поделённый на zoom камеры. Рисуется поверх
+    // нод и кнопок сцены, поэтому рамку всегда видно «на объекте камеры».
+    {
+        float vw = in.viewW > 1.0f ? in.viewW : 1280.0f;
+        float vh = in.viewH > 1.0f ? in.viewH : 720.0f;
+        float cxw = vw * 0.5f, cyw = vh * 0.5f, z = 1.0f;
+        bool hasCam = false;
+        Node* camN = sc.root ? const_cast<Scene&>(sc).root->findByType("Camera2D") : nullptr;
+        Camera2D* cam = camN ? static_cast<Camera2D*>(camN) : nullptr;
+        if (cam) {
+            hasCam = true;
+            cxw = cam->position.x;
+            cyw = cam->position.y;
+            z = cam->zoom > 0.01f ? cam->zoom : 1.0f;
+        }
+        float fw = vw / z;
+        float fh = vh / z;
+        float x0w = cxw - fw * 0.5f;
+        float y0w = cyw - fh * 0.5f;
+
+        float sx0 = CX + (x0w - sc.camX - 640) * S;
+        float sy0 = CY + (y0w - sc.camY - 360) * S;
+        float sw = fw * S;
+        float sh = fh * S;
+
+        const char* col = hasCam ? "#FF8800" : "#7F8CA3";
+        float t = 2.0f;
+
+        // 4 стороны рамки
+        out += std::string("DRAW rect|") + std::to_string((int)sx0) + "|" + std::to_string((int)sy0) + "|" + std::to_string((int)sw) + "|" + std::to_string((int)t) + "|" + col + "|0\n";
+        out += std::string("DRAW rect|") + std::to_string((int)sx0) + "|" + std::to_string((int)(sy0 + sh - t)) + "|" + std::to_string((int)sw) + "|" + std::to_string((int)t) + "|" + col + "|0\n";
+        out += std::string("DRAW rect|") + std::to_string((int)sx0) + "|" + std::to_string((int)sy0) + "|" + std::to_string((int)t) + "|" + std::to_string((int)sh) + "|" + col + "|0\n";
+        out += std::string("DRAW rect|") + std::to_string((int)(sx0 + sw - t)) + "|" + std::to_string((int)sy0) + "|" + std::to_string((int)t) + "|" + std::to_string((int)sh) + "|" + col + "|0\n";
+
+        // уголки-маркеры, чтобы рамку было легко схватить глазом
+        float ck = 10.0f;
+        out += std::string("DRAW rect|") + std::to_string((int)(sx0 - 1)) + "|" + std::to_string((int)(sy0 - 1)) + "|" + std::to_string((int)ck) + "|3|" + col + "|0\n";
+        out += std::string("DRAW rect|") + std::to_string((int)(sx0 - 1)) + "|" + std::to_string((int)(sy0 - 1)) + "|3|" + std::to_string((int)ck) + "|" + col + "|0\n";
+        out += std::string("DRAW rect|") + std::to_string((int)(sx0 + sw - ck + 1)) + "|" + std::to_string((int)(sy0 + sh - 2)) + "|" + std::to_string((int)ck) + "|3|" + col + "|0\n";
+        out += std::string("DRAW rect|") + std::to_string((int)(sx0 + sw - 2)) + "|" + std::to_string((int)(sy0 + sh - ck + 1)) + "|3|" + std::to_string((int)ck) + "|" + col + "|0\n";
+
+        // подпись с фактическим размером видимой области
+        std::string lbl = std::string("CAM ") + std::to_string((int)fw) + "x" + std::to_string((int)fh);
+        if (hasCam) lbl += "  zoom " + std::to_string((int)(z * 100)) + "%";
+        out += "DRAW text|" + lbl + "|" + std::to_string((int)(sx0 + 4)) + "|" + std::to_string((int)(sy0 - 16)) + "|12|" + col + "|0\n";
     }
 }
 
