@@ -125,7 +125,6 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
     for (const auto& c : n2->getChildren()) drawTexturePreviewTree(*c, w, out, zoom, camX, camY);
 }
 
-// Camera-panel hit zones in editor logical coords (1280x720). Top-right of viewport.
 static const float CAM_PX0 = 792.0f, CAM_PX1 = 888.0f;
 static const float CAM_BTN_W_Y0 = 66.0f,  CAM_BTN_W_Y1 = 90.0f;
 static const float CAM_BTN_H_Y0 = 92.0f,  CAM_BTN_H_Y1 = 116.0f;
@@ -154,6 +153,7 @@ public:
         projCamW_ = 1280.0f;
         projCamH_ = 720.0f;
         projVertical_ = false;
+        screenRatio_ = 0.0f;
         clearTransition();
 
         rebuildHub();
@@ -444,6 +444,21 @@ private:
         f.close();
     }
 
+    // Подгон логического кадра игры под реальное отношение сторон экрана.
+    // Высота кадра = H проекта, ширина = H * ratio экрана (или наоборот в портрете):
+    // масштаб остаётся РАВНОМЕРНЫМ (ничего не плющится), а кадр заполняет экран целиком.
+    void applyScreenRatio() {
+        if (screenRatio_ <= 0.0f) return;
+        float w, h;
+        if (projVertical_) { h = projCamH_; w = h * screenRatio_; }
+        else { h = projCamH_; w = h * screenRatio_; }
+        if (w < 160.0f) w = 160.0f; if (w > 2160.0f) w = 2160.0f;
+        if (h < 160.0f) h = 160.0f; if (h > 2160.0f) h = 2160.0f;
+        logicW_ = w; logicH_ = h;
+        input_.screenWidth = logicW_;
+        input_.screenHeight = logicH_;
+    }
+
     void clearTransition() {
         transActive_ = false; transType_ = 0; transPhase_ = 0;
         transProgress_ = 0.0f; transDuration_ = 0.4f;
@@ -505,14 +520,22 @@ private:
         input_.setUi(&sc->ui);
     }
 
+    // Служебные сообщения с Java: "ov:..." (оверлей) и "sys:ratio|..." (отношение сторон).
     void consumeOverlayAction() {
         std::string a; bool hit = false;
         { std::lock_guard<std::mutex> lk(dlgMtx_);
-          if (hasAction_ && !actionRes_.empty() && actionRes_.rfind("ov:", 0) == 0) {
-              a = actionRes_.substr(3); hit = true; hasAction_ = false; actionRes_.clear();
+          if (hasAction_ && !actionRes_.empty()) {
+              if (actionRes_.rfind("ov:", 0) == 0) {
+                  a = actionRes_.substr(3); hit = true;
+              } else if (actionRes_.rfind("sys:ratio|", 0) == 0) {
+                  float r = (float)atof(actionRes_.c_str() + 10);
+                  if (r > 0.2f && r < 5.0f) screenRatio_ = r; else screenRatio_ = 0.0f;
+                  hit = true;
+              }
+              if (hit) { hasAction_ = false; actionRes_.clear(); }
           }
         }
-        if (hit) runAction(a);
+        if (hit && !a.empty()) runAction(a);
     }
 
     void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) { float S = 0.46875f * edZoom_; sx = 596 + (wx - sc.camX - 640) * S; sy = 310 + (wy - sc.camY - 360) * S; }
@@ -832,6 +855,7 @@ private:
 
         loadProjCamera(project_.rootPath);
         logicW_ = projCamW_; logicH_ = projCamH_; orientVertical_ = projVertical_;
+        applyScreenRatio();   // если ratio уже известен — сразу кадр под экран
         input_.screenWidth = logicW_; input_.screenHeight = logicH_;
         orientName_ = orientVertical_ ? "portrait" : "landscape";
         emitOrient_ = true;
@@ -849,6 +873,7 @@ private:
 
     std::string stepGame() {
         consumeOverlayAction();
+        applyScreenRatio();   // каждый кадр держим кадр игры = пропорции экрана
         if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
         consumeLuaCmd();
         if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
@@ -904,9 +929,6 @@ private:
             }
         }
 
-        // Транзишены больше НЕ рисуются в логических координатах (иначе fade не покрывал
-        // оверлей/поля, а slide открывал letterbox-«рамки»). Шлём состояние в Java,
-        // которая сдвинет contain-кадр и затемнит ВЕСЬ экран поверх всего.
         if (transActive_) {
             out += "TRANS|" + std::to_string(transType_) + "|" + std::to_string(transPhase_) + "|" + std::to_string(transProgress_) + "\n";
         } else {
@@ -1256,6 +1278,8 @@ private:
         bool ht = false, hn = false, ha = false, hnum = false;
         { std::lock_guard<std::mutex> lk(dlgMtx_); ht = hasText_; hn = hasName_; ha = hasAction_; hnum = hasNum_; txt = textRes_; nm = nameRes_; act = actionRes_; num = numRes_; hasText_ = false; hasName_ = false; hasAction_ = false; hasNum_ = false; }
         if (!editor_) return;
+        // Служебные sys:-сообщения не должны попадать в диалог действия редактора.
+        if (ha && act.rfind("sys:", 0) == 0) ha = false;
 
         if (ht && pendingSceneSave_) {
             std::string name = sanitizeProjectDirName(txt);
@@ -1547,6 +1571,7 @@ private:
     float projCamW_ = 1280.0f;
     float projCamH_ = 720.0f;
     bool projVertical_ = false;
+    float screenRatio_ = 0.0f;   // реальное отношение сторон экрана (ширина/высота), шлёт Java
 
     bool transActive_ = false;
     int transType_ = 0;
