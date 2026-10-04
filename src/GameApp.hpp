@@ -34,6 +34,7 @@
 #include "HubUI.hpp"
 #include "EditorUI.hpp"
 #include "EditorRender.hpp"
+#include "LuaGameApi.hpp"
 
 namespace suka {
 
@@ -124,6 +125,60 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
     for (const auto& c : n2->getChildren()) drawTexturePreviewTree(*c, w, out, zoom, camX, camY);
 }
 
+static std::vector<std::string> splitPipe(const std::string& s) {
+    std::vector<std::string> v; size_t start = 0;
+    while (true) {
+        size_t p = s.find('|', start);
+        if (p == std::string::npos) { v.push_back(s.substr(start)); break; }
+        v.push_back(s.substr(start, p - start)); start = p + 1;
+    }
+    return v;
+}
+static std::string joinPipe(const std::vector<std::string>& v) {
+    std::string out;
+    for (size_t i = 0; i < v.size(); ++i) { if (i) out += '|'; out += v[i]; }
+    return out;
+}
+static std::string shiftDrawLineX(const std::string& line, float dx) {
+    if (line.rfind("DRAW ", 0) != 0) return line;
+    std::string body = line.substr(5);
+    size_t tp = body.find('|');
+    if (tp == std::string::npos) return line;
+    std::string type = body.substr(0, tp);
+    int xIndex = -1;
+    if (type == "text") xIndex = 2;
+    else if (type == "rect") xIndex = 1;
+    else if (type == "shape") xIndex = 2;
+    else if (type == "button") xIndex = 2;
+    else if (type == "tex") xIndex = 2;
+    else return line;
+    std::vector<std::string> parts = splitPipe(body);
+    if ((int)parts.size() <= xIndex) return line;
+    float x = (float)std::atof(parts[xIndex].c_str()) + dx;
+    parts[xIndex] = std::to_string(x);
+    return "DRAW " + joinPipe(parts);
+}
+static void shiftOutputX(std::string& out, float dx) {
+    if (std::fabs(dx) < 0.01f) return;
+    std::string res; res.reserve(out.size());
+    size_t pos = 0;
+    while (pos < out.size()) {
+        size_t nl = out.find('\n', pos);
+        std::string line;
+        if (nl == std::string::npos) { line = out.substr(pos); pos = out.size(); }
+        else { line = out.substr(pos, nl - pos); pos = nl + 1; }
+        res += shiftDrawLineX(line, dx);
+        if (nl != std::string::npos) res += '\n';
+    }
+    out.swap(res);
+}
+
+// Camera-panel hit zones in editor logical coords (1280x720). Top-right of viewport.
+static const float CAM_PX0 = 792.0f, CAM_PX1 = 888.0f;
+static const float CAM_BTN_W_Y0 = 66.0f,  CAM_BTN_W_Y1 = 90.0f;
+static const float CAM_BTN_H_Y0 = 92.0f,  CAM_BTN_H_Y1 = 116.0f;
+static const float CAM_BTN_O_Y0 = 118.0f, CAM_BTN_O_Y1 = 142.0f;
+
 class GameApp {
 public:
     using Manip = suka::Manip;
@@ -136,7 +191,11 @@ public:
         hubState_.games = ProjectList::scan();
         hubState_.selectedDir = gameDir;
         if (hubState_.selectedDir.empty() && !hubState_.games.empty()) hubState_.selectedDir = hubState_.games.front().dir;
-        input_.screenWidth = 1280.0f; input_.screenHeight = 720.0f;
+        logicW_ = 1280.0f; logicH_ = 720.0f;
+        input_.screenWidth = logicW_; input_.screenHeight = logicH_;
+        orientVertical_ = false; emitOrient_ = false; orientName_ = "landscape";
+        projCamW_ = 1280.0f; projCamH_ = 720.0f; projVertical_ = false;
+        clearTransition();
         rebuildHub();
         appMode_ = AppMode::Hub;
         return true;
@@ -185,13 +244,9 @@ public:
     }
 
     void feedTouch(int action, float x, float y) {
-        // Dedicated caret-placement action from the Java side: x = global line index,
-        // y = UTF-8 byte offset already resolved against the real proportional glyph
-        // widths. Bypasses the old monospace-grid guesswork entirely.
         if (action == 9) {
             if (appMode_ == AppMode::Editor && scriptMode_ && editor_) {
-                int line = (int)x;
-                int col  = (int)y;
+                int line = (int)x; int col = (int)y;
                 if (line < 0) line = 0;
                 if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
                 const std::string& L = scriptLines_[line];
@@ -203,6 +258,8 @@ public:
             }
             return;
         }
+
+        if (appMode_ == AppMode::Game && transActive_) return;
 
         RawTouch t;
         if (action == 0) t.action = RawTouch::Action::Down;
@@ -242,6 +299,27 @@ public:
         }
 
         if (appMode_ == AppMode::Editor && !scriptMode_ && !showCreate_) {
+            // Camera panel has priority over viewport dragging (top-right corner).
+            if (t.action == RawTouch::Action::Down && !showSettings_ && !showPrefabs_ && !showAssets_
+                && x >= CAM_PX0 && x <= CAM_PX1) {
+                if (y >= CAM_BTN_W_Y0 && y <= CAM_BTN_W_Y1) {
+                    pendingNum_ = true; pendingNumKind_ = "camw";
+                    pendingNumCur_ = std::to_string((int)projCamW_);
+                    return;
+                }
+                if (y >= CAM_BTN_H_Y0 && y <= CAM_BTN_H_Y1) {
+                    pendingNum_ = true; pendingNumKind_ = "camh";
+                    pendingNumCur_ = std::to_string((int)projCamH_);
+                    return;
+                }
+                if (y >= CAM_BTN_O_Y0 && y <= CAM_BTN_O_Y1) {
+                    std::swap(projCamW_, projCamH_);
+                    projVertical_ = (projCamH_ > projCamW_);
+                    saveProjCamera();
+                    return;
+                }
+            }
+
             Scene* es = editor_ ? editor_->scene() : nullptr;
             float Z = edZoom_;
 
@@ -365,11 +443,123 @@ private:
         return (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
     }
 
+    // ---- project camera settings (editor_camera.json) ----
+    static double jsonNum(const std::string& s, const std::string& key, double def) {
+        size_t p = s.find(key);
+        if (p == std::string::npos) return def;
+        p += key.size();
+        while (p < s.size() && (s[p] == ':' || s[p] == ' ' || s[p] == '\t')) ++p;
+        const char* c = s.c_str() + p;
+        char* end = nullptr;
+        double v = std::strtod(c, &end);
+        if (end == c) return def;
+        return v;
+    }
+    static bool jsonBool(const std::string& s, const std::string& key, bool def) {
+        size_t p = s.find(key);
+        if (p == std::string::npos) return def;
+        p += key.size();
+        while (p < s.size() && (s[p] == ':' || s[p] == ' ' || s[p] == '\t')) ++p;
+        if (s.compare(p, 4, "true") == 0) return true;
+        if (s.compare(p, 5, "false") == 0) return false;
+        return def;
+    }
+    void loadProjCamera(const std::string& root) {
+        projCamW_ = 1280.0f; projCamH_ = 720.0f; projVertical_ = false;
+        if (root.empty()) return;
+        std::string path = root + "/editor_camera.json";
+        if (!fileExists(path)) return;
+        std::string s = readFile(path);
+        double w = jsonNum(s, "\"w\"", 1280.0);
+        double h = jsonNum(s, "\"h\"", 720.0);
+        if (w < 160.0) w = 160.0; if (w > 2160.0) w = 2160.0;
+        if (h < 160.0) h = 160.0; if (h > 2160.0) h = 2160.0;
+        projCamW_ = (float)w; projCamH_ = (float)h;
+        projVertical_ = jsonBool(s, "\"vertical\"", projCamH_ > projCamW_);
+    }
+    void saveProjCamera() {
+        if (project_.rootPath.empty()) return;
+        std::ofstream f(project_.rootPath + "/editor_camera.json");
+        if (!f.good()) return;
+        f << "{\"w\":" << (int)projCamW_ << ",\"h\":" << (int)projCamH_
+          << ",\"vertical\":" << (projVertical_ ? "true" : "false") << "}\n";
+        f.close();
+    }
+
+    void clearTransition() {
+        transActive_ = false; transType_ = 0; transPhase_ = 0;
+        transProgress_ = 0.0f; transDuration_ = 0.4f;
+        transOffset_ = 0.0f; transAlpha_ = 0.0f; transTarget_.clear();
+    }
+
+    void startTransition(int type, const std::string& target, float duration) {
+        if (target.empty()) return;
+        if (type == 3) { performSceneChange(target); return; }
+        if (transActive_) return;
+        transActive_ = true; transType_ = type; transPhase_ = 0;
+        transProgress_ = 0.0f; transDuration_ = duration > 0.05f ? duration : 0.4f;
+        transTarget_ = target; transOffset_ = 0.0f; transAlpha_ = 0.0f;
+    }
+
+    void performSceneChange(const std::string& target) {
+        if (!sceneMgr_ || target.empty()) return;
+        g_tweens.clear(); g_particles.clear();
+        bool ok = sceneMgr_->restartScene(target, resources_);
+        if (!ok) sceneMgr_->requestChange(target, true);
+        touch_.resetJoystick();
+        ensureGameButtons();
+    }
+
+    void updateTransition(float dt) {
+        if (!transActive_) return;
+        if (transDuration_ <= 0.001f) { clearTransition(); return; }
+        float step = dt / transDuration_; if (step > 1.0f) step = 1.0f;
+        transProgress_ += step;
+        if (transPhase_ == 0) {
+            if (transType_ == 0) { transAlpha_ = transProgress_; transOffset_ = 0.0f; }
+            else if (transType_ == 1) { transAlpha_ = 0.0f; transOffset_ = -logicW_ * transProgress_; }
+            else if (transType_ == 2) { transAlpha_ = 0.0f; transOffset_ = logicW_ * transProgress_; }
+            if (transProgress_ >= 1.0f) {
+                std::string target = transTarget_; transTarget_.clear();
+                performSceneChange(target);
+                if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return; }
+                transPhase_ = 1; transProgress_ = 0.0f;
+            }
+        } else {
+            if (transType_ == 0) { transAlpha_ = 1.0f - transProgress_; transOffset_ = 0.0f; }
+            else if (transType_ == 1) { transAlpha_ = 0.0f; transOffset_ = logicW_ * (1.0f - transProgress_); }
+            else if (transType_ == 2) { transAlpha_ = 0.0f; transOffset_ = -logicW_ * (1.0f - transProgress_); }
+            if (transProgress_ >= 1.0f) clearTransition();
+        }
+    }
+
+    void consumeLuaCmd() {
+        LuaGameCmd cmd; bool any = false;
+        { std::lock_guard<std::mutex> lk(g_luaCmdMtx);
+          if (g_luaCmd.transition) { cmd = g_luaCmd; g_luaCmd = LuaGameCmd{}; any = true; } }
+        if (!any) return;
+        if (cmd.transition) startTransition(cmd.type, cmd.scene, cmd.duration);
+    }
+
+    void ensureGameButtons() {
+        Scene* sc = (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
+        if (!sc) return;
+        bool hasClose = false, hasDbg = false;
+        for (auto& b : sc->ui) {
+            if (b.touch.id == "close") { hasClose = true; b.touch.rect = Rect{logicW_ - 100.0f, 10.0f, 90.0f, 70.0f}; b.text = "X"; b.action = playFromEditor_ ? "editor_return:" : "hub:"; b.color = parseColor("#D62828"); }
+            else if (b.touch.id == "dbg") { hasDbg = true; b.touch.rect = Rect{logicW_ - 200.0f, 10.0f, 90.0f, 70.0f}; b.text = "DBG"; b.action = "dbg:"; b.color = parseColor("#808080"); }
+        }
+        if (!hasClose) { UiButton c; c.touch.id = "close"; c.touch.rect = Rect{logicW_ - 100.0f, 10.0f, 90.0f, 70.0f}; c.text = "X"; c.action = playFromEditor_ ? "editor_return:" : "hub:"; c.color = parseColor("#D62828"); sc->ui.push_back(c); }
+        if (!hasDbg) { UiButton d; d.touch.id = "dbg"; d.touch.rect = Rect{logicW_ - 200.0f, 10.0f, 90.0f, 70.0f}; d.text = "DBG"; d.action = "dbg:"; d.color = parseColor("#808080"); sc->ui.push_back(d); }
+        input_.setUi(&sc->ui);
+    }
+
     void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) { float S = 0.46875f * edZoom_; sx = 596 + (wx - sc.camX - 640) * S; sy = 310 + (wy - sc.camY - 360) * S; }
     void unproj(const Scene& sc, float sx, float sy, float& wx, float& wy) { float S = 0.46875f * edZoom_; wx = 640 + sc.camX + (sx - 596) / S; wy = 360 + sc.camY + (sy - 310) / S; }
     void unprojGame(const Scene& sc, float sx, float sy, float& wx, float& wy) {
+        float hx = logicW_ * 0.5f, hy = logicH_ * 0.5f;
         Node* cn = sc.root ? sc.root->findByType("Camera2D") : nullptr;
-        if (cn) { Camera2D* cam = static_cast<Camera2D*>(cn); float z = cam->zoom > 0.01f ? cam->zoom : 1.0f; wx = (sx - 640) / z + cam->position.x; wy = (sy - 360) / z + cam->position.y; }
+        if (cn) { Camera2D* cam = static_cast<Camera2D*>(cn); float z = cam->zoom > 0.01f ? cam->zoom : 1.0f; wx = (sx - hx) / z + cam->position.x; wy = (sy - hy) / z + cam->position.y; }
         else { wx = sx; wy = sy; }
     }
 
@@ -450,7 +640,6 @@ private:
         std::string rel = undoStack_.back(); undoStack_.pop_back();
         bool ok = loadSnap(rel); lastMsg_ = ok ? "undo" : "undo failed"; return ok;
     }
-
     bool doRedo() {
         if (!editor_ || redoStack_.empty()) { lastMsg_ = "nothing to redo"; return false; }
         std::string cur = "snap_" + std::to_string(snapCounter_++) + ".json";
@@ -467,14 +656,12 @@ private:
         if (scriptLines_.empty()) scriptLines_.push_back("");
         curLine_ = 0; curCol_ = 0; scriptScroll_ = 0; compAnchor_ = -1;
     }
-
     void saveScript() {
         if (scriptPath_.empty()) return;
         std::ofstream f(project_.rootPath + "/" + scriptPath_);
         for (size_t i = 0; i < scriptLines_.size(); ++i) { f << scriptLines_[i]; if (i + 1 < scriptLines_.size()) f << "\n"; }
         f.close(); scripts_.load(project_.rootPath); lastMsg_ = "script saved: " + scriptPath_;
     }
-
     void attachScript(const std::string& name) {
         std::string rel = "scripts/" + name + ".lua";
         ProjectCreator::createScript(project_.rootPath, rel, name);
@@ -489,7 +676,6 @@ private:
         for (const auto& kv : ctx_.vars) f << kv.first << "=" << kv.second << "\n";
         f.close();
     }
-
     void loadVars() {
         if (project_.rootPath.empty()) return;
         std::string path = project_.rootPath + "/save.vars";
@@ -513,7 +699,6 @@ private:
         std::lock_guard<std::mutex> lk(dlgMtx_);
         hasText_ = false; hasName_ = false; hasAction_ = false; hasNum_ = false;
     }
-
     bool takeNameResult(std::string& out) {
         std::lock_guard<std::mutex> lk(dlgMtx_);
         if (!hasName_) return false; out = nameRes_; hasName_ = false; return true;
@@ -530,7 +715,6 @@ private:
         } else { if (curCol_ > (int)L.size()) curCol_ = (int)L.size(); L.insert(L.begin() + curCol_, c); curCol_++; }
         scClampView();
     }
-
     void scCompose(const std::string& text) {
         if (curLine_ >= (int)scriptLines_.size()) scriptLines_.push_back("");
         std::string& L = scriptLines_[curLine_];
@@ -539,7 +723,6 @@ private:
         for (char c : text) { if (c == '\n') c = ' '; if (curCol_ > (int)L.size()) curCol_ = (int)L.size(); L.insert(L.begin() + curCol_, c); curCol_++; }
         scClampView();
     }
-
     void scCommit(const std::string& text) {
         if (compAnchor_ >= 0) {
             std::string& L = scriptLines_[curLine_];
@@ -548,9 +731,7 @@ private:
         }
         for (char c : text) scTypeChar(c);
     }
-
     void scFinish() { compAnchor_ = -1; }
-
     void scBackspace() {
         compAnchor_ = -1;
         if (curLine_ >= (int)scriptLines_.size()) return;
@@ -559,7 +740,6 @@ private:
         else if (curLine_ > 0) { size_t prevLen = scriptLines_[curLine_ - 1].size(); scriptLines_[curLine_ - 1] += L; scriptLines_.erase(scriptLines_.begin() + curLine_); curLine_--; curCol_ = (int)prevLen; }
         scClampView();
     }
-
     void scMove(int d) {
         compAnchor_ = -1;
         if (curLine_ >= (int)scriptLines_.size()) curLine_ = (int)scriptLines_.size() - 1;
@@ -569,14 +749,12 @@ private:
         else { if (curCol_ < (int)L.size()) curCol_ = utf8Next(L, curCol_); else if (curLine_ + 1 < (int)scriptLines_.size()) { curLine_++; curCol_ = 0; } }
         scClampView();
     }
-
     void scClampView() {
         const int LINES = 24;
         if (curLine_ < scriptScroll_) scriptScroll_ = curLine_;
         if (curLine_ >= scriptScroll_ + LINES) scriptScroll_ = curLine_ - LINES + 1;
         if (scriptScroll_ < 0) scriptScroll_ = 0;
     }
-
     void imeApply() {
         std::vector<std::string> tq, cq; std::vector<int> kq; bool fin = false;
         { std::lock_guard<std::mutex> lk(imeMtx_); tq.swap(imeTextQ_); cq.swap(imeCompQ_); kq.swap(imeKeyQ_); fin = imeFinish_; imeFinish_ = false; }
@@ -608,12 +786,13 @@ private:
             curLine_, curCol_, imeShown_, g_luaLog
         };
     }
-
     EditorRenderInput makeEditorRenderInput() { return EditorRenderInput{ editor_.get(), edZoom_, manip_, pickParent_, pickChild_, lastMsg_, fps_ }; }
-
     void buildEditorPanels() { editorScene_ = buildEditorScene(makeEditorUiInput()); input_.setUi(&editorScene_.ui); }
 
     std::string stepHub() {
+        logicW_ = 1280.0f; logicH_ = 720.0f; orientVertical_ = false; emitOrient_ = false;
+        input_.screenWidth = logicW_; input_.screenHeight = logicH_;
+        clearTransition();
         if (!pendingNewProject_ && !pendingHubRename_) clearDialogResults();
         std::string nm;
         if (pendingNewProject_) {
@@ -669,6 +848,7 @@ private:
             if (pendingNewProject_) out += "REQ_NAME|Project\n";
             else if (pendingHubRename_) out += "REQ_NAME|" + pendingHubCurrentName_ + "\n";
         }
+        out += "RES|1280|720\n";
         input_.endFrame(); return out;
     }
 
@@ -687,32 +867,58 @@ private:
         saveVarsEnabled_ = projectWantsSave(root); pendingLoadVars_ = saveVarsEnabled_; saveTimer_ = 0.0f;
         pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
         clearDialogResults();
-        Scene* sc = sceneMgr_->current();
-        UiButton close; close.touch.id = "close"; close.touch.rect = Rect{1180, 10, 90, 70}; close.text = "X"; close.action = playFromEditor_ ? "editor_return:" : "hub:"; close.color = parseColor("#D62828"); sc->ui.push_back(close);
-        UiButton dbg; dbg.touch.id = "dbg"; dbg.touch.rect = Rect{1080, 10, 90, 70}; dbg.text = "DBG"; dbg.action = "dbg:"; dbg.color = parseColor("#808080"); sc->ui.push_back(dbg);
-        input_.setUi(&sc->ui); touch_.resetJoystick();
+
+        loadProjCamera(project_.rootPath);
+        logicW_ = projCamW_; logicH_ = projCamH_; orientVertical_ = projVertical_;
+        input_.screenWidth = logicW_; input_.screenHeight = logicH_;
+        emitOrient_ = true; orientName_ = orientVertical_ ? "portrait" : "landscape";
+        clearTransition();
+
+        ensureGameButtons();
+        touch_.resetJoystick();
         appMode_ = AppMode::Game;
+
+        transActive_ = true; transType_ = 0; transPhase_ = 1;
+        transProgress_ = 0.0f; transDuration_ = 0.35f; transAlpha_ = 1.0f;
+        transOffset_ = 0.0f; transTarget_.clear();
         return true;
     }
 
     std::string stepGame() {
-        if (!sceneMgr_ || !sceneMgr_->current()) return "";
+        if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
+        consumeLuaCmd();
+        if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
+
         clearDialogResults();
         ctx_.coinCollectedThisFrame = false; ctx_.jumpPressedThisFrame = false; ctx_.input = input_.state();
-        if (!pendingNodeAction_.empty()) { runAction(pendingNodeAction_); pendingNodeAction_.clear(); }
-        processUi();
-        if (appMode_ != AppMode::Game) return "";
-        sceneMgr_->update(ctx_, 1.0 / 60.0, input_, resources_);
-        scripts_.update(*sceneMgr_->current(), ctx_, 1.0 / 60.0, *sceneMgr_, ctx_.vars);
-        if (sceneMgr_->current()) g_tweens.update(1.0f / 60.0f, sceneMgr_->current(), [this](const std::string& fn) { if (sceneMgr_ && sceneMgr_->current()) scripts_.callGlobal(fn, ctx_, *sceneMgr_, ctx_.vars, sceneMgr_->current()); });
+
+        updateTransition(1.0f / 60.0f);
+        ensureGameButtons();
+        if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); input_.endFrame(); return ""; }
+
+        if (!transActive_ && !pendingNodeAction_.empty()) { runAction(pendingNodeAction_); pendingNodeAction_.clear(); }
+        if (!transActive_) processUi();
+        if (appMode_ != AppMode::Game) { input_.endFrame(); return ""; }
+
+        if (!transActive_) {
+            sceneMgr_->update(ctx_, 1.0 / 60.0, input_, resources_);
+            scripts_.update(*sceneMgr_->current(), ctx_, 1.0 / 60.0, *sceneMgr_, ctx_.vars);
+            if (sceneMgr_->current()) g_tweens.update(1.0f / 60.0f, sceneMgr_->current(), [this](const std::string& fn) {
+                if (sceneMgr_ && sceneMgr_->current()) scripts_.callGlobal(fn, ctx_, *sceneMgr_, ctx_.vars, sceneMgr_->current());
+            });
+        }
+
         if (pendingLoadVars_) { if (saveVarsEnabled_) loadVars(); pendingLoadVars_ = false; }
         if (saveVarsEnabled_) { saveTimer_ += 1.0f / 60.0f; if (saveTimer_ >= 1.0f) { saveVars(); saveTimer_ = 0.0f; } }
+
         std::string out;
         if (ctx_.coinCollectedThisFrame) out += "SOUND coin\n";
         if (ctx_.jumpPressedThisFrame) out += "SOUND jump\n";
+
         gameBackend_.begin(); Renderer renderer(gameBackend_); renderer.render(*sceneMgr_->current(), &ctx_);
         out += gameBackend_.str();
-        if (sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
+
+        if (!transActive_ && sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
             g_particles.update(1.0f / 60.0f);
             WorldXf ident; walkEmitters(*sceneMgr_->current()->root, ident, 1.0f / 60.0f);
             Scene* ps = sceneMgr_->current();
@@ -720,19 +926,29 @@ private:
             Node* cn = ps->root->findByType("Camera2D");
             if (cn) { Camera2D* cam = static_cast<Camera2D*>(cn); camActive = true; camZ = cam->zoom > 0.01f ? cam->zoom : 1.0f; camX = cam->position.x; camY = cam->position.y; }
             float zf = camActive ? camZ : 1.0f;
+            float hx = logicW_ * 0.5f, hy = logicH_ * 0.5f;
             const std::vector<Particle>& plist = g_particles.list();
             for (const Particle& pp : plist) {
                 float t = pp.maxLife > 0.0f ? (1.0f - pp.life / pp.maxLife) : 1.0f;
                 if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
                 float sz = pp.size * (1.0f - t) + pp.sizeEnd * t; if (sz < 1.0f) sz = 1.0f; sz *= zf;
-                float sx = camActive ? ((pp.x - camX) * camZ + 640.0f) : pp.x;
-                float sy = camActive ? ((pp.y - camY) * camZ + 360.0f) : pp.y;
+                float sx = camActive ? ((pp.x - camX) * camZ + hx) : pp.x;
+                float sy = camActive ? ((pp.y - camY) * camZ + hy) : pp.y;
                 float a = pp.maxLife > 0.0f ? (pp.life / pp.maxLife) : 0.0f;
                 if (a < 0.0f) a = 0.0f; if (a > 1.0f) a = 1.0f;
                 out += std::string("DRAW text|") + pp.glyph + "|" + std::to_string((int)sx) + "|" + std::to_string((int)sy) + "|" + std::to_string((int)sz) + "|" + colorToHexA(withAlpha(pp.color, a)) + "|" + std::to_string(pp.rot * 57.2957795f) + "\n";
             }
         }
-        if (dbg_) {
+
+        if (std::fabs(transOffset_) > 0.01f) shiftOutputX(out, transOffset_);
+        if (transAlpha_ > 0.001f) {
+            int ai = (int)(transAlpha_ * 255.0f + 0.5f); if (ai < 0) ai = 0; if (ai > 255) ai = 255;
+            char ab[3]; std::snprintf(ab, sizeof(ab), "%02X", (unsigned)ai);
+            out += "DRAW rect|0|0|" + std::to_string((int)logicW_) + "|" + std::to_string((int)logicH_) + "|#";
+            out += ab; out += "000000|0\n";
+        }
+
+        if (dbg_ && sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
             nodeCount_ = countNodes(sceneMgr_->current()->root.get()); lastDraws_ = 0;
             for (size_t i = 0; i + 4 < out.size(); ++i) if (out[i] == 'D' && out[i + 1] == 'R' && out[i + 2] == 'A' && out[i + 3] == 'W') ++lastDraws_;
             out += "DRAW text|fps " + std::to_string((int)fps_) + "  nodes " + std::to_string(nodeCount_) + "  draws " + std::to_string(lastDraws_) + "  parts " + std::to_string((int)g_particles.count()) + "|20|100|18|#FFD700|0\n";
@@ -740,6 +956,9 @@ private:
             size_t ln = g_luaLog.size(); int show = ln > 4 ? 4 : (int)ln;
             for (int i = 0; i < show; ++i) out += "DRAW text|" + g_luaLog[ln - show + i] + "|20|" + std::to_string(148 + i * 20) + "|16|#87CEEB|0\n";
         }
+
+        out += "RES|" + std::to_string((int)logicW_) + "|" + std::to_string((int)logicH_) + "\n";
+        if (emitOrient_) { out += "ORIENT|" + orientName_ + "\n"; emitOrient_ = false; }
         input_.endFrame(); return out;
     }
 
@@ -751,12 +970,21 @@ private:
         if (act.rfind(pReturn, 0) == 0) {
             playFromEditor_ = false;
             if (saveVarsEnabled_) saveVars();
+            clearTransition();
             enterEditor(lastEditorDir_);
             return;
         }
-        if (act.rfind(pHub, 0) == 0) { if (saveVarsEnabled_) saveVars(); playFromEditor_ = false; appMode_ = AppMode::Hub; pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear(); clearDialogResults(); rebuildHub(); }
-        else if (act.rfind(pRestart, 0) == 0) { g_tweens.clear(); sceneMgr_->requestChange(act.substr(pRestart.size()), true); }
-        else if (act.rfind(pChange, 0) == 0) { g_tweens.clear(); sceneMgr_->requestChange(act.substr(pChange.size()), false); }
+        if (act.rfind(pHub, 0) == 0) {
+            if (saveVarsEnabled_) saveVars();
+            playFromEditor_ = false;
+            clearTransition();
+            appMode_ = AppMode::Hub;
+            pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
+            clearDialogResults();
+            rebuildHub();
+        }
+        else if (act.rfind(pRestart, 0) == 0) { startTransition(3, act.substr(pRestart.size()), 0.0f); }
+        else if (act.rfind(pChange, 0) == 0) { startTransition(3, act.substr(pChange.size()), 0.0f); }
         else if (act.rfind(pCall, 0) == 0) scripts_.callGlobal(act.substr(pCall.size()), ctx_, *sceneMgr_, ctx_.vars, sc);
         else if (act.rfind(pAdd, 0) == 0 || act.rfind(pSet, 0) == 0) {
             bool isAdd = act.rfind(pAdd, 0) == 0;
@@ -768,7 +996,7 @@ private:
 
     void processUi() {
         Scene* sc = sceneMgr_ ? sceneMgr_->current() : nullptr; if (!sc) return;
-        for (auto& b : sc->ui) { if (!b.touch.pressEdge || b.action.empty()) continue; runAction(b.action); if (appMode_ != AppMode::Game) return; }
+        for (auto& b : sc->ui) { if (!b.touch.pressEdge || b.action.empty()) continue; runAction(b.action); if (appMode_ != AppMode::Game || transActive_) return; }
     }
 
     bool enterEditor(const std::string& dir) {
@@ -796,6 +1024,10 @@ private:
         pendingLoadVars_ = false; saveVarsEnabled_ = false; saveTimer_ = 0.0f;
         pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
         clearDialogResults(); g_tweens.clear(); g_particles.clear();
+        loadProjCamera(project_.rootPath);
+        logicW_ = 1280.0f; logicH_ = 720.0f; orientVertical_ = false; emitOrient_ = false;
+        input_.screenWidth = logicW_; input_.screenHeight = logicH_;
+        clearTransition();
         buildEditorPanels(); input_.setUi(&editorScene_.ui); touch_.resetJoystick();
         appMode_ = AppMode::Editor;
         return true;
@@ -836,15 +1068,11 @@ private:
             if (!enterGame(dir)) { playFromEditor_ = false; lastMsg_ = "play failed"; rebuild(); return 0; }
             return 2;
         }
-
         if (act == "save_as_prefab") {
             if (sel.empty() || !s2) { lastMsg_ = "select a node first"; return 0; }
             if (std::string(s2->typeName()) == "Prefab2D") { lastMsg_ = "already a prefab"; return 0; }
             if (lk) { lastMsg_ = "unlock node first"; return 0; }
-            pendingPrefabSave_ = true;
-            pendingText_ = true;
-            pendingTextCur_ = sel;
-            return 0;
+            pendingPrefabSave_ = true; pendingText_ = true; pendingTextCur_ = sel; return 0;
         }
         if (act == "prefabs_open") { showPrefabs_ = true; prefabScroll_ = 0; rebuild(); return 1; }
         if (act == "prefabs_close") { showPrefabs_ = false; rebuild(); return 1; }
@@ -856,61 +1084,29 @@ private:
             std::string name = "PF" + std::to_string(createCounter_++);
             Node2D* base = editor_->addNode("Prefab2D", name, 640, 360);
             Prefab2D* pf = base ? static_cast<Prefab2D*>(base) : nullptr;
-            if (pf) {
-                pf->sourcePath = rel;
-                pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
-                editor_->select(name);
-                lastMsg_ = "added " + rel;
-            } else {
-                lastMsg_ = "insert failed";
-            }
-            showPrefabs_ = false;
-            rebuild();
-            return 1;
+            if (pf) { pf->sourcePath = rel; pf->instantiate(project_.rootPath, fontPath_, editor_->scene()); editor_->select(name); lastMsg_ = "added " + rel; }
+            else { lastMsg_ = "insert failed"; }
+            showPrefabs_ = false; rebuild(); return 1;
         }
         if (act == "prefab_reload") {
             Prefab2D* pf = s2 ? dynamic_cast<Prefab2D*>(s2) : nullptr;
-            if (pf && !pf->sourcePath.empty()) {
-                pushUndo();
-                pf->instantiate(project_.rootPath, fontPath_, editor_->scene());
-                lastMsg_ = "reloaded " + pf->sourcePath;
-                rebuild();
-                return 1;
-            }
+            if (pf && !pf->sourcePath.empty()) { pushUndo(); pf->instantiate(project_.rootPath, fontPath_, editor_->scene()); lastMsg_ = "reloaded " + pf->sourcePath; rebuild(); return 1; }
             return 0;
         }
-
-        if (act == "save_scene_as") {
-            pendingSceneSave_ = true;
-            pendingText_ = true;
-            pendingTextCur_ = "main";
-            return 0;
-        }
-
+        if (act == "save_scene_as") { pendingSceneSave_ = true; pendingText_ = true; pendingTextCur_ = "main"; return 0; }
         if (act == "files_open") { showFiles_ = !showFiles_; fsScroll_ = 0; pendingDeleteFile_.clear(); rebuild(); return 1; }
         if (act == "fscroll_up") { fsScroll_ -= 3; rebuild(); return 1; }
         if (act == "fscroll_dn") { fsScroll_ += 3; rebuild(); return 1; }
-        if (act.rfind("fs_del_ask:", 0) == 0) {
-            pendingDeleteFile_ = act.substr(11);
-            rebuild();
-            return 1;
-        }
+        if (act.rfind("fs_del_ask:", 0) == 0) { pendingDeleteFile_ = act.substr(11); rebuild(); return 1; }
         if (act.rfind("fs_del_yes:", 0) == 0) {
             std::string rel = act.substr(11);
             std::string full = project_.rootPath + "/" + rel;
             if (pendingDeleteFile_ == rel && fileExists(full)) {
-                if (std::remove(full.c_str()) == 0) lastMsg_ = "deleted " + rel;
-                else lastMsg_ = "delete failed: " + rel;
-            } else {
-                lastMsg_ = "delete cancelled";
-            }
-            pendingDeleteFile_.clear();
-            rebuild();
-            return 1;
+                if (std::remove(full.c_str()) == 0) lastMsg_ = "deleted " + rel; else lastMsg_ = "delete failed: " + rel;
+            } else { lastMsg_ = "delete cancelled"; }
+            pendingDeleteFile_.clear(); rebuild(); return 1;
         }
-
         if (act == "create_particle" || act == "create:Particle2D:none") { pushUndo(); std::string name = "Emitter" + std::to_string(createCounter_++); editor_->addNode("Particle2D", name, 640, 360); editor_->select(name); showCreate_ = false; rebuild(); return 1; }
-
         Particle2D* p2 = dynamic_cast<Particle2D*>(s2);
         if (act.rfind("view:", 0) == 0) { if (lk || sel.empty() || !p2) return 0; pushUndo(); std::string preset = act.substr(5); if (editor_->setEmitterPreset(sel, preset)) { p2->emitting = true; p2->burstPending = true; lastMsg_ = "view " + preset + " -> " + sel; rebuild(); return 1; } rebuild(); return 0; }
         if (act == "ponoff") { if (!lk && p2) { pushUndo(); p2->emitting = !p2->emitting; if (p2->emitting) p2->burstPending = true; lastMsg_ = p2->emitting ? ("emitting ON: " + sel) : ("emitting OFF: " + sel); rebuild(); return 1; } return 0; }
@@ -927,7 +1123,6 @@ private:
             }
             return 0;
         }
-
         if (act == "settings_open") { showSettings_ = !showSettings_; if (showSettings_) showCreate_ = false; rebuild(); return 1; }
         if (act == "settings_close") { showSettings_ = false; rebuild(); return 1; }
         if (act.rfind("import_category:", 0) == 0) {
@@ -936,7 +1131,6 @@ private:
             else lastMsg_ = category + ": coming soon";
             return 0;
         }
-
         if (act == "col_rgb") { if (!lk) { pendingRgb_ = 1; pendingText_ = true; pendingTextCur_ = ub ? rgbStr(ub->color) : (s2 ? rgbStr(s2->color) : std::string("255,255,255")); } return 0; }
         if (act == "bg_rgb") { pendingRgb_ = 2; pendingText_ = true; unsigned bc = (editor_->scene() && editor_->scene()->bgSet()) ? parseColor(editor_->scene()->bg) : currentTheme().bg; pendingTextCur_ = rgbStr(bc); return 0; }
         if (act == "assets_open") { showAssets_ = !showAssets_; assetScroll_ = 0; rebuild(); return 1; }
@@ -965,11 +1159,7 @@ private:
         if (act.rfind("fs_enter:", 0) == 0) { fsPath_ += act.substr(9) + "/"; fsScroll_ = 0; pendingDeleteFile_.clear(); rebuild(); return 1; }
         if (act.rfind("fs_pick:", 0) == 0) {
             std::string rel = act.substr(8);
-            if (rel.size() > 4 && rel.compare(rel.size() - 4, 4, ".prf") == 0) {
-                lastMsg_ = "prefab: use PF ADD to insert";
-                rebuild();
-                return 0;
-            }
+            if (rel.size() > 4 && rel.compare(rel.size() - 4, 4, ".prf") == 0) { lastMsg_ = "prefab: use PF ADD to insert"; rebuild(); return 0; }
             if (rel.size() > 5 && rel.compare(rel.size() - 5, 5, ".json") == 0) {
                 if (sceneMgr_ && sceneMgr_->restartScene(rel, resources_)) {
                     editor_->attach(sceneMgr_->current());
@@ -978,8 +1168,7 @@ private:
                     showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = true;
                     assetScroll_ = 0; dragging_ = false; dragNode_ = nullptr; dragUi_ = nullptr; pinching_ = false;
                     pickParent_ = false; pickChild_.clear(); hierScroll_ = 0;
-                    pendingDeleteFile_.clear();
-                    undoStack_.clear(); redoStack_.clear();
+                    pendingDeleteFile_.clear(); undoStack_.clear(); redoStack_.clear();
                     lastMsg_ = "loaded " + rel; rebuild(); return 1;
                 }
                 return 0;
@@ -1035,8 +1224,7 @@ private:
                 Node2D* cl = editor_->cloneSelected(sel + "_copy");
                 Prefab2D* cpf = cl ? dynamic_cast<Prefab2D*>(cl) : nullptr;
                 if (cpf) cpf->instantiate(project_.rootPath, fontPath_, editor_->scene());
-                rebuild();
-                return 1;
+                rebuild(); return 1;
             }
             return 0;
         }
@@ -1072,6 +1260,7 @@ private:
             clearDialogResults();
             pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
             playFromEditor_ = false;
+            clearTransition();
             appMode_ = AppMode::Hub; rebuildHub();
             return 2;
         }
@@ -1093,25 +1282,13 @@ private:
 
         if (ht && pendingSceneSave_) {
             std::string name = sanitizeProjectDirName(txt);
-            if (!name.empty()) {
-                editor_->setProjectRoot(project_.rootPath);
-                if (editor_->saveScene(name)) lastMsg_ = "saved scenes/" + name + ".json";
-                else lastMsg_ = "save scene failed";
-            }
-            pendingSceneSave_ = false;
-            buildEditorPanels(); input_.setUi(&editorScene_.ui);
-            return;
+            if (!name.empty()) { editor_->setProjectRoot(project_.rootPath); if (editor_->saveScene(name)) lastMsg_ = "saved scenes/" + name + ".json"; else lastMsg_ = "save scene failed"; }
+            pendingSceneSave_ = false; buildEditorPanels(); input_.setUi(&editorScene_.ui); return;
         }
         if (ht && pendingPrefabSave_) {
             std::string name = sanitizeProjectDirName(txt);
-            if (!name.empty()) {
-                editor_->setProjectRoot(project_.rootPath);
-                if (editor_->saveAsPrefab(name)) lastMsg_ = "saved prefabs/" + name + ".prf";
-                else lastMsg_ = "prefab save failed";
-            }
-            pendingPrefabSave_ = false;
-            buildEditorPanels(); input_.setUi(&editorScene_.ui);
-            return;
+            if (!name.empty()) { editor_->setProjectRoot(project_.rootPath); if (editor_->saveAsPrefab(name)) lastMsg_ = "saved prefabs/" + name + ".prf"; else lastMsg_ = "prefab save failed"; }
+            pendingPrefabSave_ = false; buildEditorPanels(); input_.setUi(&editorScene_.ui); return;
         }
 
         if (hn) {
@@ -1143,36 +1320,45 @@ private:
             else { Node* s = editor_->selected(); Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr; if (n2) { pushUndo(); n2->action = act; } }
         }
         if (hnum) {
-            float v = (float)atof(num.c_str());
-            std::string uid = editor_->selectedUi();
-            UiButton* b = uid.empty() ? nullptr : editor_->findUi(uid);
-            Node* s = editor_->selected(); Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr;
-            bool lk2 = (n2 != nullptr) && n2->locked;
-            if (!lk2 && (n2 || b)) pushUndo();
-            if (!lk2 && n2) {
-                if (pendingNumKind_ == "nx") { float dx = v - n2->position.x; n2->position.x = v; if (editor_->scene()) moveGroupButtons(editor_->scene(), n2->name, dx, 0); }
-                else if (pendingNumKind_ == "ny") { float dy = v - n2->position.y; n2->position.y = v; if (editor_->scene()) moveGroupButtons(editor_->scene(), n2->name, 0, dy); }
-                else if (pendingNumKind_ == "nrot") n2->rotation = v * 3.14159265f / 180.0f;
-                else if (pendingNumKind_ == "nscl") { float f = v / 100.0f; if (f > 0.01f) { n2->scale.x = f; n2->scale.y = f; } }
-                else if (pendingNumKind_ == "nw") n2->w = v;
-                else if (pendingNumKind_ == "nh") n2->h = v;
-                else if (pendingNumKind_ == "nalpha") { float a = v / 100.0f; if (a < 0) a = 0; if (a > 1) a = 1; n2->alpha = a; }
-            }
-            Particle2D* pe = dynamic_cast<Particle2D*>(s);
-            if (!lk2 && pe) {
-                if (pendingNumKind_ == "rate") pe->rate = v;
-                else if (pendingNumKind_ == "life") { pe->life = v; if (pe->life < 0.05f) pe->life = 0.05f; }
-                else if (pendingNumKind_ == "size") { pe->size = v; if (pe->size < 1.0f) pe->size = 1.0f; }
-                else if (pendingNumKind_ == "spread") pe->spread = v;
-                else if (pendingNumKind_ == "gravity") pe->gravity = v;
-            }
-            if (b) {
-                if (pendingNumKind_ == "bx") b->touch.rect.x = v;
-                else if (pendingNumKind_ == "by") b->touch.rect.y = v;
-                else if (pendingNumKind_ == "bw") b->touch.rect.w = v;
-                else if (pendingNumKind_ == "bh") b->touch.rect.h = v;
-                else if (pendingNumKind_ == "bang") b->angle = v;
-                else if (pendingNumKind_ == "balpha") { float a = v / 100.0f; if (a < 0) a = 0; if (a > 1) a = 1; b->alpha = a; }
+            if (pendingNumKind_ == "camw" || pendingNumKind_ == "camh") {
+                float v = (float)atof(num.c_str());
+                if (v < 160.0f) v = 160.0f; if (v > 2160.0f) v = 2160.0f;
+                if (pendingNumKind_ == "camw") projCamW_ = v; else projCamH_ = v;
+                projVertical_ = (projCamH_ > projCamW_);
+                saveProjCamera();
+                pendingNumKind_.clear();
+            } else {
+                float v = (float)atof(num.c_str());
+                std::string uid = editor_->selectedUi();
+                UiButton* b = uid.empty() ? nullptr : editor_->findUi(uid);
+                Node* s = editor_->selected(); Node2D* n2 = s ? dynamic_cast<Node2D*>(s) : nullptr;
+                bool lk2 = (n2 != nullptr) && n2->locked;
+                if (!lk2 && (n2 || b)) pushUndo();
+                if (!lk2 && n2) {
+                    if (pendingNumKind_ == "nx") { float dx = v - n2->position.x; n2->position.x = v; if (editor_->scene()) moveGroupButtons(editor_->scene(), n2->name, dx, 0); }
+                    else if (pendingNumKind_ == "ny") { float dy = v - n2->position.y; n2->position.y = v; if (editor_->scene()) moveGroupButtons(editor_->scene(), n2->name, 0, dy); }
+                    else if (pendingNumKind_ == "nrot") n2->rotation = v * 3.14159265f / 180.0f;
+                    else if (pendingNumKind_ == "nscl") { float f = v / 100.0f; if (f > 0.01f) { n2->scale.x = f; n2->scale.y = f; } }
+                    else if (pendingNumKind_ == "nw") n2->w = v;
+                    else if (pendingNumKind_ == "nh") n2->h = v;
+                    else if (pendingNumKind_ == "nalpha") { float a = v / 100.0f; if (a < 0) a = 0; if (a > 1) a = 1; n2->alpha = a; }
+                }
+                Particle2D* pe = dynamic_cast<Particle2D*>(s);
+                if (!lk2 && pe) {
+                    if (pendingNumKind_ == "rate") pe->rate = v;
+                    else if (pendingNumKind_ == "life") { pe->life = v; if (pe->life < 0.05f) pe->life = 0.05f; }
+                    else if (pendingNumKind_ == "size") { pe->size = v; if (pe->size < 1.0f) pe->size = 1.0f; }
+                    else if (pendingNumKind_ == "spread") pe->spread = v;
+                    else if (pendingNumKind_ == "gravity") pe->gravity = v;
+                }
+                if (b) {
+                    if (pendingNumKind_ == "bx") b->touch.rect.x = v;
+                    else if (pendingNumKind_ == "by") b->touch.rect.y = v;
+                    else if (pendingNumKind_ == "bw") b->touch.rect.w = v;
+                    else if (pendingNumKind_ == "bh") b->touch.rect.h = v;
+                    else if (pendingNumKind_ == "bang") b->angle = v;
+                    else if (pendingNumKind_ == "balpha") { float a = v / 100.0f; if (a < 0) a = 0; if (a > 1) a = 1; b->alpha = a; }
+                }
             }
         }
         if (hn || ht || ha || hnum) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
@@ -1183,25 +1369,17 @@ private:
             pendingName_ = false; pendingText_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
             pendingSceneSave_ = false; pendingPrefabSave_ = false;
             clearDialogResults(); pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
+            clearTransition();
             appMode_ = AppMode::Hub; rebuildHub(); return "";
         }
         consumeDialogResults();
         if (scriptMode_) imeApply();
+        if (dragging_ || gizmoRot_ || gizmoSclX_ || gizmoSclY_ || gizmoRotUi_) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
 
-        if (dragging_ || gizmoRot_ || gizmoSclX_ || gizmoSclY_ || gizmoRotUi_) {
-            buildEditorPanels();
-            input_.setUi(&editorScene_.ui);
-        }
-
-        gameBackend_.begin();
-        Renderer gr(gameBackend_);
-        gr.render(editorScene_, &ctx_);
+        gameBackend_.begin(); Renderer gr(gameBackend_); gr.render(editorScene_, &ctx_);
         std::string out = gameBackend_.str();
 
         if (scriptMode_) {
-            // Proportional code lines emitted as "codeline" so the Java renderer can both
-            // draw them with the real typeface AND remember (globalIndex, text, y) to turn
-            // a tap into an exact byte-offset caret via the nativeTouch(9,...) channel.
             const int LINES = 24;
             for (int i = scriptScroll_; i < (int)scriptLines_.size() && i < scriptScroll_ + LINES; ++i) {
                 float y = 70 + (float)(i - scriptScroll_) * 19;
@@ -1213,9 +1391,7 @@ private:
             if (curLine_ >= scriptScroll_ && curLine_ < scriptScroll_ + LINES && curLine_ < (int)scriptLines_.size()) {
                 std::string shown = sanitizeLine(scriptLines_[curLine_]);
                 if (shown.size() > 68) shown = shown.substr(0, 68);
-                int cut = curCol_;
-                if (cut < 0) cut = 0;
-                if (cut > (int)shown.size()) cut = (int)shown.size();
+                int cut = curCol_; if (cut < 0) cut = 0; if (cut > (int)shown.size()) cut = (int)shown.size();
                 while (cut > 0 && cut < (int)shown.size() && ((unsigned char)shown[cut] & 0xC0) == 0x80) --cut;
                 std::string pref = shown.substr(0, cut);
                 float y = 70 + (float)(curLine_ - scriptScroll_) * 19;
@@ -1235,6 +1411,17 @@ private:
             }
             emitEditorGizmos(*editor_->scene(), out, makeEditorRenderInput());
             out += "DRAW clipoff\n";
+
+            // Camera panel overlay (top-right of viewport). Drawn here, handled in feedTouch.
+            std::string wTxt = "W " + std::to_string((int)projCamW_);
+            std::string hTxt = "H " + std::to_string((int)projCamH_);
+            std::string oTxt = projVertical_ ? "ROT:PORT" : "ROT:LAND";
+            out += "DRAW rect|" + std::to_string((int)CAM_PX0) + "|" + std::to_string((int)CAM_BTN_W_Y0) + "|" + std::to_string((int)(CAM_PX1 - CAM_PX0)) + "|" + std::to_string((int)(CAM_BTN_W_Y1 - CAM_BTN_W_Y0)) + "|#2A2F4AFF|0\n";
+            out += "DRAW text|" + wTxt + "|" + std::to_string((int)CAM_PX0 + 6) + "|" + std::to_string((int)CAM_BTN_W_Y0 + 2) + "|14|#D8E0F0|0\n";
+            out += "DRAW rect|" + std::to_string((int)CAM_PX0) + "|" + std::to_string((int)CAM_BTN_H_Y0) + "|" + std::to_string((int)(CAM_PX1 - CAM_PX0)) + "|" + std::to_string((int)(CAM_BTN_H_Y1 - CAM_BTN_H_Y0)) + "|#2A2F4AFF|0\n";
+            out += "DRAW text|" + hTxt + "|" + std::to_string((int)CAM_PX0 + 6) + "|" + std::to_string((int)CAM_BTN_H_Y0 + 2) + "|14|#D8E0F0|0\n";
+            out += "DRAW rect|" + std::to_string((int)CAM_PX0) + "|" + std::to_string((int)CAM_BTN_O_Y0) + "|" + std::to_string((int)(CAM_PX1 - CAM_PX0)) + "|" + std::to_string((int)(CAM_BTN_O_Y1 - CAM_BTN_O_Y0)) + "|#3A2F5AFF|0\n";
+            out += "DRAW text|" + oTxt + "|" + std::to_string((int)CAM_PX0 + 6) + "|" + std::to_string((int)CAM_BTN_O_Y0 + 2) + "|14|#FFD700|0\n";
         }
 
         processEditorActions();
@@ -1247,6 +1434,7 @@ private:
         if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
         if (pendingNum_ && appMode_ == AppMode::Editor) { out += "REQ_NUM|" + pendingNumCur_ + "\n"; pendingNum_ = false; }
         if (!pendingImportCategory_.empty() && appMode_ == AppMode::Editor) { out += "REQ_IMPORT|" + pendingImportCategory_ + "|" + project_.rootPath + "\n"; pendingImportCategory_.clear(); }
+        out += "RES|1280|720\n";
         input_.endFrame(); return out;
     }
 
@@ -1366,6 +1554,25 @@ private:
     TouchProcessor touch_;
     StringRenderBackend gameBackend_;
     Context ctx_;
+
+    float logicW_ = 1280.0f;
+    float logicH_ = 720.0f;
+    bool orientVertical_ = false;
+    bool emitOrient_ = false;
+    std::string orientName_ = "landscape";
+
+    float projCamW_ = 1280.0f;
+    float projCamH_ = 720.0f;
+    bool projVertical_ = false;
+
+    bool transActive_ = false;
+    int transType_ = 0;
+    int transPhase_ = 0;
+    float transProgress_ = 0.0f;
+    float transDuration_ = 0.4f;
+    float transOffset_ = 0.0f;
+    float transAlpha_ = 0.0f;
+    std::string transTarget_;
 };
 
 } // namespace suka
