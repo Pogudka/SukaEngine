@@ -167,8 +167,6 @@ inline void editorBuildScriptScene(const EditorUiInput& in, Scene& s) {
     if (in.scriptScroll < 0) in.scriptScroll = 0;
     if (in.scriptScroll > smax) in.scriptScroll = smax;
 
-    // Line numbers only; code text is emitted by GameApp as fixed-cell "mtext"
-    // so the caret column math (8px per code point) matches pixel-perfect.
     for (int i = in.scriptScroll; i < (int)in.scriptLines.size() && i < in.scriptScroll + LINES; ++i) {
         float y = 70 + (float)(i - in.scriptScroll) * LH;
         std::string num = std::to_string(i + 1);
@@ -338,6 +336,14 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 addLbl("InText", "Text: " + static_cast<Label*>(nd)->text, 900, 364, 16, th.ink);
             }
 
+            // ==== Camera2D inspector: zoom + follow + ZOOM button ====
+            if (std::string(nd->typeName()) == "Camera2D") {
+                Camera2D* cm = static_cast<Camera2D*>(nd);
+                addLbl("InZoom", "Zoom  " + std::to_string((int)(cm->zoom * 100)) + "%   (frame = view/zoom)", 900, 364, 16, parseColor("#FF8800"));
+                addLbl("InFollow", "Follow: " + (cm->followName.empty() ? std::string("(none)") : cm->followName), 900, 388, 14, th.ink);
+                { UiButton b; b.touch.id = "zoombtn"; b.touch.rect = Rect{1092, 360, 88, 26}; b.text = "ZOOM"; b.action = "num:camzoom"; b.color = parseColor("#FF8800"); s.ui.push_back(b); }
+            }
+
             if (std::string(nd->typeName()) == "Prefab2D") {
                 Prefab2D* pf = static_cast<Prefab2D*>(nd);
                 addLbl("InSrc", "Source: " + (pf->sourcePath.empty() ? std::string("(none)") : pf->sourcePath), 900, 364, 16, parseColor("#8E44AD"));
@@ -404,7 +410,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     std::string sb = (esc && esc->bgSet()) ? esc->bg : std::string("(theme)");
     addLbl("InBg", "scene bg: " + sb, 900, 426, 16, th.ink);
 
-    // Inspector action grid: TXT and SCR moved here; T- removed (RM TEX exists above).
     { UiButton b; b.touch.id = "lckbtn"; b.touch.rect = Rect{900, 448, 44, 30}; b.text = "LCK"; b.action = "ed_lock"; b.color = parseColor("#D62828"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "bgbtn"; b.touch.rect = Rect{948, 448, 44, 30}; b.text = "BG"; b.action = "bg_rgb"; b.color = th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "actbtn"; b.touch.rect = Rect{996, 448, 44, 30}; b.text = "ACT"; b.action = "edit_action"; b.color = th.button; s.ui.push_back(b); }
@@ -430,7 +435,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         s.ui.push_back(b);
     }
 
-    // Top toolbar, compact so it never reaches the inspector column.
     float tx = 300;
     { UiButton b; b.touch.id = "savesc"; b.touch.rect = Rect{tx, 34, 84, 26}; tx += 86; b.text = "SAVE SCN"; b.action = "save_scene_as"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "savepf"; b.touch.rect = Rect{tx, 34, 66, 26}; tx += 68; b.text = "PF SAVE"; b.action = "save_as_prefab"; b.color = parseColor("#8E44AD"); s.ui.push_back(b); }
