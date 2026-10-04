@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
     private static final float CODE_FONT = 14f;
 
     // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH на весь экран (инструмент).
-    // game -> CONTAIN: игра рисуется в своём прямоугольнике пропорционально, поля чёрные.
+    // game -> CONTAIN; при совпадении пропорций кадра и экрана полос нет вообще.
     private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
 
     private static volatile boolean g_initOk = false;
@@ -293,7 +293,7 @@ public class MainActivity extends Activity {
     native void nativeMultiTouch(int phase, float x0, float y0, float x1, float y1);
     native void nativeSetText(String text);
     native void nativeSetName(String text);
-    native void nativeSetAction(String text);   // оверлей X/DBG шлёт сюда "ov:dbg:" / "ov:close:"
+    native void nativeSetAction(String text);   // оверлей X/DBG шлёт "ov:dbg:"/"ov:close:", surface шлёт "sys:ratio|..."
     native void nativeSetNumber(String text);
     native void nativeScriptText(String text);
     native void nativeScriptCompose(String text);
@@ -378,8 +378,26 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> { try { setRequestedOrientation(orient); } catch (Throwable t) { } });
         }
 
-        @Override public void surfaceCreated(SurfaceHolder h) { running_ = true; thread = new Thread(this); thread.start(); }
-        @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) { }
+        // Сообщаем движку реальное отношение сторон экрана (ширина/высота).
+        // Движок подгоняет логический кадр игры под него РАВНОМЕРНО, поэтому
+        // игра занимает весь экран без чёрных полос и без расплющивания.
+        private void sendScreenRatio() {
+            int rw = getWidth(), rh = getHeight();
+            if (rw > 0 && rh > 0) {
+                float r = (float) rw / (float) rh;
+                nativeSetAction("sys:ratio|" + r);
+            }
+        }
+
+        @Override public void surfaceCreated(SurfaceHolder h) {
+            running_ = true;
+            thread = new Thread(this);
+            thread.start();
+            sendScreenRatio();
+        }
+        @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) {
+            sendScreenRatio();
+        }
         @Override public void surfaceDestroyed(SurfaceHolder h) {
             running_ = false;
             try { if (thread != null) { thread.interrupt(); thread.join(500); } } catch (Exception e) { }
@@ -469,6 +487,7 @@ public class MainActivity extends Activity {
                 ovStat = newStat;
                 ovLog.clear(); ovLog.addAll(newLog);
 
+                // Ориентация: в игре держим ЗАПОМНЕННУЮ gameOrient, хаб/редактор — ландшафт.
                 if (renderMode == MODE_GAME) requestedOrient = gameOrient;
                 else requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
                 if (requestedOrient != appliedOrient) applyOrientation(requestedOrient);
@@ -506,9 +525,10 @@ public class MainActivity extends Activity {
                 if (c == null) { Thread.sleep(8); continue; }
                 clIdx.clear(); clText.clear(); clY.clear();
                 int rw = getWidth(), rh = getHeight();
-                // Поля (letterbox) — чисто чёрные, чтобы граница игры читалась явно.
+                // Поля (если останутся) — чисто чёрные; фон сцены рисуется внутри игрового rect.
                 c.drawColor(Color.BLACK);
 
+                // Слайд-сдвиг в логических координатах contain-кадра.
                 float slideDx = 0f;
                 if (renderMode == MODE_GAME && (transType == 1 || transType == 2)) {
                     float p = transProgress;
@@ -521,8 +541,6 @@ public class MainActivity extends Activity {
                     c.save();
                     if (renderMode == MODE_GAME) {
                         // CONTAIN: единый масштаб по обеим осям + центрирование.
-                        // Пропорции НЕ искажаются никогда; если ratio экрана != ratio
-                        // холста, остаются чёрные поля (теперь они видны явно).
                         float s  = Math.min(rw / logicW, rh / logicH);
                         float ox = (rw - logicW * s) * 0.5f;
                         float oy = (rh - logicH * s) * 0.5f;
@@ -530,6 +548,7 @@ public class MainActivity extends Activity {
                         c.scale(s, s);
                         if (slideDx != 0f) c.translate(slideDx, 0f);
                     } else {
+                        // STRETCH: хаб/редактор на весь экран.
                         c.scale(rw / logicW, rh / logicH);
                     }
                     for (String line : frame.split("\n")) drawLine(c, line);
@@ -659,8 +678,7 @@ public class MainActivity extends Activity {
                 if (p[0].equals("clipoff")) { c.restore(); return; }
                 if (p[0].equals("bg")) {
                     // Фон сцены рисуем ВНУТРИ игрового прямоугольника (логические координаты),
-                    // а не drawColor на весь экран: иначе фон заливал letterbox-поля и
-                    // создавал иллюзию "приплющенной" игры.
+                    // а не drawColor на весь экран: иначе фон заливал letterbox-поля.
                     paint.setColor(Color.parseColor(p[1]));
                     c.drawRect(0, 0, logicW, logicH, paint);
                     return;
@@ -796,6 +814,7 @@ public class MainActivity extends Activity {
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
 
+            // 1) Оверлейные кнопки (только в игре) — первыми, в экранных px.
             if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
                 float[] R = ovBtnRects(rw, rh);
                 float ex = e.getX(), ey = e.getY();
@@ -803,6 +822,7 @@ public class MainActivity extends Activity {
                 if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeSetAction("ov:close:"); return true; }
             }
 
+            // 2) Маппинг тапа в координаты холста (совпадает с трансформацией рисунка).
             float lx, ly;
             if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                 if (renderMode == MODE_GAME) {
@@ -882,4 +902,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                   }
+                }
