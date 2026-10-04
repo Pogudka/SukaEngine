@@ -23,13 +23,14 @@ struct EditorRenderInput {
     float viewH;
 };
 
-// Геометрия вьюпорта редактора: расширен до низа экрана (64..712).
+// Геометрия вьюпорта редактора: 300,64 .. 892,556 (центр 596,310) — как раньше,
+// чтобы меню создания и панели под вьюпортом оставались видимыми и кликабельными.
 static const float EDV_X0 = 300.0f;
 static const float EDV_Y0 = 64.0f;
 static const float EDV_W  = 592.0f;
-static const float EDV_H  = 648.0f;
+static const float EDV_H  = 492.0f;
 static const float EDV_CX = EDV_X0 + EDV_W * 0.5f;   // 596
-static const float EDV_CY = EDV_Y0 + EDV_H * 0.5f;   // 388
+static const float EDV_CY = EDV_Y0 + EDV_H * 0.5f;   // 310
 
 inline void emitNodePreview(
     const Node* n,
@@ -157,11 +158,10 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
            std::to_string((int)VY0) + "|" + std::to_string((int)VW) + "|" +
            std::to_string((int)VH) + "|#23232B|0\n";
 
-    // ==== БЕСКОНЕЧНАЯ СЕТКА ====
-    // Видимый мировой прямоугольник считается из камеры и зума; линии рисуются на всей
-    // видимой области (включая отрицательные координаты). Шаг адаптивный: при отдалении
-    // удваивается, при приближении уменьшается — сетка не превращается в кашу ни на
-    // каком зуме (зум теперь 0.01x..256x).
+    // ==== БЕСКОНЕЧНАЯ КАРТА: адаптивная сетка на всей видимой области ====
+    // Видимый мировой прямоугольник считается из камеры и зума; линии рисуются
+    // на любых координатах (включая отрицательные). Шаг удваивается при отдалении
+    // и уменьшается при приближении, поэтому сетка читаема на любом зуме 0.01x..256x.
     {
         float wx0 = sc.camX + 640.0f + (VX0 - CX) / S;
         float wx1 = sc.camX + 640.0f + (VX0 + VW - CX) / S;
@@ -216,7 +216,7 @@ inline void emitEditorViewport(const Scene& sc, std::string& out, const EditorRe
                std::to_string(b.angle) + "|" + resolveAssetPath(b.texture) + "\n";
     }
 
-    // ==== РАМКА КАМЕРЫ (как раньше, но с новым центром вьюпорта) ====
+    // ==== РАМКА КАМЕРЫ: граница видимой игроком области ====
     {
         float vw = in.viewW > 1.0f ? in.viewW : 1280.0f;
         float vh = in.viewH > 1.0f ? in.viewH : 720.0f;
@@ -326,7 +326,7 @@ inline void emitEditorGizmos(const Scene& sc, std::string& out, const EditorRend
 
     if (!in.lastMsg.empty()) {
         out += "DRAW text|" + in.lastMsg + "   fps " +
-               std::to_string((int)in.fps) + "|306|688|14|#FFD700|0\n";
+               std::to_string((int)in.fps) + "|306|580|14|#FFD700|0\n";
     }
 }
 
