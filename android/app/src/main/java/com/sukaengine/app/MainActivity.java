@@ -284,14 +284,13 @@ public class MainActivity extends Activity {
     native void nativeMultiTouch(int phase, float x0, float y0, float x1, float y1);
     native void nativeSetText(String text);
     native void nativeSetName(String text);
-    native void nativeSetAction(String text);
+    native void nativeSetAction(String text);   // оверлей X/DBG шлёт сюда "ov:dbg:" / "ov:close:"
     native void nativeSetNumber(String text);
     native void nativeScriptText(String text);
     native void nativeScriptCompose(String text);
     native void nativeScriptFinish();
     native void nativeScriptKey(int key);
     native void nativeImportFile(String category, String relativePath);
-    native void nativeOverlayAction(String action);   // кнопки X/DBG оверлея
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
@@ -371,15 +370,24 @@ public class MainActivity extends Activity {
             thread = null;
         }
 
-        // Геометрия оверлейных кнопок в экранных px (правый верх). [0..3]=DBG, [4..7]=X.
+        // Компактные кнопки в правом верхнем углу. Размер привязан к КОРОТКОЙ стороне
+        // экрана (min(rw,rh)) -> одинаковый визуальный калибр в портрете и ландшафте,
+        // без раздувания на узком экране. Возвращает [0..3]=DBG, [4..7]=X в экранных px.
         private float[] ovBtnRects(int rw, int rh) {
-            float bw = Math.min(Math.max(rw * 0.11f, 110f), 200f);
-            float bh = bw * 0.62f;
-            float m = bh * 0.28f;
+            float shortSide = Math.min(rw, rh);
+            float bw = Math.min(Math.max(shortSide * 0.078f, 56f), 130f);
+            float bh = bw * 0.60f;
+            float m  = Math.max(6f, bh * 0.16f);
+            float gap = m;
             float xRight = rw - m;
-            float xDbgR = xRight - bw - m;
-            return new float[]{ xDbgR - bw - m, m, xDbgR - m, m + bh,
-                                xRight - bw,    m, xRight,    m + bh };
+            float yTop = m;
+            float xDbg0 = xRight - bw - gap - bw;
+            float xDbg1 = xRight - bw - gap;
+            float xX0 = xRight - bw;
+            float xX1 = xRight;
+            float yBot = yTop + bh;
+            return new float[]{ xDbg0, yTop, xDbg1, yBot,
+                                xX0,   yTop, xX1,   yBot };
         }
 
         @Override public void run() {
@@ -532,7 +540,7 @@ public class MainActivity extends Activity {
 
         private void drawOvBtn(Canvas c, float x0, float y0, float x1, float y1, String label, int fill) {
             paint.setColor(fill);
-            c.drawRoundRect(new RectF(x0, y0, x1, y1), 14f, 14f, paint);
+            c.drawRoundRect(new RectF(x0, y0, x1, y1), 12f, 12f, paint);
             double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
             paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
             paint.setTextSize((y1 - y0) * 0.46f);
@@ -737,12 +745,15 @@ public class MainActivity extends Activity {
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
 
-            // 1) Оверлейные кнопки (только в игре) — первыми, в экранных px.
+            // 1) Оверлейные кнопки (только в игре) — первыми, в экранных px. Действие
+            //    уходит через УЖЕ зарегистрированный nativeSetAction с префиксом "ov:",
+            //    который C++ снимает в начале stepGame (consumeOverlayAction). Никакого
+            //    нового native-символа -> краш от UnsatisfiedLinkError невозможен.
             if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
                 float[] R = ovBtnRects(rw, rh);
                 float ex = e.getX(), ey = e.getY();
-                if (ex >= R[0] && ex <= R[2] && ey >= R[1] && ey <= R[3]) { nativeOverlayAction("dbg:"); return true; }
-                if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeOverlayAction("close:"); return true; }
+                if (ex >= R[0] && ex <= R[2] && ey >= R[1] && ey <= R[3]) { nativeSetAction("ov:dbg:"); return true; }
+                if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeSetAction("ov:close:"); return true; }
             }
 
             // 2) Маппинг тапа в координаты холста (совпадает с трансформацией рисунка).
@@ -825,4 +836,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-    }
+                                              }
