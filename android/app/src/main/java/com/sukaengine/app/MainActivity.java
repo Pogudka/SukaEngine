@@ -53,9 +53,9 @@ public class MainActivity extends Activity {
     private static final float CODE_TEXT_X = 340f;
     private static final float CODE_FONT = 14f;
 
-    // Режимы рендера: 0 = hub, 1 = editor, 2 = game.
-    // hub/editor -> STRETCH на весь экран (UI-инструмент, поля не нужны).
-    // game       -> CONTAIN с сохранением пропорций (геометрия спрайтов важна).
+    // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH на весь экран (инструмент).
+    // game -> CONTAIN с полями; кнопки X/DBG и лог — экранный оверлей (всегда горизонтальны,
+    // всегда в своих углах экрана), поэтому вертикаль не ломает UI.
     private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
 
     private static volatile boolean g_initOk = false;
@@ -291,6 +291,7 @@ public class MainActivity extends Activity {
     native void nativeScriptFinish();
     native void nativeScriptKey(int key);
     native void nativeImportFile(String category, String relativePath);
+    native void nativeOverlayAction(String action);   // кнопки X/DBG оверлея
 
     class GameView extends SurfaceView implements SurfaceHolder.Callback, Runnable {
         private Thread thread;
@@ -305,9 +306,13 @@ public class MainActivity extends Activity {
 
         private volatile float logicW = DEFAULT_LOGIC_W;
         private volatile float logicH = DEFAULT_LOGIC_H;
-        private volatile int renderMode = MODE_HUB;          // задаётся тегом MODE|...
+        private volatile int renderMode = MODE_HUB;
         private volatile int requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
         private volatile int appliedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+
+        // Оверлейные данные (экранные координаты, рисуются поверх вписанного кадра).
+        private volatile String ovStat = "";
+        private final ArrayList<String> ovLog = new ArrayList<>();
 
         private final ArrayList<Integer> clIdx = new ArrayList<>();
         private final ArrayList<String> clText = new ArrayList<>();
@@ -366,6 +371,17 @@ public class MainActivity extends Activity {
             thread = null;
         }
 
+        // Геометрия оверлейных кнопок в экранных px (правый верх). [0..3]=DBG, [4..7]=X.
+        private float[] ovBtnRects(int rw, int rh) {
+            float bw = Math.min(Math.max(rw * 0.11f, 110f), 200f);
+            float bh = bw * 0.62f;
+            float m = bh * 0.28f;
+            float xRight = rw - m;
+            float xDbgR = xRight - bw - m;
+            return new float[]{ xDbgR - bw - m, m, xDbgR - m, m + bh,
+                                xRight - bw,    m, xRight,    m + bh };
+        }
+
         @Override public void run() {
             while (running_) {
               try {
@@ -386,8 +402,11 @@ public class MainActivity extends Activity {
 
                 editorFrame_ = frame.contains("Inspector") || frame.contains("FileSystem") || frame.contains("SCRIPTS");
 
-                // Парсим MODE / RES / ORIENT одним проходом.
                 int newMode = renderMode;
+                int parsedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                boolean haveOrient = false;
+                String newStat = "";
+                ArrayList<String> newLog = new ArrayList<>();
                 for (String line : frame.split("\n")) {
                     if (line.startsWith("MODE|")) {
                         String v = line.substring(5).trim();
@@ -403,20 +422,28 @@ public class MainActivity extends Activity {
                                 if (nw >= 160f && nw <= 2160f && nh >= 160f && nh <= 2160f) { logicW = nw; logicH = nh; }
                             } catch (Throwable t) { }
                         }
+                    } else if (line.startsWith("ORIENT|")) {
+                        String[] op = line.split("\\|", 2);
+                        if (op.length >= 2) {
+                            String v = op[1].trim();
+                            parsedOrient = (v.equals("portrait") || v.equals("vertical") || v.equals("p") || v.equals("v"))
+                                ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                            haveOrient = true;
+                        }
+                    } else if (line.startsWith("OVSTAT|")) {
+                        newStat = line.substring(7);
+                    } else if (line.startsWith("OVLOG|")) {
+                        newLog.add(line.substring(6));
                     }
                 }
                 renderMode = newMode;
+                ovStat = newStat;
+                ovLog.clear(); ovLog.addAll(newLog);
 
-                // Ориентация окна: для игры — строго из соотношения мира (это и есть
-                // защита от Чили: невозможно получить портретное окно с горизонтальным
-                // миром). Хаб/редактор всегда ландшафт.
-                if (renderMode == MODE_GAME) {
-                    requestedOrient = (logicH > logicW)
-                        ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                        : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-                } else {
-                    requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-                }
+                // Ориентация окна: в игре — как задал автор (ORIENT); хаб/редактор — ландшафт.
+                if (renderMode == MODE_GAME && haveOrient) requestedOrient = parsedOrient;
+                else requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
                 if (requestedOrient != appliedOrient) applyOrientation(requestedOrient);
 
                 if (frame.contains("IME_ON"))  requestIme(true);
@@ -457,14 +484,14 @@ public class MainActivity extends Activity {
                 if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                     c.save();
                     if (renderMode == MODE_GAME) {
-                        // CONTAIN: единый масштаб по обеим осям + центрирование.
+                        // CONTAIN: единый масштаб + центрирование (поля при рассогласовании).
                         float s  = Math.min(rw / logicW, rh / logicH);
                         float ox = (rw - logicW * s) * 0.5f;
                         float oy = (rh - logicH * s) * 0.5f;
                         c.translate(ox, oy);
                         c.scale(s, s);
                     } else {
-                        // STRETCH: хаб/редактор заполняют экран целиком, как раньше.
+                        // STRETCH: хаб/редактор на весь экран.
                         c.scale(rw / logicW, rh / logicH);
                     }
                     for (String line : frame.split("\n")) drawLine(c, line);
@@ -477,6 +504,7 @@ public class MainActivity extends Activity {
                 boolean hubOrMenu = renderMode != MODE_GAME;
                 if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
                 if (renderMode == MODE_HUB || frame.isEmpty()) drawDiag(c, rw, rh);
+                if (renderMode == MODE_GAME) drawOverlay(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
                 Thread.sleep(16);
               } catch (Throwable t) {
@@ -485,6 +513,34 @@ public class MainActivity extends Activity {
                 try { Thread.sleep(33); } catch (Exception e) { return; }
               }
             }
+        }
+
+        private void drawOverlay(Canvas c, int rw, int rh) {
+            if (typeface != null) paint.setTypeface(typeface);
+            else paint.setTypeface(Typeface.DEFAULT);
+            float fs = Math.min(Math.max(rh * 0.022f, 16f), 30f);
+            paint.setTextSize(fs); paint.setTextAlign(Paint.Align.LEFT);
+            float lx = fs * 0.6f, ly = fs * 0.6f;
+            if (!ovStat.isEmpty()) { paint.setColor(Color.rgb(255, 215, 0)); c.drawText(ovStat, lx, ly + fs, paint); ly += fs * 1.35f; }
+            paint.setColor(Color.rgb(135, 206, 235));
+            for (String s : ovLog) { c.drawText(s, lx, ly + fs, paint); ly += fs * 1.25f; }
+            float[] R = ovBtnRects(rw, rh);
+            drawOvBtn(c, R[0], R[1], R[2], R[3], "DBG", Color.rgb(128, 128, 128));
+            drawOvBtn(c, R[4], R[5], R[6], R[7], "X",   Color.rgb(214, 40, 40));
+            paint.setTextAlign(Paint.Align.LEFT);
+        }
+
+        private void drawOvBtn(Canvas c, float x0, float y0, float x1, float y1, String label, int fill) {
+            paint.setColor(fill);
+            c.drawRoundRect(new RectF(x0, y0, x1, y1), 14f, 14f, paint);
+            double lum = 0.299 * ((fill >> 16) & 255) + 0.587 * ((fill >> 8) & 255) + 0.114 * (fill & 255);
+            paint.setColor(lum > 140 ? Color.rgb(26, 26, 46) : Color.WHITE);
+            paint.setTextSize((y1 - y0) * 0.46f);
+            paint.setTextAlign(Paint.Align.CENTER);
+            Paint.FontMetrics fm = paint.getFontMetrics();
+            float ty = (y0 + y1) / 2f - (fm.ascent + fm.descent) / 2f;
+            c.drawText(label, (x0 + x1) / 2f, ty, paint);
+            paint.setTextAlign(Paint.Align.LEFT);
         }
 
         private void drawTitle(Canvas c, int rw, int rh, boolean editor) {
@@ -681,8 +737,15 @@ public class MainActivity extends Activity {
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
 
-            // Обратная трансформация тапа ДОЛЖНА совпадать с трансформацией рисунка:
-            // игра -> contain (тот же s/ox/oy), хаб/редактор -> stretch (по осям).
+            // 1) Оверлейные кнопки (только в игре) — первыми, в экранных px.
+            if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
+                float[] R = ovBtnRects(rw, rh);
+                float ex = e.getX(), ey = e.getY();
+                if (ex >= R[0] && ex <= R[2] && ey >= R[1] && ey <= R[3]) { nativeOverlayAction("dbg:"); return true; }
+                if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeOverlayAction("close:"); return true; }
+            }
+
+            // 2) Маппинг тапа в координаты холста (совпадает с трансформацией рисунка).
             float lx, ly;
             if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                 if (renderMode == MODE_GAME) {
@@ -762,4 +825,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                }
+    }
