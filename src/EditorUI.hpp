@@ -466,6 +466,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
         { UiButton b; b.touch.id = "ctgrp"; b.touch.rect = Rect{300 + 8 * 58, 560, 54, 40}; b.text = "GRP"; b.action = "create_grp"; b.color = parseColor("#808080"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctbtn"; b.touch.rect = Rect{300 + 9 * 58, 560, 54, 40}; b.text = "BTN"; b.action = "create_btn"; b.color = parseColor("#2EC4B6"); s.ui.push_back(b); }
         { UiButton b; b.touch.id = "ctprt"; b.touch.rect = Rect{300, 604, 54, 40}; b.text = "PART"; b.action = "create:Particle2D:none"; b.color = parseColor("#FF69B4"); s.ui.push_back(b); }
+        { UiButton b; b.touch.id = "ctsnd"; b.touch.rect = Rect{358, 604, 54, 40}; b.text = "SOUND"; b.action = "create_sound"; b.color = parseColor("#2EC4B6"); s.ui.push_back(b); }
     }
 
     if (in.showAssets) {
