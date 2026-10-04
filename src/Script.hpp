@@ -28,12 +28,16 @@ extern "C" {
 
 namespace suka {
 
-// Общая лента логов Lua (видна из GameApp.hpp для DBG‑панели). inline — без ODR‑проблем.
+// Общая лента логов Lua (видна из GameApp.hpp для DBG-панели).
+// inline — чтобы при включении в несколько TU не было ODR-нарушения.
 inline std::vector<std::string> g_luaLog;
 
 using VarMap = std::remove_reference_t<decltype(std::declval<Context&>().vars)>;
 
-// Контекст текущего Lua‑вызова (заполняется на время update/callGlobal).
+// Контекст текущего Lua-вызова (заполняется на время update/callGlobal).
+// ВАЖНО: эти указатели РАЗНЫХ типов, поэтому сброс всегда пишется раздельно
+// через ';'. Цепочка вида `g_ctx = g_sm = nullptr;` недопустима в C++
+// (правое значение имеет тип SceneManager* и не присваивается Context*).
 static Context*      g_ctx   = nullptr;
 static SceneManager* g_sm    = nullptr;
 static Scene*        g_scene = nullptr;
@@ -53,7 +57,8 @@ static std::string luaValueToString(lua_State* L, int idx) {
     return std::string("<") + lua_typename(L, t) + ">";
 }
 
-// --- локальный парсер цвета (parseColor из UiUtils в этом месте ещё не виден) ---
+// --- локальный парсер цвета (parseColor из UiUtils в этом месте ещё не виден,
+//     т.к. UiUtils.hpp подключается в GameApp.hpp ПОСЛЕ Script.hpp) ---
 static unsigned hexChunk(const std::string& h, size_t pos, size_t len) {
     return (unsigned)std::strtoul(h.substr(pos, len).c_str(), nullptr, 16);
 }
@@ -105,7 +110,7 @@ static UiButton* findUi(const std::string& id) {
     return nullptr;
 }
 
-// ================= Lua‑биндинги =================
+// ================= Lua-биндинги =================
 static int l_print(lua_State* L) {
     int n = lua_gettop(L); std::string out;
     for (int i = 1; i <= n; ++i) { if (i > 1) out += " "; out += luaValueToString(L, i); }
@@ -183,7 +188,7 @@ static int l_spawn(lua_State* L) { // burst на Particle2D по имени
     p->burst = cnt > 0 ? cnt : 1; p->burstPending = true; p->emitting = true;
     return 0;
 }
-static int l_emit(lua_State* L) { // вкл/выкл эмиссию
+static int l_emit(lua_State* L) { // вкл/выкл эмиссии
     Node2D* n = findNode2D(luaL_checkstring(L, 1)); if (!n) return 0;
     Particle2D* p = dynamic_cast<Particle2D*>(n); if (!p) return 0;
     p->emitting = lua_gettop(L) >= 2 ? lua_toboolean(L, 2) : true;
@@ -247,7 +252,10 @@ public:
     ~ScriptSystem() { if (L) { lua_close(L); L = nullptr; } }
 
     void load(const std::string& root) {
-        if (L) { g_ctx = g_sm = nullptr; g_scene = nullptr; g_vars = nullptr; lua_close(L); L = nullptr; }
+        if (L) {
+            g_ctx = nullptr; g_sm = nullptr; g_scene = nullptr; g_vars = nullptr;
+            lua_close(L); L = nullptr;
+        }
         { std::lock_guard<std::mutex> lk(g_luaCmdMtx); g_luaCmd = LuaGameCmd{}; }
 
         L = luaL_newstate();
@@ -278,7 +286,7 @@ public:
             lua_pushnumber(L, dt);
             if (lua_pcall(L, 1, 0, 0) != 0) { const char* e = lua_tostring(L, -1); logLua(std::string("lua on_update error: ") + (e ? e : "?")); lua_pop(L, 1); }
         } else lua_pop(L, 1);
-        g_ctx = g_sm = nullptr; g_scene = nullptr; g_vars = nullptr;
+        g_ctx = nullptr; g_sm = nullptr; g_scene = nullptr; g_vars = nullptr;
     }
 
     void callGlobal(const std::string& name, Context& ctx, SceneManager& sm, VarMap& vars, Scene* scene) {
@@ -288,7 +296,7 @@ public:
         if (lua_isfunction(L, -1)) {
             if (lua_pcall(L, 0, 0, 0) != 0) { const char* e = lua_tostring(L, -1); logLua(std::string("lua call error ") + name + ": " + (e ? e : "?")); lua_pop(L, 1); }
         } else { lua_pop(L, 1); logLua("lua: missing function " + name); }
-        g_ctx = g_sm = nullptr; g_scene = nullptr; g_vars = nullptr;
+        g_ctx = nullptr; g_sm = nullptr; g_scene = nullptr; g_vars = nullptr;
     }
 };
 
