@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
     private static final float CODE_FONT = 14f;
 
     // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH на весь экран (инструмент).
-    // game -> CONTAIN с полями; кнопки X/DBG и лог — экранный оверлей поверх всего.
+    // game -> CONTAIN: игра рисуется в своём прямоугольнике пропорционально, поля чёрные.
     private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
 
     private static volatile boolean g_initOk = false;
@@ -79,8 +79,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         // Рисуем ПОД вырезом экрана (cutout), иначе в ландшафте система оставляет
-        // чёрную полосу с одного края и contain считается по урезанной ширине
-        // (симптом: "игра плющится / полоса слева").
+        // чёрную полосу с одного края и contain считается по урезанной ширине.
         try {
             if (Build.VERSION.SDK_INT >= 28) {
                 getWindow().getAttributes().layoutInDisplayCutoutMode =
@@ -318,8 +317,7 @@ public class MainActivity extends Activity {
         private volatile int renderMode = MODE_HUB;
         private volatile int requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
         private volatile int appliedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-        // Запомненная ориентация ИГРЫ: обновляется тегом ORIENT| и держится между кадрами
-        // (раньше без тега каждый кадр сбрасывало в landscape -> "включилась и обратно").
+        // Запомненная ориентация ИГРЫ: обновляется тегом ORIENT| и держится между кадрами.
         private volatile int gameOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
 
         // Транзишен (из тега TRANS|type|phase|progress).
@@ -388,8 +386,7 @@ public class MainActivity extends Activity {
             thread = null;
         }
 
-        // Компактные кнопки в правом верхнем углу экрана. Размер от КОРОТКОЙ стороны
-        // (min(rw,rh)) -> одинаковый калибр в портрете и ландшафте. [0..3]=DBG, [4..7]=X.
+        // Компактные кнопки в правом верхнем углу экрана. [0..3]=DBG, [4..7]=X.
         private float[] ovBtnRects(int rw, int rh) {
             float shortSide = Math.min(rw, rh);
             float bw = Math.min(Math.max(shortSide * 0.078f, 56f), 130f);
@@ -472,8 +469,6 @@ public class MainActivity extends Activity {
                 ovStat = newStat;
                 ovLog.clear(); ovLog.addAll(newLog);
 
-                // Ориентация: в игре держим ЗАПОМНЕННУЮ gameOrient (не сбрасываем каждый
-                // кадр), хаб/редактор — всегда ландшафт.
                 if (renderMode == MODE_GAME) requestedOrient = gameOrient;
                 else requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
                 if (requestedOrient != appliedOrient) applyOrientation(requestedOrient);
@@ -511,9 +506,9 @@ public class MainActivity extends Activity {
                 if (c == null) { Thread.sleep(8); continue; }
                 clIdx.clear(); clText.clear(); clY.clear();
                 int rw = getWidth(), rh = getHeight();
-                c.drawColor(Color.rgb(18, 18, 24));
+                // Поля (letterbox) — чисто чёрные, чтобы граница игры читалась явно.
+                c.drawColor(Color.BLACK);
 
-                // Слайд-сдвиг в логических координатах contain-кадра.
                 float slideDx = 0f;
                 if (renderMode == MODE_GAME && (transType == 1 || transType == 2)) {
                     float p = transProgress;
@@ -525,7 +520,9 @@ public class MainActivity extends Activity {
                 if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                     c.save();
                     if (renderMode == MODE_GAME) {
-                        // CONTAIN: единый масштаб + центрирование (поля при рассогласовании).
+                        // CONTAIN: единый масштаб по обеим осям + центрирование.
+                        // Пропорции НЕ искажаются никогда; если ratio экрана != ratio
+                        // холста, остаются чёрные поля (теперь они видны явно).
                         float s  = Math.min(rw / logicW, rh / logicH);
                         float ox = (rw - logicW * s) * 0.5f;
                         float oy = (rh - logicH * s) * 0.5f;
@@ -533,7 +530,6 @@ public class MainActivity extends Activity {
                         c.scale(s, s);
                         if (slideDx != 0f) c.translate(slideDx, 0f);
                     } else {
-                        // STRETCH: хаб/редактор на весь экран.
                         c.scale(rw / logicW, rh / logicH);
                     }
                     for (String line : frame.split("\n")) drawLine(c, line);
@@ -548,8 +544,7 @@ public class MainActivity extends Activity {
                 if (renderMode == MODE_HUB || frame.isEmpty()) drawDiag(c, rw, rh);
                 if (renderMode == MODE_GAME) drawOverlay(c, rw, rh);
 
-                // Fade ПОСЛЕДНИМ и в ЭКРАННЫХ координатах: покрывает весь экран, включая
-                // оверлей и letterbox-поля (раньше fade был внутри contain и не дотягивался).
+                // Fade ПОСЛЕДНИМ и в ЭКРАННЫХ координатах: покрывает весь экран целиком.
                 if (renderMode == MODE_GAME && transType == 0) {
                     float p = transProgress;
                     if (p < 0f) p = 0f; if (p > 1f) p = 1f;
@@ -662,7 +657,14 @@ public class MainActivity extends Activity {
             try {
                 if (p[0].equals("clipon")) { c.save(); c.clipRect(300, 64, 892, 556); return; }
                 if (p[0].equals("clipoff")) { c.restore(); return; }
-                if (p[0].equals("bg")) { c.drawColor(Color.parseColor(p[1])); return; }
+                if (p[0].equals("bg")) {
+                    // Фон сцены рисуем ВНУТРИ игрового прямоугольника (логические координаты),
+                    // а не drawColor на весь экран: иначе фон заливал letterbox-поля и
+                    // создавал иллюзию "приплющенной" игры.
+                    paint.setColor(Color.parseColor(p[1]));
+                    c.drawRect(0, 0, logicW, logicH, paint);
+                    return;
+                }
 
                 if (p[0].equals("codeline")) {
                     if (p.length < 6) return;
@@ -794,9 +796,6 @@ public class MainActivity extends Activity {
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
 
-            // 1) Оверлейные кнопки (только в игре) — первыми, в экранных px. Действие
-            //    уходит через УЖЕ зарегистрированный nativeSetAction с префиксом "ov:",
-            //    который C++ снимает в начале stepGame (consumeOverlayAction).
             if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
                 float[] R = ovBtnRects(rw, rh);
                 float ex = e.getX(), ey = e.getY();
@@ -804,7 +803,6 @@ public class MainActivity extends Activity {
                 if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeSetAction("ov:close:"); return true; }
             }
 
-            // 2) Маппинг тапа в координаты холста (совпадает с трансформацией рисунка).
             float lx, ly;
             if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                 if (renderMode == MODE_GAME) {
@@ -884,4 +882,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                }
+                                   }
