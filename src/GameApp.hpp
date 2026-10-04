@@ -65,11 +65,11 @@ static void walkEmitters(Node& n, const WorldXf& parent, float dt) {
     for (const auto& c : n2->getChildren()) walkEmitters(*c, w, dt);
 }
 
-// Центр вьюпорта редактора: (596, 388) — вьюпорт расширен до 64..712 по Y.
+// Центр вьюпорта редактора: (596, 310) — вьюпорт 300,64 .. 892,556 (как раньше).
 static void projEditor(float wx, float wy, float& sx, float& sy, float zoom, float camX, float camY) {
     float S = 0.46875f * zoom;
     sx = 596 + (wx - camX - 640) * S;
-    sy = 388 + (wy - camY - 360) * S;
+    sy = 310 + (wy - camY - 360) * S;
 }
 
 static void drawParticlePreviewTree(Node& n, const WorldXf& parent, std::string& out,
@@ -243,7 +243,7 @@ public:
             pinching_ = true; pinchDist0_ = dist; pinchZoom0_ = edZoom_;
             float S = 0.46875f * edZoom_;
             pinchAX_ = 640 + es->camX + (mx - 596) / S;
-            pinchAY_ = 360 + es->camY + (my - 388) / S;
+            pinchAY_ = 360 + es->camY + (my - 310) / S;
             return;
         }
         if (phase == 3) { pinching_ = false; return; }
@@ -251,11 +251,12 @@ public:
         float z = pinchZoom0_;
         if (pinchDist0_ > 4 && dist > 4) {
             z = pinchZoom0_ * (dist / pinchDist0_);
+            // Бесконечный зум: отдаление до 0.01x, приближение до 256x.
             if (z < 0.01f) z = 0.01f; if (z > 256.0f) z = 256.0f;
         }
         float S = 0.46875f * z;
         es->camX = pinchAX_ - 640 - (mx - 596) / S;
-        es->camY = pinchAY_ - 360 - (my - 388) / S;
+        es->camY = pinchAY_ - 360 - (my - 310) / S;
         edZoom_ = z;
     }
 
@@ -403,7 +404,7 @@ public:
                 } else if (t.action == RawTouch::Action::Up) { gizmoRot_ = false; gizmoSclX_ = false; gizmoSclY_ = false; lockAxis_ = 0; }
             }
 
-            const float VX0 = 300, VY0 = 64, VW = 592, VH = 648;
+            const float VX0 = 300, VY0 = 64, VW = 592, VH = 492;
             bool inVP = (x >= VX0 && x <= VX0 + VW && y >= VY0 && y <= VY0 + VH);
             if (t.action == RawTouch::Action::Down && inVP && es) {
                 float wx, wy; unproj(*es, x, y, wx, wy);
@@ -440,8 +441,6 @@ public:
     }
 
     std::string stepFrame() {
-        // Служебные sys:-сообщения (пропорции экрана) читаются В ЛЮБОМ режиме сразу,
-        // чтобы хаб/редактор не стирали их до того, как игра успеет применить.
         consumeSysRatio();
 
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -598,8 +597,8 @@ private:
         if (hit && !a.empty()) runAction(a);
     }
 
-    void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) { float S = 0.46875f * edZoom_; sx = 596 + (wx - sc.camX - 640) * S; sy = 388 + (wy - sc.camY - 360) * S; }
-    void unproj(const Scene& sc, float sx, float sy, float& wx, float& wy) { float S = 0.46875f * edZoom_; wx = 640 + sc.camX + (sx - 596) / S; wy = 360 + sc.camY + (sy - 388) / S; }
+    void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) { float S = 0.46875f * edZoom_; sx = 596 + (wx - sc.camX - 640) * S; sy = 310 + (wy - sc.camY - 360) * S; }
+    void unproj(const Scene& sc, float sx, float sy, float& wx, float& wy) { float S = 0.46875f * edZoom_; wx = 640 + sc.camX + (sx - 596) / S; wy = 360 + sc.camY + (sy - 310) / S; }
     void unprojGame(const Scene& sc, float sx, float sy, float& wx, float& wy) {
         float hx = logicW_ * 0.5f, hy = logicH_ * 0.5f;
         Node* cn = sc.root ? sc.root->findByType("Camera2D") : nullptr;
