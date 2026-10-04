@@ -328,11 +328,11 @@ public:
                     return;
                 }
                 if (y >= CAM_BTN_O_Y0 && y <= CAM_BTN_O_Y1) {
-                    // ROT = свап размера МИРА. Ориентация окна выводится из мира
-                    // (см. load/save/enterGame + Java), поэтому рассогласование
-                    // "портретное окно + горизонтальный мир" невозможно по построению.
-                    std::swap(projCamW_, projCamH_);
-                    projVertical_ = (projCamH_ > projCamW_);
+                    // ROT = ориентация ОКНА (как держит телефон игрок). Размер холста
+                    // (W/H) НЕ трогаем: свап мира ломал свёрстанную сцену (обрезка
+                    // справа). Рассогласование окна и холста лечит Java поворотом
+                    // кадра на 90 градусов -> сцена видна целиком во весь экран.
+                    projVertical_ = !projVertical_;
                     saveProjCamera();
                     return;
                 }
@@ -483,25 +483,22 @@ private:
         return def;
     }
     void loadProjCamera(const std::string& root) {
-        projCamW_ = 1280.0f; projCamH_ = 720.0f;
-        if (root.empty()) { projVertical_ = false; return; }
+        projCamW_ = 1280.0f; projCamH_ = 720.0f; projVertical_ = false;
+        if (root.empty()) return;
         std::string path = root + "/editor_camera.json";
-        if (!fileExists(path)) { projVertical_ = false; return; }
+        if (!fileExists(path)) return;
         std::string s = readFile(path);
         double w = jsonNum(s, "\"w\"", 1280.0);
         double h = jsonNum(s, "\"h\"", 720.0);
         if (w < 160.0) w = 160.0; if (w > 2160.0) w = 2160.0;
         if (h < 160.0) h = 160.0; if (h > 2160.0) h = 2160.0;
         projCamW_ = (float)w; projCamH_ = (float)h;
-        // Ориентация окна = соотношение мира. Сохранённый флаг "vertical" НЕ читаем:
-        // именно рассогласование флага и размера рождало Чили (портретное окно +
-        // горизонтальный мир). Старые json с vertical:true при W>H теперь корректно
-        // грузятся как ландшафт.
-        projVertical_ = (projCamH_ > projCamW_);
+        // "vertical" = ориентация ОКНА (независимый флаг), НЕ выводится из W/H.
+        // Рассогласование окна и холста теперь безопасно: Java поворачивает кадр.
+        projVertical_ = jsonBool(s, "\"vertical\"", false);
     }
     void saveProjCamera() {
         if (project_.rootPath.empty()) return;
-        projVertical_ = (projCamH_ > projCamW_);   // держим флаг синхронно с миром
         std::ofstream f(project_.rootPath + "/editor_camera.json");
         if (!f.good()) return;
         f << "{\"w\":" << (int)projCamW_ << ",\"h\":" << (int)projCamH_
@@ -895,7 +892,7 @@ private:
         loadProjCamera(project_.rootPath);
         logicW_ = projCamW_; logicH_ = projCamH_; orientVertical_ = projVertical_;
         input_.screenWidth = logicW_; input_.screenHeight = logicH_;
-        emitOrient_ = true; orientName_ = orientVertical_ ? "portrait" : "landscape";
+        orientName_ = orientVertical_ ? "portrait" : "landscape";
         clearTransition();
 
         ensureGameButtons();
@@ -983,7 +980,10 @@ private:
 
         out += "MODE|game\n";
         out += "RES|" + std::to_string((int)logicW_) + "|" + std::to_string((int)logicH_) + "\n";
-        if (emitOrient_) { out += "ORIENT|" + orientName_ + "\n"; emitOrient_ = false; }
+        // ORIENT эмитится КАЖДЫЙ кадр в игре: Java по нему ставит ориентацию ОКНА,
+        // а поворот кадра (если окно != холст) считает сам. Без этого Java терял бы
+        // желание автора после первого кадра.
+        out += "ORIENT|" + orientName_ + "\n";
         input_.endFrame(); return out;
     }
 
@@ -1349,7 +1349,7 @@ private:
                 float v = (float)atof(num.c_str());
                 if (v < 160.0f) v = 160.0f; if (v > 2160.0f) v = 2160.0f;
                 if (pendingNumKind_ == "camw") projCamW_ = v; else projCamH_ = v;
-                projVertical_ = (projCamH_ > projCamW_);
+                // НЕ трогаем projVertical_: W/H = холст, vertical = ориентация окна.
                 saveProjCamera();
                 pendingNumKind_.clear();
             } else {
