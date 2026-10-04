@@ -215,11 +215,6 @@ public:
         return true;
     }
 
-    // Оверлейные кнопки (X / DBG) рисуются в Java в экранных координатах и шлют
-    // сюда действие строкой ("close:" / "dbg:"). Отдельный вход, чтобы не зависеть
-    // от координат холста и поворотов.
-    void overlayAction(const std::string& a) { runAction(a); }
-
     void submitText(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); textRes_ = t; hasText_ = true; }
     void submitName(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); nameRes_ = t; hasName_ = true; }
     void submitAction(const std::string& t) { std::lock_guard<std::mutex> lk(dlgMtx_); actionRes_ = t; hasAction_ = true; }
@@ -564,11 +559,24 @@ private:
         if (cmd.transition) startTransition(cmd.type, cmd.scene, cmd.duration);
     }
 
-    // close/dbg теперь рисует Java как экранный оверлей, поэтому в сцену их не кладём.
+    // close/dbg рисует Java как экранный оверлей; в сцену их не кладём (иначе дубли).
     void ensureGameButtons() {
         Scene* sc = (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
         if (!sc) return;
         input_.setUi(&sc->ui);
+    }
+
+    // Оверлейные кнопки шлют действие ЧЕРЕЗ существующий nativeSetAction с префиксом
+    // "ov:" (новый JNI-символ не нужен -> краш от отсутствия символа невозможен).
+    // Вызывается ПЕРВОЙ в stepGame, до clearDialogResults, чтобы нажатие не затерлось.
+    void consumeOverlayAction() {
+        std::string a; bool hit = false;
+        { std::lock_guard<std::mutex> lk(dlgMtx_);
+          if (hasAction_ && !actionRes_.empty() && actionRes_.rfind("ov:", 0) == 0) {
+              a = actionRes_.substr(3); hit = true; hasAction_ = false; actionRes_.clear();
+          }
+        }
+        if (hit) runAction(a);
     }
 
     void proj(const Scene& sc, float wx, float wy, float& sx, float& sy) { float S = 0.46875f * edZoom_; sx = 596 + (wx - sc.camX - 640) * S; sy = 310 + (wy - sc.camY - 360) * S; }
@@ -904,6 +912,8 @@ private:
     }
 
     std::string stepGame() {
+        // ПЕРВОЕ дело: снять нажатия оверлея (X/DBG), пока их не затёр clearDialogResults.
+        consumeOverlayAction();
         if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
         consumeLuaCmd();
         if (!sceneMgr_ || !sceneMgr_->current()) { clearTransition(); return ""; }
@@ -967,9 +977,8 @@ private:
             out += ab; out += "000000|0\n";
         }
 
-        // DBG-статистика и лог Lua уходят в экранный оверлей (OVSTAT/OVLOG), чтобы
-        // читались горизонтально и не зависели от ориентации/полей. В координатах
-        // холста их больше не рисуем.
+        // DBG-стат и лог Lua -> экранный оверлей (OVSTAT/OVLOG), читаются горизонтально
+        // и не зависят от ориентации/полей. В координатах холста больше не рисуем.
         if (dbg_ && sceneMgr_ && sceneMgr_->current() && sceneMgr_->current()->root) {
             nodeCount_ = countNodes(sceneMgr_->current()->root.get()); lastDraws_ = 0;
             for (size_t i = 0; i + 4 < out.size(); ++i) if (out[i] == 'D' && out[i + 1] == 'R' && out[i + 2] == 'A' && out[i + 3] == 'W') ++lastDraws_;
@@ -985,7 +994,7 @@ private:
     }
 
     void runAction(const std::string& act) {
-        Scene* sc = sceneMgr_ ? sceneMgr_->current() : nullptr; if (!sc && act != "dbg:") { /* dbg toggle ok without scene */ }
+        Scene* sc = sceneMgr_ ? sceneMgr_->current() : nullptr;
         if (act == "dbg:") { dbg_ = !dbg_; return; }
         const std::string pReturn = "editor_return:";
         const std::string pRestart = "restart_scene:", pChange = "change_scene:", pAdd = "add_var:", pSet = "set_var:", pHub = "hub:", pCall = "call:", pClose = "close:";
