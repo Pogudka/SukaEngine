@@ -14,6 +14,7 @@ import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.KeyEvent;
@@ -21,6 +22,7 @@ import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.WindowManager;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -54,8 +56,7 @@ public class MainActivity extends Activity {
     private static final float CODE_FONT = 14f;
 
     // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH на весь экран (инструмент).
-    // game -> CONTAIN с полями; кнопки X/DBG и лог — экранный оверлей (всегда горизонтальны,
-    // всегда в своих углах экрана), поэтому вертикаль не ломает UI.
+    // game -> CONTAIN с полями; кнопки X/DBG и лог — экранный оверлей поверх всего.
     private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
 
     private static volatile boolean g_initOk = false;
@@ -77,6 +78,15 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        // Рисуем ПОД вырезом экрана (cutout), иначе в ландшафте система оставляет
+        // чёрную полосу с одного края и contain считается по урезанной ширине
+        // (симптом: "игра плющится / полоса слева").
+        try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                getWindow().getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            }
+        } catch (Throwable t) { }
         copyAssets(""); restructure();
         File root = getFilesDir();
         g_fileCount = countEntries(root);
@@ -308,6 +318,14 @@ public class MainActivity extends Activity {
         private volatile int renderMode = MODE_HUB;
         private volatile int requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
         private volatile int appliedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+        // Запомненная ориентация ИГРЫ: обновляется тегом ORIENT| и держится между кадрами
+        // (раньше без тега каждый кадр сбрасывало в landscape -> "включилась и обратно").
+        private volatile int gameOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+
+        // Транзишен (из тега TRANS|type|phase|progress).
+        private volatile int transType = 0;
+        private volatile int transPhase = 0;
+        private volatile float transProgress = 0f;
 
         // Оверлейные данные (экранные координаты, рисуются поверх вписанного кадра).
         private volatile String ovStat = "";
@@ -370,9 +388,8 @@ public class MainActivity extends Activity {
             thread = null;
         }
 
-        // Компактные кнопки в правом верхнем углу. Размер привязан к КОРОТКОЙ стороне
-        // экрана (min(rw,rh)) -> одинаковый визуальный калибр в портрете и ландшафте,
-        // без раздувания на узком экране. Возвращает [0..3]=DBG, [4..7]=X в экранных px.
+        // Компактные кнопки в правом верхнем углу экрана. Размер от КОРОТКОЙ стороны
+        // (min(rw,rh)) -> одинаковый калибр в портрете и ландшафте. [0..3]=DBG, [4..7]=X.
         private float[] ovBtnRects(int rw, int rh) {
             float shortSide = Math.min(rw, rh);
             float bw = Math.min(Math.max(shortSide * 0.078f, 56f), 130f);
@@ -411,8 +428,6 @@ public class MainActivity extends Activity {
                 editorFrame_ = frame.contains("Inspector") || frame.contains("FileSystem") || frame.contains("SCRIPTS");
 
                 int newMode = renderMode;
-                int parsedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-                boolean haveOrient = false;
                 String newStat = "";
                 ArrayList<String> newLog = new ArrayList<>();
                 for (String line : frame.split("\n")) {
@@ -434,10 +449,18 @@ public class MainActivity extends Activity {
                         String[] op = line.split("\\|", 2);
                         if (op.length >= 2) {
                             String v = op[1].trim();
-                            parsedOrient = (v.equals("portrait") || v.equals("vertical") || v.equals("p") || v.equals("v"))
+                            gameOrient = (v.equals("portrait") || v.equals("vertical") || v.equals("p") || v.equals("v"))
                                 ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                                 : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-                            haveOrient = true;
+                        }
+                    } else if (line.startsWith("TRANS|")) {
+                        String[] tp = line.split("\\|", 4);
+                        if (tp.length >= 4) {
+                            try {
+                                transType = Integer.parseInt(tp[1]);
+                                transPhase = Integer.parseInt(tp[2]);
+                                transProgress = Float.parseFloat(tp[3]);
+                            } catch (Throwable t) { }
                         }
                     } else if (line.startsWith("OVSTAT|")) {
                         newStat = line.substring(7);
@@ -449,8 +472,9 @@ public class MainActivity extends Activity {
                 ovStat = newStat;
                 ovLog.clear(); ovLog.addAll(newLog);
 
-                // Ориентация окна: в игре — как задал автор (ORIENT); хаб/редактор — ландшафт.
-                if (renderMode == MODE_GAME && haveOrient) requestedOrient = parsedOrient;
+                // Ориентация: в игре держим ЗАПОМНЕННУЮ gameOrient (не сбрасываем каждый
+                // кадр), хаб/редактор — всегда ландшафт.
+                if (renderMode == MODE_GAME) requestedOrient = gameOrient;
                 else requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
                 if (requestedOrient != appliedOrient) applyOrientation(requestedOrient);
 
@@ -489,6 +513,15 @@ public class MainActivity extends Activity {
                 int rw = getWidth(), rh = getHeight();
                 c.drawColor(Color.rgb(18, 18, 24));
 
+                // Слайд-сдвиг в логических координатах contain-кадра.
+                float slideDx = 0f;
+                if (renderMode == MODE_GAME && (transType == 1 || transType == 2)) {
+                    float p = transProgress;
+                    if (p < 0f) p = 0f; if (p > 1f) p = 1f;
+                    if (transPhase == 0) slideDx = (transType == 1 ? -logicW : logicW) * p;
+                    else slideDx = (transType == 1 ? logicW : -logicW) * (1f - p);
+                }
+
                 if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                     c.save();
                     if (renderMode == MODE_GAME) {
@@ -498,6 +531,7 @@ public class MainActivity extends Activity {
                         float oy = (rh - logicH * s) * 0.5f;
                         c.translate(ox, oy);
                         c.scale(s, s);
+                        if (slideDx != 0f) c.translate(slideDx, 0f);
                     } else {
                         // STRETCH: хаб/редактор на весь экран.
                         c.scale(rw / logicW, rh / logicH);
@@ -513,6 +547,21 @@ public class MainActivity extends Activity {
                 if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
                 if (renderMode == MODE_HUB || frame.isEmpty()) drawDiag(c, rw, rh);
                 if (renderMode == MODE_GAME) drawOverlay(c, rw, rh);
+
+                // Fade ПОСЛЕДНИМ и в ЭКРАННЫХ координатах: покрывает весь экран, включая
+                // оверлей и letterbox-поля (раньше fade был внутри contain и не дотягивался).
+                if (renderMode == MODE_GAME && transType == 0) {
+                    float p = transProgress;
+                    if (p < 0f) p = 0f; if (p > 1f) p = 1f;
+                    float a = (transPhase == 0) ? p : (1f - p);
+                    if (a > 0.001f) {
+                        int ai = (int)(a * 255f + 0.5f);
+                        if (ai > 255) ai = 255;
+                        paint.setColor(Color.argb(ai, 0, 0, 0));
+                        c.drawRect(0, 0, rw, rh, paint);
+                    }
+                }
+
                 getHolder().unlockCanvasAndPost(c);
                 Thread.sleep(16);
               } catch (Throwable t) {
@@ -747,8 +796,7 @@ public class MainActivity extends Activity {
 
             // 1) Оверлейные кнопки (только в игре) — первыми, в экранных px. Действие
             //    уходит через УЖЕ зарегистрированный nativeSetAction с префиксом "ov:",
-            //    который C++ снимает в начале stepGame (consumeOverlayAction). Никакого
-            //    нового native-символа -> краш от UnsatisfiedLinkError невозможен.
+            //    который C++ снимает в начале stepGame (consumeOverlayAction).
             if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
                 float[] R = ovBtnRects(rw, rh);
                 float ex = e.getX(), ey = e.getY();
@@ -836,4 +884,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                                              }
+                }
