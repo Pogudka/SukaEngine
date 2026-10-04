@@ -293,7 +293,7 @@ public class MainActivity extends Activity {
     native void nativeMultiTouch(int phase, float x0, float y0, float x1, float y1);
     native void nativeSetText(String text);
     native void nativeSetName(String text);
-    native void nativeSetAction(String text);   // оверлей X/DBG шлёт "ov:dbg:"/"ov:close:", surface шлёт "sys:ratio|..."
+    native void nativeSetAction(String text);   // оверлей X/DBG шлёт "ov:...", surface шлёт "sys:ratio|..."
     native void nativeSetNumber(String text);
     native void nativeScriptText(String text);
     native void nativeScriptCompose(String text);
@@ -325,6 +325,11 @@ public class MainActivity extends Activity {
         private volatile int transPhase = 0;
         private volatile float transProgress = 0f;
 
+        // Цвет фона сцены: им заливается ВЕСЬ экран в игре, чтобы чёрных полос
+        // не было даже на тот кадр, пока пропорции экрана ещё не доехали до C++.
+        private volatile int gameBg = Color.BLACK;
+        private volatile boolean haveGameBg = false;
+
         // Оверлейные данные (экранные координаты, рисуются поверх вписанного кадра).
         private volatile String ovStat = "";
         private final ArrayList<String> ovLog = new ArrayList<>();
@@ -332,6 +337,8 @@ public class MainActivity extends Activity {
         private final ArrayList<Integer> clIdx = new ArrayList<>();
         private final ArrayList<String> clText = new ArrayList<>();
         private final ArrayList<Float> clY = new ArrayList<>();
+
+        private int ratioTick = 0;
 
         GameView(Context c, String r) {
             super(c); root = r; paint.setAntiAlias(true); getHolder().addCallback(this);
@@ -435,6 +442,10 @@ public class MainActivity extends Activity {
                     catch (Throwable t) { lastImportMsg_ = "jni err: " + t; }
                 }
 
+                // Периодически повторяем пропорции экрана: даже если первое сообщение
+                // потерялось, игра подстроится в течение полусекунды.
+                if (++ratioTick >= 30) { ratioTick = 0; sendScreenRatio(); }
+
                 String frame = nativeStep(); if (frame == null) frame = "";
                 g_stepLen = frame.length();
                 g_stepHead = frame.replace("\n", "|");
@@ -477,6 +488,8 @@ public class MainActivity extends Activity {
                                 transProgress = Float.parseFloat(tp[3]);
                             } catch (Throwable t) { }
                         }
+                    } else if (line.startsWith("DRAW bg|")) {
+                        try { gameBg = Color.parseColor(line.substring(8).trim()); haveGameBg = true; } catch (Throwable t) { }
                     } else if (line.startsWith("OVSTAT|")) {
                         newStat = line.substring(7);
                     } else if (line.startsWith("OVLOG|")) {
@@ -525,8 +538,10 @@ public class MainActivity extends Activity {
                 if (c == null) { Thread.sleep(8); continue; }
                 clIdx.clear(); clText.clear(); clY.clear();
                 int rw = getWidth(), rh = getHeight();
-                // Поля (если останутся) — чисто чёрные; фон сцены рисуется внутри игрового rect.
-                c.drawColor(Color.BLACK);
+                // В игре весь экран сразу заливается фоном сцены: чёрных полос не бывает
+                // даже на кадре, пока пропорции ещё не применились. Хаб/редактор — чёрный фон.
+                if (renderMode == MODE_GAME && haveGameBg) c.drawColor(gameBg);
+                else c.drawColor(Color.BLACK);
 
                 // Слайд-сдвиг в логических координатах contain-кадра.
                 float slideDx = 0f;
@@ -677,8 +692,7 @@ public class MainActivity extends Activity {
                 if (p[0].equals("clipon")) { c.save(); c.clipRect(300, 64, 892, 556); return; }
                 if (p[0].equals("clipoff")) { c.restore(); return; }
                 if (p[0].equals("bg")) {
-                    // Фон сцены рисуем ВНУТРИ игрового прямоугольника (логические координаты),
-                    // а не drawColor на весь экран: иначе фон заливал letterbox-поля.
+                    // Фон сцены рисуем ВНУТРИ игрового прямоугольника (логические координаты).
                     paint.setColor(Color.parseColor(p[1]));
                     c.drawRect(0, 0, logicW, logicH, paint);
                     return;
