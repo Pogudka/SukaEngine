@@ -45,14 +45,13 @@ public class MainActivity extends Activity {
     static { System.loadLibrary("suka"); }
 
     private static final String GAME_DIR = "DemoGame";
-    private static final float LOGIC_W = 1280f;
-    private static final float LOGIC_H = 720f;
+    private static final float DEFAULT_LOGIC_W = 1280f;
+    private static final float DEFAULT_LOGIC_H = 720f;
     private static final String[] FALLBACK_ROOT = { "DemoGame","fonts","sounds" };
 
-    // Script-editor code area in logical (1280x720) coordinates. Must match the C++ side.
     private static final float CODE_X0 = 300f, CODE_X1 = 892f, CODE_Y0 = 64f, CODE_Y1 = 556f;
-    private static final float CODE_TEXT_X = 340f;   // left edge of the code glyphs
-    private static final float CODE_FONT = 14f;      // same size the C++ emits for codeline
+    private static final float CODE_TEXT_X = 340f;
+    private static final float CODE_FONT = 14f;
 
     private static volatile boolean g_initOk = false;
     private static volatile int g_fileCount = -1;
@@ -299,7 +298,11 @@ public class MainActivity extends Activity {
         private final String root;
         private final InputMethodManager imm;
 
-        // Visible code lines captured from "codeline" commands this frame.
+        private volatile float logicW = DEFAULT_LOGIC_W;
+        private volatile float logicH = DEFAULT_LOGIC_H;
+        private volatile int requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+        private volatile int appliedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+
         private final ArrayList<Integer> clIdx = new ArrayList<>();
         private final ArrayList<String> clText = new ArrayList<>();
         private final ArrayList<Float> clY = new ArrayList<>();
@@ -355,6 +358,12 @@ public class MainActivity extends Activity {
             });
         }
 
+        private void applyOrientation(final int orient) {
+            if (orient == appliedOrient) return;
+            appliedOrient = orient;
+            runOnUiThread(() -> { try { setRequestedOrientation(orient); } catch (Throwable t) { } });
+        }
+
         @Override public void surfaceCreated(SurfaceHolder h) {
             running_ = true;
             thread = new Thread(this);
@@ -392,6 +401,35 @@ public class MainActivity extends Activity {
 
                 editorFrame_ = frame.contains("Inspector") || frame.contains("FileSystem") || frame.contains("SCRIPTS");
 
+                for (String line : frame.split("\n")) {
+                    if (line.startsWith("RES|")) {
+                        String[] rp = line.split("\\|", 3);
+                        if (rp.length >= 3) {
+                            try {
+                                float nw = Float.parseFloat(rp[1]);
+                                float nh = Float.parseFloat(rp[2]);
+                                if (nw >= 160f && nw <= 2160f && nh >= 160f && nh <= 2160f) {
+                                    logicW = nw; logicH = nh;
+                                }
+                            } catch (Throwable t) { }
+                        }
+                    } else if (line.startsWith("ORIENT|")) {
+                        String[] op = line.split("\\|", 2);
+                        if (op.length >= 2) {
+                            String v = op[1].trim();
+                            requestedOrient = (v.equals("portrait") || v.equals("vertical") || v.equals("p") || v.equals("v"))
+                                ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                        }
+                    }
+                }
+
+                boolean hubOrMenu = frame.contains("PROJECTS") || frame.contains("START") || frame.contains("Play")
+                                 || frame.contains("NEW") || frame.contains("Theme") || frame.contains("MENU");
+                boolean forceLandscape = editorFrame_ || frame.contains("PROJECTS");
+                if (forceLandscape) requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                if (requestedOrient != appliedOrient) applyOrientation(requestedOrient);
+
                 if (frame.contains("IME_ON"))  requestIme(true);
                 if (frame.contains("IME_OFF")) requestIme(false);
 
@@ -426,12 +464,16 @@ public class MainActivity extends Activity {
                 clIdx.clear(); clText.clear(); clY.clear();
                 int rw = getWidth(), rh = getHeight();
                 c.drawColor(Color.rgb(18, 18, 24));
-                if (rw > 0 && rh > 0) { c.save(); c.scale(rw / LOGIC_W, rh / LOGIC_H); for (String line : frame.split("\n")) drawLine(c, line); c.restore(); }
-                else { for (String line : frame.split("\n")) drawLine(c, line); }
+                if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
+                    c.save();
+                    c.scale(rw / logicW, rh / logicH);
+                    for (String line : frame.split("\n")) drawLine(c, line);
+                    c.restore();
+                } else {
+                    for (String line : frame.split("\n")) drawLine(c, line);
+                }
 
                 boolean editor = editorFrame_;
-                boolean hubOrMenu = frame.contains("PROJECTS") || frame.contains("START") || frame.contains("Play")
-                                 || frame.contains("NEW") || frame.contains("Theme") || frame.contains("MENU");
                 if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
                 if (frame.contains("PROJECTS") || frame.isEmpty()) drawDiag(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
@@ -488,14 +530,12 @@ public class MainActivity extends Activity {
             return bm;
         }
 
-        // UTF-8 byte length of a single code point.
         private int utf8CpLen(int cp) {
             if (cp < 0x80) return 1;
             if (cp < 0x800) return 2;
             if (cp < 0x10000) return 3;
             return 4;
         }
-        // Total UTF-8 byte length of a Java (UTF-16) string.
         private int utf8Len(String s) {
             int n = 0; int i = 0; int len = s.length();
             while (i < len) { int cp = s.codePointAt(i); n += utf8CpLen(cp); i += Character.charCount(cp); }
@@ -511,7 +551,6 @@ public class MainActivity extends Activity {
                 if (p[0].equals("bg")) { c.drawColor(Color.parseColor(p[1])); return; }
 
                 if (p[0].equals("codeline")) {
-                    // p = [codeline, globalIndex, text, y, fontSize, color]
                     if (p.length < 6) return;
                     int idx = Integer.parseInt(p[1]);
                     String t = p[2];
@@ -525,9 +564,6 @@ public class MainActivity extends Activity {
                     return;
                 }
                 else if (p[0].equals("caret")) {
-                    // Vertical bar placed exactly after the measured prefix, using the SAME
-                    // typeface and size (14px) as the proportional "text" command that drew
-                    // the code line. This guarantees the caret never drifts on long lines.
                     if (p.length < 6) return;
                     String pref = p[1];
                     float bx = Float.parseFloat(p[2]);
@@ -541,8 +577,6 @@ public class MainActivity extends Activity {
                     c.drawRect(bx + w, by + 1, bx + w + 2f, by + hh, paint);
                 }
                 else if (p[0].equals("mtext")) {
-                    // Legacy fixed-cell renderer. No longer emitted by the C++ side for code
-                    // (proportional text + caret is used now), but kept harmless for safety.
                     paint.setColor(Color.parseColor(p[5]));
                     float fs = Float.parseFloat(p[4]);
                     float cell = p.length > 6 ? Float.parseFloat(p[6]) : fs * 0.6f;
@@ -583,7 +617,6 @@ public class MainActivity extends Activity {
                     float w = Float.parseFloat(p[4]), h = Float.parseFloat(p[5]);
                     paint.setColor(Color.parseColor(p[6]));
                     float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
-
                     if (shape.equals("glow")) {
                         int col = Color.parseColor(p[6]);
                         int r = (col >> 16) & 255, g2 = (col >> 8) & 255, b2 = col & 255;
@@ -594,7 +627,6 @@ public class MainActivity extends Activity {
                         paint.setShader(null);
                         return;
                     }
-
                     c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang);
                     if (shape.equals("circle")) c.drawOval(new RectF(-w/2, -h/2, w/2, h/2), paint);
                     else if (shape.equals("diamond")) { Path pa = new Path(); pa.moveTo(0, -h/2); pa.lineTo(w/2, 0); pa.lineTo(0, h/2); pa.lineTo(-w/2, 0); pa.close(); c.drawPath(pa, paint); }
@@ -610,7 +642,6 @@ public class MainActivity extends Activity {
                     int fa = Color.alpha(fill);
                     float ang = p.length > 7 ? Float.parseFloat(p[7]) : 0f;
                     String tex = p.length > 8 ? p[8] : "";
-
                     c.save(); c.translate(x + w/2, y + h/2); c.rotate(ang);
                     if (!tex.isEmpty()) {
                         Bitmap bm = loadBitmap(tex);
@@ -648,12 +679,9 @@ public class MainActivity extends Activity {
             int a = e.getActionMasked();
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
-            float lx = rw > 0 ? e.getX() * LOGIC_W / rw : e.getX();
-            float ly = rh > 0 ? e.getY() * LOGIC_H / rh : e.getY();
+            float lx = rw > 0 ? e.getX() * logicW / rw : e.getX();
+            float ly = rh > 0 ? e.getY() * logicH / rh : e.getY();
 
-            // Tap inside the code area: resolve line + byte-offset locally with the exact
-            // same typeface/size used to draw the glyphs, then hand it to the engine via the
-            // dedicated caret action (9). This removes the old monospace-grid mismatch.
             if (a == MotionEvent.ACTION_DOWN && count == 1 && !clIdx.isEmpty()
                     && lx >= CODE_X0 && lx <= CODE_X1 && ly >= CODE_Y0 && ly <= CODE_Y1) {
                 int bi = 0; float bd = Float.MAX_VALUE;
@@ -691,10 +719,10 @@ public class MainActivity extends Activity {
             }
 
             if (count >= 2) {
-                float x0 = rw > 0 ? e.getX(0) * LOGIC_W / rw : e.getX(0);
-                float y0 = rh > 0 ? e.getY(0) * LOGIC_H / rh : e.getY(0);
-                float x1 = rw > 0 ? e.getX(1) * LOGIC_W / rw : e.getX(1);
-                float y1 = rh > 0 ? e.getY(1) * LOGIC_H / rh : e.getY(1);
+                float x0 = rw > 0 ? e.getX(0) * logicW / rw : e.getX(0);
+                float y0 = rh > 0 ? e.getY(0) * logicH / rh : e.getY(0);
+                float x1 = rw > 0 ? e.getX(1) * logicW / rw : e.getX(1);
+                float y1 = rh > 0 ? e.getY(1) * logicH / rh : e.getY(1);
                 int ph = (a == MotionEvent.ACTION_POINTER_DOWN || a == MotionEvent.ACTION_DOWN) ? 1
                        : (a == MotionEvent.ACTION_POINTER_UP   || a == MotionEvent.ACTION_UP)   ? 3 : 2;
                 nativeMultiTouch(ph, x0, y0, x1, y1);
@@ -706,4 +734,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                    }
+                                                                     }
