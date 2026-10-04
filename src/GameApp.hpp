@@ -126,19 +126,23 @@ static void drawTexturePreviewTree(Node& n, const WorldXf& parent, std::string& 
 }
 
 static std::vector<std::string> splitPipe(const std::string& s) {
-    std::vector<std::string> v; size_t start = 0;
+    std::vector<std::string> v;
+    size_t start = 0;
     while (true) {
         size_t p = s.find('|', start);
         if (p == std::string::npos) { v.push_back(s.substr(start)); break; }
-        v.push_back(s.substr(start, p - start)); start = p + 1;
+        v.push_back(s.substr(start, p - start));
+        start = p + 1;
     }
     return v;
 }
+
 static std::string joinPipe(const std::vector<std::string>& v) {
     std::string out;
     for (size_t i = 0; i < v.size(); ++i) { if (i) out += '|'; out += v[i]; }
     return out;
 }
+
 static std::string shiftDrawLineX(const std::string& line, float dx) {
     if (line.rfind("DRAW ", 0) != 0) return line;
     std::string body = line.substr(5);
@@ -158,9 +162,11 @@ static std::string shiftDrawLineX(const std::string& line, float dx) {
     parts[xIndex] = std::to_string(x);
     return "DRAW " + joinPipe(parts);
 }
+
 static void shiftOutputX(std::string& out, float dx) {
     if (std::fabs(dx) < 0.01f) return;
-    std::string res; res.reserve(out.size());
+    std::string res;
+    res.reserve(out.size());
     size_t pos = 0;
     while (pos < out.size()) {
         size_t nl = out.find('\n', pos);
@@ -191,11 +197,19 @@ public:
         hubState_.games = ProjectList::scan();
         hubState_.selectedDir = gameDir;
         if (hubState_.selectedDir.empty() && !hubState_.games.empty()) hubState_.selectedDir = hubState_.games.front().dir;
-        logicW_ = 1280.0f; logicH_ = 720.0f;
-        input_.screenWidth = logicW_; input_.screenHeight = logicH_;
-        orientVertical_ = false; emitOrient_ = false; orientName_ = "landscape";
-        projCamW_ = 1280.0f; projCamH_ = 720.0f; projVertical_ = false;
+
+        logicW_ = 1280.0f;
+        logicH_ = 720.0f;
+        input_.screenWidth = logicW_;
+        input_.screenHeight = logicH_;
+        orientVertical_ = false;
+        emitOrient_ = false;
+        orientName_ = "landscape";
+        projCamW_ = 1280.0f;
+        projCamH_ = 720.0f;
+        projVertical_ = false;
         clearTransition();
+
         rebuildHub();
         appMode_ = AppMode::Hub;
         return true;
@@ -246,7 +260,8 @@ public:
     void feedTouch(int action, float x, float y) {
         if (action == 9) {
             if (appMode_ == AppMode::Editor && scriptMode_ && editor_) {
-                int line = (int)x; int col = (int)y;
+                int line = (int)x;
+                int col  = (int)y;
                 if (line < 0) line = 0;
                 if (line >= (int)scriptLines_.size()) line = (int)scriptLines_.size() - 1;
                 const std::string& L = scriptLines_[line];
@@ -313,9 +328,11 @@ public:
                     return;
                 }
                 if (y >= CAM_BTN_O_Y0 && y <= CAM_BTN_O_Y1) {
-                    // ROT меняет ТОЛЬКО ориентацию окна, размер мира (W/H) не трогает.
-                    // Раньше тут был swap(W,H) -> мир искажался/уезжал ("Чили").
-                    projVertical_ = !projVertical_;
+                    // ROT = свап размера МИРА. Ориентация окна выводится из мира
+                    // (см. load/save/enterGame + Java), поэтому рассогласование
+                    // "портретное окно + горизонтальный мир" невозможно по построению.
+                    std::swap(projCamW_, projCamH_);
+                    projVertical_ = (projCamH_ > projCamW_);
                     saveProjCamera();
                     return;
                 }
@@ -466,20 +483,25 @@ private:
         return def;
     }
     void loadProjCamera(const std::string& root) {
-        projCamW_ = 1280.0f; projCamH_ = 720.0f; projVertical_ = false;
-        if (root.empty()) return;
+        projCamW_ = 1280.0f; projCamH_ = 720.0f;
+        if (root.empty()) { projVertical_ = false; return; }
         std::string path = root + "/editor_camera.json";
-        if (!fileExists(path)) return;
+        if (!fileExists(path)) { projVertical_ = false; return; }
         std::string s = readFile(path);
         double w = jsonNum(s, "\"w\"", 1280.0);
         double h = jsonNum(s, "\"h\"", 720.0);
         if (w < 160.0) w = 160.0; if (w > 2160.0) w = 2160.0;
         if (h < 160.0) h = 160.0; if (h > 2160.0) h = 2160.0;
         projCamW_ = (float)w; projCamH_ = (float)h;
-        projVertical_ = jsonBool(s, "\"vertical\"", projCamH_ > projCamW_);
+        // Ориентация окна = соотношение мира. Сохранённый флаг "vertical" НЕ читаем:
+        // именно рассогласование флага и размера рождало Чили (портретное окно +
+        // горизонтальный мир). Старые json с vertical:true при W>H теперь корректно
+        // грузятся как ландшафт.
+        projVertical_ = (projCamH_ > projCamW_);
     }
     void saveProjCamera() {
         if (project_.rootPath.empty()) return;
+        projVertical_ = (projCamH_ > projCamW_);   // держим флаг синхронно с миром
         std::ofstream f(project_.rootPath + "/editor_camera.json");
         if (!f.good()) return;
         f << "{\"w\":" << (int)projCamW_ << ",\"h\":" << (int)projCamH_
@@ -849,6 +871,7 @@ private:
             if (pendingNewProject_) out += "REQ_NAME|Project\n";
             else if (pendingHubRename_) out += "REQ_NAME|" + pendingHubCurrentName_ + "\n";
         }
+        out += "MODE|hub\n";
         out += "RES|1280|720\n";
         input_.endFrame(); return out;
     }
@@ -958,6 +981,7 @@ private:
             for (int i = 0; i < show; ++i) out += "DRAW text|" + g_luaLog[ln - show + i] + "|20|" + std::to_string(148 + i * 20) + "|16|#87CEEB|0\n";
         }
 
+        out += "MODE|game\n";
         out += "RES|" + std::to_string((int)logicW_) + "|" + std::to_string((int)logicH_) + "\n";
         if (emitOrient_) { out += "ORIENT|" + orientName_ + "\n"; emitOrient_ = false; }
         input_.endFrame(); return out;
@@ -1435,6 +1459,7 @@ private:
         if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
         if (pendingNum_ && appMode_ == AppMode::Editor) { out += "REQ_NUM|" + pendingNumCur_ + "\n"; pendingNum_ = false; }
         if (!pendingImportCategory_.empty() && appMode_ == AppMode::Editor) { out += "REQ_IMPORT|" + pendingImportCategory_ + "|" + project_.rootPath + "\n"; pendingImportCategory_.clear(); }
+        out += "MODE|editor\n";
         out += "RES|1280|720\n";
         input_.endFrame(); return out;
     }
