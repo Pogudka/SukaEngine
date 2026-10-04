@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <set>
+#include <map>
 #include <cmath>
 #include <mutex>
 #include <chrono>
@@ -35,6 +36,7 @@
 #include "EditorUI.hpp"
 #include "EditorRender.hpp"
 #include "LuaGameApi.hpp"
+#include "Physics.hpp"
 
 namespace suka {
 
@@ -65,7 +67,7 @@ static void walkEmitters(Node& n, const WorldXf& parent, float dt) {
     for (const auto& c : n2->getChildren()) walkEmitters(*c, w, dt);
 }
 
-// Центр вьюпорта редактора: (596, 310) — вьюпорт 300,64 .. 892,556 (как раньше).
+// Центр вьюпорта редактора: (596, 310) — вьюпорт 300,64 .. 892,556.
 static void projEditor(float wx, float wy, float& sx, float& sy, float zoom, float camX, float camY) {
     float S = 0.46875f * zoom;
     sx = 596 + (wx - camX - 640) * S;
@@ -185,6 +187,16 @@ static const float CAM_PX0 = 792.0f, CAM_PX1 = 888.0f;
 static const float CAM_BTN_W_Y0 = 66.0f,  CAM_BTN_W_Y1 = 90.0f;
 static const float CAM_BTN_H_Y0 = 92.0f,  CAM_BTN_H_Y1 = 116.0f;
 static const float CAM_BTN_O_Y0 = 118.0f, CAM_BTN_O_Y1 = 142.0f;
+
+// Funcs panel: кнопка F в ряду тулбара + ряд кнопок функций внизу.
+static const float FN_BTN_X = 864.0f, FN_BTN_Y = 34.0f, FN_BTN_W = 28.0f, FN_BTN_H = 26.0f;
+static const float FNR_Y = 600.0f, FNR_H = 26.0f;
+static const float FNR_RIG_X0 = 300.0f, FNR_RIG_X1 = 410.0f;
+static const float FNR_STA_X0 = 414.0f, FNR_STA_X1 = 524.0f;
+static const float FNR_NOG_X0 = 528.0f, FNR_NOG_X1 = 608.0f;
+static const float FNR_BOU_X0 = 612.0f, FNR_BOU_X1 = 692.0f;
+static const float FNR_CLR_X0 = 696.0f, FNR_CLR_X1 = 766.0f;
+static const float FNR_X_X0  = 860.0f, FNR_X_X1  = 892.0f;
 
 class GameApp {
 public:
@@ -316,6 +328,23 @@ public:
             }
         }
 
+        // ==== Панель функций F: кнопка в тулбаре и ряд кнопок функций ====
+        if (appMode_ == AppMode::Editor && !scriptMode_) {
+            if (t.action == RawTouch::Action::Down && x >= FN_BTN_X && x <= FN_BTN_X + FN_BTN_W && y >= FN_BTN_Y && y <= FN_BTN_Y + FN_BTN_H) {
+                showFuncs_ = !showFuncs_;
+                if (showFuncs_) showCreate_ = false;
+                return;
+            }
+            if (showFuncs_ && t.action == RawTouch::Action::Down && y >= FNR_Y && y <= FNR_Y + FNR_H) {
+                if (x >= FNR_RIG_X0 && x <= FNR_RIG_X1) { addFuncToSelected("rigidbody"); return; }
+                if (x >= FNR_STA_X0 && x <= FNR_STA_X1) { addFuncToSelected("staticbody"); return; }
+                if (x >= FNR_NOG_X0 && x <= FNR_NOG_X1) { addFuncToSelected("nogravity"); return; }
+                if (x >= FNR_BOU_X0 && x <= FNR_BOU_X1) { addFuncToSelected("bouncy"); return; }
+                if (x >= FNR_CLR_X0 && x <= FNR_CLR_X1) { clearFuncsSelected(); return; }
+                if (x >= FNR_X_X0  && x <= FNR_X_X1)  { showFuncs_ = false; return; }
+            }
+        }
+
         if (appMode_ == AppMode::Editor && !scriptMode_ && !showCreate_) {
             if (t.action == RawTouch::Action::Down && !showSettings_ && !showPrefabs_ && !showAssets_
                 && x >= CAM_PX0 && x <= CAM_PX1) {
@@ -441,6 +470,8 @@ public:
     }
 
     std::string stepFrame() {
+        // Служебные sys:-сообщения (пропорции экрана) читаются В ЛЮБОМ режиме сразу,
+        // чтобы хаб/редактор не стирали их до того, как игра успеет применить.
         consumeSysRatio();
 
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -513,6 +544,9 @@ private:
         f.close();
     }
 
+    // Кадр игры подгоняется под реальные пропорции экрана: высота = H проекта,
+    // ширина = H * ratio. Масштаб остаётся равномерным (ничего не плющится),
+    // а contain-вписывание даёт нулевые поля => игра на весь экран.
     void applyScreenRatio() {
         if (screenRatio_ <= 0.0f) return;
         float h = projCamH_;
@@ -547,6 +581,7 @@ private:
         if (!ok) sceneMgr_->requestChange(target, true);
         touch_.resetJoystick();
         ensureGameButtons();
+        applyProjFuncs();
     }
 
     void updateTransition(float dt) {
@@ -584,6 +619,24 @@ private:
         Scene* sc = (sceneMgr_ && sceneMgr_->current()) ? sceneMgr_->current() : nullptr;
         if (!sc) return;
         input_.setUi(&sc->ui);
+    }
+
+    // Звуковые команды из Lua (play_sound/play_music/stop_music) -> теги кадра.
+    void drainSoundCmds(std::string& out) {
+        std::vector<std::string> q;
+        { std::lock_guard<std::mutex> lk(g_soundMtx); q.swap(g_soundQ); }
+        for (auto& c : q) {
+            if (c == "MS") out += "MUSICSTOP\n";
+            else if (c.rfind("S|", 0) == 0) out += "SOUND|" + c.substr(2) + "\n";
+            else if (c.rfind("M|", 0) == 0) out += "MUSIC|" + c.substr(2) + "\n";
+        }
+    }
+
+    // События коллизий физики -> Lua on_collide(a, b).
+    void drainCollideEvents() {
+        std::vector<std::pair<std::string, std::string>> ev;
+        { std::lock_guard<std::mutex> lk(g_collideMtx); ev.swap(g_collideEvents); }
+        for (auto& p : ev) scripts_.callCollide(p.first, p.second);
     }
 
     void consumeOverlayAction() {
@@ -913,6 +966,7 @@ private:
         clearDialogResults();
 
         loadProjCamera(project_.rootPath);
+        loadProjFuncs();
         logicW_ = projCamW_; logicH_ = projCamH_; orientVertical_ = projVertical_;
         applyScreenRatio();
         input_.screenWidth = logicW_; input_.screenHeight = logicH_;
@@ -921,6 +975,7 @@ private:
         clearTransition();
 
         ensureGameButtons();
+        applyProjFuncs();
         touch_.resetJoystick();
         appMode_ = AppMode::Game;
 
@@ -954,14 +1009,17 @@ private:
             if (sceneMgr_->current()) g_tweens.update(1.0f / 60.0f, sceneMgr_->current(), [this](const std::string& fn) {
                 if (sceneMgr_ && sceneMgr_->current()) scripts_.callGlobal(fn, ctx_, *sceneMgr_, ctx_.vars, sceneMgr_->current());
             });
+            suka::physicsUpdate(*sceneMgr_->current(), 1.0f / 60.0f);
+            drainCollideEvents();
         }
 
         if (pendingLoadVars_) { if (saveVarsEnabled_) loadVars(); pendingLoadVars_ = false; }
         if (saveVarsEnabled_) { saveTimer_ += 1.0f / 60.0f; if (saveTimer_ >= 1.0f) { saveVars(); saveTimer_ = 0.0f; } }
 
         std::string out;
-        if (ctx_.coinCollectedThisFrame) out += "SOUND coin\n";
-        if (ctx_.jumpPressedThisFrame) out += "SOUND jump\n";
+        drainSoundCmds(out);
+        if (ctx_.coinCollectedThisFrame) out += "SOUND|coin\n";
+        if (ctx_.jumpPressedThisFrame) out += "SOUND|jump\n";
 
         gameBackend_.begin(); Renderer renderer(gameBackend_); renderer.render(*sceneMgr_->current(), &ctx_);
         out += gameBackend_.str();
@@ -1002,6 +1060,7 @@ private:
             for (int i = 0; i < show; ++i) out += "OVLOG|" + g_luaLog[ln - show + i] + "\n";
         }
 
+        out += "PROJ|" + project_.rootPath + "\n";
         out += "MODE|game\n";
         out += "RES|" + std::to_string((int)logicW_) + "|" + std::to_string((int)logicH_) + "\n";
         if (emitOrient_) { out += "ORIENT|" + orientName_ + "\n"; emitOrient_ = false; }
@@ -1066,6 +1125,7 @@ private:
         editor_->attach(sceneMgr_->current());
         editor_->setProjectRoot(project_.rootPath);
         showCreate_ = false; showAssets_ = false; showSettings_ = false; showPrefabs_ = false; showFiles_ = true;
+        showFuncs_ = false; funcMsgTimer_ = 0;
         assetScroll_ = 0; prefabScroll_ = 0;
         pendingDeleteFile_.clear();
         pendingText_ = false; pendingName_ = false; pendingAction_ = false; pendingNum_ = false; pendingRgb_ = 0;
@@ -1078,6 +1138,7 @@ private:
         pendingNewProject_ = false; pendingHubRename_ = false; confirmDeleteDir_.clear();
         clearDialogResults(); g_tweens.clear(); g_particles.clear();
         loadProjCamera(project_.rootPath);
+        loadProjFuncs();
         logicW_ = 1280.0f; logicH_ = 720.0f; orientVertical_ = false; emitOrient_ = false;
         input_.screenWidth = logicW_; input_.screenHeight = logicH_;
         clearTransition();
@@ -1180,7 +1241,7 @@ private:
         if (act == "settings_close") { showSettings_ = false; rebuild(); return 1; }
         if (act.rfind("import_category:", 0) == 0) {
             std::string category = act.substr(16);
-            if (category == "fonts" || category == "sprites") pendingImportCategory_ = category;
+            if (category == "fonts" || category == "sprites" || category == "sounds") pendingImportCategory_ = category;
             else lastMsg_ = category + ": unavailable";
             return 0;
         }
@@ -1247,7 +1308,7 @@ private:
         if (act == "manip:move") { manip_ = Manip::Move; rebuild(); return 1; }
         if (act == "manip:rotate") { manip_ = Manip::Rotate; rebuild(); return 1; }
         if (act == "manip:scale") { manip_ = Manip::Scale; rebuild(); return 1; }
-        if (act == "create_open") { showCreate_ = !showCreate_; rebuild(); return 1; }
+        if (act == "create_open") { showCreate_ = !showCreate_; if (showCreate_) showFuncs_ = false; rebuild(); return 1; }
         if (act == "edit_text") { if (!lk) { pendingRgb_ = 0; if (ub) { pendingText_ = true; pendingTextCur_ = ub->text; } else if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } } return 0; }
         if (act == "edit_action") { if (!lk) { pendingAction_ = true; pendingActionCur_ = ub ? ub->action : (s2 ? s2->action : std::string("")); } return 0; }
         if (act.rfind("num:", 0) == 0) {
@@ -1488,6 +1549,31 @@ private:
             out += "DRAW text|" + oTxt + "|" + std::to_string((int)CAM_PX0 + 6) + "|" + std::to_string((int)CAM_BTN_O_Y0 + 2) + "|14|#FFD700|0\n";
         }
 
+        // ==== Панель функций: кнопка F, ряд кнопок, жёлтое сообщение, строка в инспекторе ====
+        if (!scriptMode_) {
+            out += "DRAW rect|" + std::to_string((int)FN_BTN_X) + "|" + std::to_string((int)FN_BTN_Y) + "|" + std::to_string((int)FN_BTN_W) + "|" + std::to_string((int)FN_BTN_H) + "|" + (showFuncs_ ? "#FFD700" : "#FF8800") + "|0\n";
+            out += "DRAW text|F|" + std::to_string((int)(FN_BTN_X + 9)) + "|" + std::to_string((int)(FN_BTN_Y + 4)) + "|16|#1A1A2E|0\n";
+            if (showFuncs_) {
+                out += "DRAW rect|300|600|592|26|#20202A|0\n";
+                out += "DRAW rect|300|600|110|26|#8E44AD|0\n"; out += "DRAW text|RIGIDBODY|306|604|14|#FFFFFF|0\n";
+                out += "DRAW rect|414|600|110|26|#8E44AD|0\n"; out += "DRAW text|STATICBODY|420|604|14|#FFFFFF|0\n";
+                out += "DRAW rect|528|600|80|26|#8E44AD|0\n";  out += "DRAW text|NOGRAV|534|604|14|#FFFFFF|0\n";
+                out += "DRAW rect|612|600|80|26|#8E44AD|0\n";  out += "DRAW text|BOUNCY|618|604|14|#FFFFFF|0\n";
+                out += "DRAW rect|696|600|70|26|#555566|0\n";  out += "DRAW text|CLEAR|702|604|14|#FFFFFF|0\n";
+                out += "DRAW rect|860|600|32|26|#D62828|0\n";  out += "DRAW text|X|872|604|14|#FFFFFF|0\n";
+            }
+            if (funcMsgTimer_ > 0) {
+                --funcMsgTimer_;
+                out += "DRAW rect|300|64|592|26|#FFD700|0\n";
+                out += "DRAW text|" + funcMsg_ + "|306|68|16|#1A1A2E|0\n";
+            }
+            Node* fsn = editor_ ? editor_->selected() : nullptr;
+            if (fsn) {
+                std::string ff = funcsOf(fsn->name);
+                out += "DRAW text|funcs: " + (ff.empty() ? std::string("-") : ff) + "|902|600|14|#7CFC00|0\n";
+            }
+        }
+
         processEditorActions();
         if (appMode_ != AppMode::Editor) return "";
         if (scriptMode_ && imeChanged_) { buildEditorPanels(); input_.setUi(&editorScene_.ui); imeChanged_ = false; }
@@ -1501,6 +1587,75 @@ private:
         out += "MODE|editor\n";
         out += "RES|1280|720\n";
         input_.endFrame(); return out;
+    }
+
+    // ==== Функции-компоненты объектов (funcs.txt: имя_объекта -> список) ====
+    std::map<std::string, std::string> projFuncs_;
+    bool showFuncs_ = false;
+    std::string funcMsg_;
+    int funcMsgTimer_ = 0;
+
+    std::string funcsOf(const std::string& nm) { auto it = projFuncs_.find(nm); return it == projFuncs_.end() ? std::string() : it->second; }
+
+    void addFuncToSelected(const std::string& fn) {
+        Node* sn = editor_ ? editor_->selected() : nullptr;
+        Node2D* s2 = sn ? dynamic_cast<Node2D*>(sn) : nullptr;
+        if (!s2) { funcMsg_ = "Select an object first"; funcMsgTimer_ = 150; return; }
+        if (s2->locked) { funcMsg_ = "Unlock the object first"; funcMsgTimer_ = 150; return; }
+        std::string cur = funcsOf(s2->name);
+        if (cur.find(fn) == std::string::npos) { if (!cur.empty()) cur += ","; cur += fn; }
+        projFuncs_[s2->name] = cur;
+        saveProjFuncs();
+        lastMsg_ = "func " + fn + " -> " + s2->name;
+    }
+    void clearFuncsSelected() {
+        Node* sn = editor_ ? editor_->selected() : nullptr;
+        if (!sn) { funcMsg_ = "Select an object first"; funcMsgTimer_ = 150; return; }
+        projFuncs_.erase(sn->name);
+        saveProjFuncs();
+        lastMsg_ = "funcs cleared: " + sn->name;
+    }
+    void loadProjFuncs() {
+        projFuncs_.clear();
+        if (project_.rootPath.empty()) return;
+        std::string path = project_.rootPath + "/funcs.txt";
+        if (!fileExists(path)) return;
+        std::string s = readFile(path); size_t pos = 0;
+        while (pos <= s.size()) {
+            size_t nl = s.find('\n', pos); std::string line;
+            if (nl == std::string::npos) { line = s.substr(pos); pos = s.size() + 1; }
+            else { line = s.substr(pos, nl - pos); pos = nl + 1; }
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            size_t eq = line.find('=');
+            if (eq == std::string::npos || eq == 0) continue;
+            projFuncs_[line.substr(0, eq)] = line.substr(eq + 1);
+        }
+    }
+    void saveProjFuncs() {
+        if (project_.rootPath.empty()) return;
+        std::ofstream f(project_.rootPath + "/funcs.txt");
+        if (!f.good()) return;
+        for (auto& kv : projFuncs_) f << kv.first << "=" << kv.second << "\n";
+        f.close();
+    }
+    void applyProjFuncs() {
+        Scene* sc = sceneMgr_ ? sceneMgr_->current() : nullptr;
+        if (!sc || !sc->root) return;
+        for (auto& kv : projFuncs_) {
+            Node* n = sc->root->findNode(kv.first);
+            if (!n) continue;
+            const std::string& f = kv.second;
+            bool stat = f.find("staticbody") != std::string::npos;
+            bool rig  = f.find("rigidbody")  != std::string::npos;
+            if (stat) bodyAdd(kv.first, true, 1.0f);
+            else if (rig) bodyAdd(kv.first, false, 1.0f);
+            else continue;
+            Body* b = bodyGet(kv.first);
+            if (b) {
+                if (f.find("nogravity") != std::string::npos) b->gravity = false;
+                if (f.find("bouncy")    != std::string::npos) b->restitution = 0.6f;
+            }
+        }
     }
 
     AppMode appMode_ = AppMode::Hub;
