@@ -14,6 +14,8 @@ import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.media.MediaPlayer;
+import android.media.SoundPool;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
@@ -77,6 +79,55 @@ public class MainActivity extends Activity {
     private volatile boolean hasImportResult_ = false;
     private volatile String importCatRes_ = "";
     private volatile String importNameRes_ = "";
+
+    // ==== Звук ====
+    private SoundPool sp = null;
+    private final Map<String, Integer> spMap = new HashMap<>();
+    private MediaPlayer mp = null;
+    private volatile String projRoot = "";
+
+    private void loadSounds(String dir) {
+        try {
+            if (sp != null) { sp.release(); sp = null; }
+            spMap.clear();
+            File d = new File(dir);
+            if (!d.isDirectory()) return;
+            sp = new SoundPool.Builder().setMaxStreams(8).build();
+            File[] fs = d.listFiles();
+            if (fs == null) return;
+            for (File f : fs) {
+                String n = f.getName(); String low = n.toLowerCase();
+                if (low.endsWith(".ogg") || low.endsWith(".wav") || low.endsWith(".mp3")) {
+                    int id = sp.load(f.getAbsolutePath(), 1);
+                    int dot = n.lastIndexOf('.');
+                    spMap.put(dot > 0 ? n.substring(0, dot) : n, id);
+                }
+            }
+        } catch (Throwable t) { }
+    }
+    private void playSound(String name) {
+        try { Integer id = spMap.get(name); if (id != null && sp != null) sp.play(id, 1f, 1f, 1, 0, 1f); } catch (Throwable t) { }
+    }
+    private void playMusic(String name, boolean loop) {
+        try {
+            stopMusic();
+            if (projRoot.isEmpty()) return;
+            File f = new File(projRoot + "/sounds/" + name);
+            if (!f.exists()) {
+                String[] exts = { ".ogg", ".mp3", ".wav" };
+                for (String e : exts) { File t2 = new File(projRoot + "/sounds/" + name + e); if (t2.exists()) { f = t2; break; } }
+            }
+            if (!f.exists()) return;
+            mp = new MediaPlayer();
+            mp.setDataSource(f.getAbsolutePath());
+            mp.setLooping(loop);
+            mp.prepare();
+            mp.start();
+        } catch (Throwable t) { }
+    }
+    private void stopMusic() {
+        try { if (mp != null) { mp.stop(); mp.release(); mp = null; } } catch (Throwable t) { }
+    }
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -196,7 +247,7 @@ public class MainActivity extends Activity {
         }
         final Uri uri = data.getData();
         final String category = pendingImportCategory;
-        final String projRoot = pendingImportRoot;
+        final String projRoot2 = pendingImportRoot;
         pendingImportCategory = "";
         pendingImportRoot = "";
 
@@ -225,12 +276,14 @@ public class MainActivity extends Activity {
                 .setPositiveButton("OK", (d, w) -> {
                     String base = et.getText().toString().replaceAll("[^a-zA-Z0-9._-]", "_");
                     if (base.isEmpty()) base = defBase;
-                    String stored = copyToAssets(uri, category, base, finalExt, projRoot);
+                    String stored = copyToAssets(uri, category, base, finalExt, projRoot2);
                     if (stored != null) {
                         importCatRes_ = category;
                         importNameRes_ = stored;
                         hasImportResult_ = true;
                         lastImportMsg_ = "copied " + stored;
+                        // Звуки подхватываем сразу, если игра уже загружала этот проект.
+                        if (category.equals("sounds") && !projRoot.isEmpty()) loadSounds(projRoot + "/sounds");
                     } else {
                         lastImportMsg_ = "copy failed";
                     }
@@ -252,7 +305,7 @@ public class MainActivity extends Activity {
         try {
             String rp = projRoot;
             if (rp == null || rp.isEmpty()) rp = getFilesDir().getAbsolutePath() + "/projects/" + GAME_DIR;
-            String sub = category.equals("fonts") ? "assets/fonts/" : "assets/";
+            String sub = category.equals("fonts") ? "assets/fonts/" : (category.equals("sounds") ? "sounds/" : "assets/");
             File dir = new File(rp + "/" + sub);
             dir.mkdirs();
             String name = base + ext;
@@ -497,6 +550,16 @@ public class MainActivity extends Activity {
                         newStat = line.substring(7);
                     } else if (line.startsWith("OVLOG|")) {
                         newLog.add(line.substring(6));
+                    } else if (line.startsWith("PROJ|")) {
+                        String pr = line.substring(5);
+                        if (!pr.equals(projRoot)) { projRoot = pr; loadSounds(pr + "/sounds"); }
+                    } else if (line.startsWith("SOUND|")) {
+                        playSound(line.substring(6).trim());
+                    } else if (line.startsWith("MUSIC|")) {
+                        String[] m2 = line.substring(6).split("\\|", 2);
+                        playMusic(m2[0], m2.length < 2 || m2[1].equals("1"));
+                    } else if (line.startsWith("MUSICSTOP")) {
+                        stopMusic();
                     }
                 }
                 renderMode = newMode;
@@ -919,4 +982,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                        }
+                    }
