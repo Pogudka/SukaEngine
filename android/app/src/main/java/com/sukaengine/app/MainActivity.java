@@ -60,8 +60,7 @@ public class MainActivity extends Activity {
     // Границы вьюпорта редактора (совпадают с C++: 300,64 .. 892,556).
     private static final float EDV_X0 = 300f, EDV_Y0 = 64f, EDV_X1 = 892f, EDV_Y1 = 556f;
 
-    // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH на весь экран (инструмент).
-    // game -> CONTAIN; при совпадении пропорций кадра и экрана полос нет вообще.
+    // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH; game -> CONTAIN.
     private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
 
     private static volatile boolean g_initOk = false;
@@ -83,13 +82,16 @@ public class MainActivity extends Activity {
     // ==== Звук ====
     private SoundPool sp = null;
     private final Map<String, Integer> spMap = new HashMap<>();
-    private MediaPlayer mp = null;
+    private final Map<String, String> mp3Map = new HashMap<>();   // mp3 не в SoundPool: он их режет
+    private MediaPlayer mp = null;      // музыка (loop)
+    private MediaPlayer mpOne = null;   // одиночные mp3-эффекты
     private volatile String projRoot = "";
 
     private void loadSounds(String dir) {
         try {
             if (sp != null) { sp.release(); sp = null; }
             spMap.clear();
+            mp3Map.clear();
             File d = new File(dir);
             if (!d.isDirectory()) return;
             sp = new SoundPool.Builder().setMaxStreams(8).build();
@@ -97,16 +99,38 @@ public class MainActivity extends Activity {
             if (fs == null) return;
             for (File f : fs) {
                 String n = f.getName(); String low = n.toLowerCase();
-                if (low.endsWith(".ogg") || low.endsWith(".wav") || low.endsWith(".mp3")) {
+                int dot = n.lastIndexOf('.');
+                String base = dot > 0 ? n.substring(0, dot) : n;
+                if (low.endsWith(".ogg") || low.endsWith(".wav")) {
                     int id = sp.load(f.getAbsolutePath(), 1);
-                    int dot = n.lastIndexOf('.');
-                    spMap.put(dot > 0 ? n.substring(0, dot) : n, id);
+                    spMap.put(base, id);
+                } else if (low.endsWith(".mp3")) {
+                    mp3Map.put(base, f.getAbsolutePath());
                 }
             }
         } catch (Throwable t) { }
     }
     private void playSound(String name) {
-        try { Integer id = spMap.get(name); if (id != null && sp != null) sp.play(id, 1f, 1f, 1, 0, 1f); } catch (Throwable t) { }
+        try {
+            Integer id = spMap.get(name);
+            if (id != null && sp != null) { sp.play(id, 1f, 1f, 1, 0, 1f); return; }
+            String p = mp3Map.get(name);
+            if (p == null && !projRoot.isEmpty()) {
+                String[] exts = { ".mp3", ".ogg", ".wav" };
+                for (String e : exts) { File t2 = new File(projRoot + "/sounds/" + name + e); if (t2.exists()) { p = t2.getAbsolutePath(); break; } }
+            }
+            if (p != null) playOneShot(p);
+        } catch (Throwable t) { }
+    }
+    private void playOneShot(String path) {
+        try {
+            if (mpOne != null) { mpOne.stop(); mpOne.release(); mpOne = null; }
+            mpOne = new MediaPlayer();
+            mpOne.setDataSource(path);
+            mpOne.setOnCompletionListener(m -> { try { m.release(); } catch (Throwable t) { } });
+            mpOne.prepare();
+            mpOne.start();
+        } catch (Throwable t) { mpOne = null; }
     }
     private void playMusic(String name, boolean loop) {
         try {
@@ -132,8 +156,6 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-        // Рисуем ПОД вырезом экрана (cutout), иначе в ландшафте система оставляет
-        // чёрную полосу с одного края и contain считается по урезанной ширине.
         try {
             if (Build.VERSION.SDK_INT >= 28) {
                 getWindow().getAttributes().layoutInDisplayCutoutMode =
@@ -155,6 +177,13 @@ public class MainActivity extends Activity {
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) hideSystemBars();
+    }
+
+    // При сворачивании/выходе музыка и эффекты останавливаются полностью.
+    @Override protected void onStop() {
+        super.onStop();
+        stopMusic();
+        try { if (mpOne != null) { mpOne.stop(); mpOne.release(); mpOne = null; } } catch (Throwable t) { }
     }
 
     private void hideSystemBars() {
@@ -282,7 +311,6 @@ public class MainActivity extends Activity {
                         importNameRes_ = stored;
                         hasImportResult_ = true;
                         lastImportMsg_ = "copied " + stored;
-                        // Звуки подхватываем сразу, если игра уже загружала этот проект.
                         if (category.equals("sounds") && !projRoot.isEmpty()) loadSounds(projRoot + "/sounds");
                     } else {
                         lastImportMsg_ = "copy failed";
@@ -373,20 +401,15 @@ public class MainActivity extends Activity {
         private volatile int renderMode = MODE_HUB;
         private volatile int requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
         private volatile int appliedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-        // Запомненная ориентация ИГРЫ: обновляется тегом ORIENT| и держится между кадрами.
         private volatile int gameOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
 
-        // Транзишен (из тега TRANS|type|phase|progress).
         private volatile int transType = 0;
         private volatile int transPhase = 0;
         private volatile float transProgress = 0f;
 
-        // Цвет фона сцены: им заливается ВЕСЬ экран в игре, чтобы чёрных полос
-        // не было даже на тот кадр, пока пропорции экрана ещё не доехали до C++.
         private volatile int gameBg = Color.BLACK;
         private volatile boolean haveGameBg = false;
 
-        // Оверлейные данные (экранные координаты, рисуются поверх вписанного кадра).
         private volatile String ovStat = "";
         private final ArrayList<String> ovLog = new ArrayList<>();
 
@@ -441,9 +464,6 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> { try { setRequestedOrientation(orient); } catch (Throwable t) { } });
         }
 
-        // Сообщаем движку реальное отношение сторон экрана (ширина/высота).
-        // Движок подгоняет логический кадр игры под него РАВНОМЕРНО, поэтому
-        // игра занимает весь экран без чёрных полос и без расплющивания.
         private void sendScreenRatio() {
             int rw = getWidth(), rh = getHeight();
             if (rw > 0 && rh > 0) {
@@ -467,7 +487,6 @@ public class MainActivity extends Activity {
             thread = null;
         }
 
-        // Компактные кнопки в правом верхнем углу экрана. [0..3]=DBG, [4..7]=X.
         private float[] ovBtnRects(int rw, int rh) {
             float shortSide = Math.min(rw, rh);
             float bw = Math.min(Math.max(shortSide * 0.078f, 56f), 130f);
@@ -498,8 +517,6 @@ public class MainActivity extends Activity {
                     catch (Throwable t) { lastImportMsg_ = "jni err: " + t; }
                 }
 
-                // Периодически повторяем пропорции экрана: даже если первое сообщение
-                // потерялось, игра подстроится в течение полусекунды.
                 if (++ratioTick >= 30) { ratioTick = 0; sendScreenRatio(); }
 
                 String frame = nativeStep(); if (frame == null) frame = "";
@@ -562,11 +579,12 @@ public class MainActivity extends Activity {
                         stopMusic();
                     }
                 }
+                // Вышли из игрового режима -> музыка останавливается сама.
+                if (newMode != MODE_GAME && mp != null) stopMusic();
                 renderMode = newMode;
                 ovStat = newStat;
                 ovLog.clear(); ovLog.addAll(newLog);
 
-                // Ориентация: в игре держим ЗАПОМНЕННУЮ gameOrient, хаб/редактор — ландшафт.
                 if (renderMode == MODE_GAME) requestedOrient = gameOrient;
                 else requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
                 if (requestedOrient != appliedOrient) applyOrientation(requestedOrient);
@@ -604,12 +622,9 @@ public class MainActivity extends Activity {
                 if (c == null) { Thread.sleep(8); continue; }
                 clIdx.clear(); clText.clear(); clY.clear();
                 int rw = getWidth(), rh = getHeight();
-                // В игре весь экран сразу заливается фоном сцены: чёрных полос не бывает
-                // даже на кадре, пока пропорции ещё не применились. Хаб/редактор — чёрный фон.
                 if (renderMode == MODE_GAME && haveGameBg) c.drawColor(gameBg);
                 else c.drawColor(Color.BLACK);
 
-                // Слайд-сдвиг в логических координатах contain-кадра.
                 float slideDx = 0f;
                 if (renderMode == MODE_GAME && (transType == 1 || transType == 2)) {
                     float p = transProgress;
@@ -621,7 +636,6 @@ public class MainActivity extends Activity {
                 if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                     c.save();
                     if (renderMode == MODE_GAME) {
-                        // CONTAIN: единый масштаб по обеим осям + центрирование.
                         float s  = Math.min(rw / logicW, rh / logicH);
                         float ox = (rw - logicW * s) * 0.5f;
                         float oy = (rh - logicH * s) * 0.5f;
@@ -629,7 +643,6 @@ public class MainActivity extends Activity {
                         c.scale(s, s);
                         if (slideDx != 0f) c.translate(slideDx, 0f);
                     } else {
-                        // STRETCH: хаб/редактор на весь экран.
                         c.scale(rw / logicW, rh / logicH);
                     }
                     for (String line : frame.split("\n")) drawLine(c, line);
@@ -644,7 +657,6 @@ public class MainActivity extends Activity {
                 if (renderMode == MODE_HUB || frame.isEmpty()) drawDiag(c, rw, rh);
                 if (renderMode == MODE_GAME) drawOverlay(c, rw, rh);
 
-                // Fade ПОСЛЕДНИМ и в ЭКРАННЫХ координатах: покрывает весь экран целиком.
                 if (renderMode == MODE_GAME && transType == 0) {
                     float p = transProgress;
                     if (p < 0f) p = 0f; if (p > 1f) p = 1f;
@@ -758,7 +770,6 @@ public class MainActivity extends Activity {
                 if (p[0].equals("clipon")) { c.save(); c.clipRect(EDV_X0, EDV_Y0, EDV_X1, EDV_Y1); return; }
                 if (p[0].equals("clipoff")) { c.restore(); return; }
                 if (p[0].equals("bg")) {
-                    // Фон сцены рисуем ВНУТРИ игрового прямоугольника (логические координаты).
                     paint.setColor(Color.parseColor(p[1]));
                     c.drawRect(0, 0, logicW, logicH, paint);
                     return;
@@ -894,7 +905,6 @@ public class MainActivity extends Activity {
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
 
-            // 1) Оверлейные кнопки (только в игре) — первыми, в экранных px.
             if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
                 float[] R = ovBtnRects(rw, rh);
                 float ex = e.getX(), ey = e.getY();
@@ -902,7 +912,6 @@ public class MainActivity extends Activity {
                 if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeSetAction("ov:close:"); return true; }
             }
 
-            // 2) Маппинг тапа в координаты холста (совпадает с трансформацией рисунка).
             float lx, ly;
             if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
                 if (renderMode == MODE_GAME) {
@@ -982,4 +991,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-                    }
+            }
