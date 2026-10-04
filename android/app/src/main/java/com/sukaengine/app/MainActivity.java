@@ -53,6 +53,11 @@ public class MainActivity extends Activity {
     private static final float CODE_TEXT_X = 340f;
     private static final float CODE_FONT = 14f;
 
+    // Режимы рендера: 0 = hub, 1 = editor, 2 = game.
+    // hub/editor -> STRETCH на весь экран (UI-инструмент, поля не нужны).
+    // game       -> CONTAIN с сохранением пропорций (геометрия спрайтов важна).
+    private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
+
     private static volatile boolean g_initOk = false;
     private static volatile int g_fileCount = -1;
     private static volatile boolean g_hasProject = false, g_hasFont = false;
@@ -300,6 +305,7 @@ public class MainActivity extends Activity {
 
         private volatile float logicW = DEFAULT_LOGIC_W;
         private volatile float logicH = DEFAULT_LOGIC_H;
+        private volatile int renderMode = MODE_HUB;          // задаётся тегом MODE|...
         private volatile int requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
         private volatile int appliedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
 
@@ -380,8 +386,15 @@ public class MainActivity extends Activity {
 
                 editorFrame_ = frame.contains("Inspector") || frame.contains("FileSystem") || frame.contains("SCRIPTS");
 
+                // Парсим MODE / RES / ORIENT одним проходом.
+                int newMode = renderMode;
                 for (String line : frame.split("\n")) {
-                    if (line.startsWith("RES|")) {
+                    if (line.startsWith("MODE|")) {
+                        String v = line.substring(5).trim();
+                        if (v.equals("hub")) newMode = MODE_HUB;
+                        else if (v.equals("editor")) newMode = MODE_EDITOR;
+                        else if (v.equals("game")) newMode = MODE_GAME;
+                    } else if (line.startsWith("RES|")) {
                         String[] rp = line.split("\\|", 3);
                         if (rp.length >= 3) {
                             try {
@@ -390,21 +403,20 @@ public class MainActivity extends Activity {
                                 if (nw >= 160f && nw <= 2160f && nh >= 160f && nh <= 2160f) { logicW = nw; logicH = nh; }
                             } catch (Throwable t) { }
                         }
-                    } else if (line.startsWith("ORIENT|")) {
-                        String[] op = line.split("\\|", 2);
-                        if (op.length >= 2) {
-                            String v = op[1].trim();
-                            requestedOrient = (v.equals("portrait") || v.equals("vertical") || v.equals("p") || v.equals("v"))
-                                ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                                : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-                        }
                     }
                 }
+                renderMode = newMode;
 
-                boolean hubOrMenu = frame.contains("PROJECTS") || frame.contains("START") || frame.contains("Play")
-                                 || frame.contains("NEW") || frame.contains("Theme") || frame.contains("MENU");
-                boolean forceLandscape = editorFrame_ || frame.contains("PROJECTS");
-                if (forceLandscape) requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                // Ориентация окна: для игры — строго из соотношения мира (это и есть
+                // защита от Чили: невозможно получить портретное окно с горизонтальным
+                // миром). Хаб/редактор всегда ландшафт.
+                if (renderMode == MODE_GAME) {
+                    requestedOrient = (logicH > logicW)
+                        ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                } else {
+                    requestedOrient = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                }
                 if (requestedOrient != appliedOrient) applyOrientation(requestedOrient);
 
                 if (frame.contains("IME_ON"))  requestIme(true);
@@ -442,17 +454,19 @@ public class MainActivity extends Activity {
                 int rw = getWidth(), rh = getHeight();
                 c.drawColor(Color.rgb(18, 18, 24));
 
-                // CONTAIN‑вписывание: единый масштаб по обеим осям + центрирование.
-                // Раньше было c.scale(rw/logicW, rh/logicH) -> разные коэффициенты ->
-                // искажение и "уезд" кнопок в портрете ("Чили"). Теперь пропорции целые,
-                // свободное пространство — чёрные поля (фон уже залит выше).
                 if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
-                    float s  = Math.min(rw / logicW, rh / logicH);
-                    float ox = (rw - logicW * s) * 0.5f;
-                    float oy = (rh - logicH * s) * 0.5f;
                     c.save();
-                    c.translate(ox, oy);
-                    c.scale(s, s);
+                    if (renderMode == MODE_GAME) {
+                        // CONTAIN: единый масштаб по обеим осям + центрирование.
+                        float s  = Math.min(rw / logicW, rh / logicH);
+                        float ox = (rw - logicW * s) * 0.5f;
+                        float oy = (rh - logicH * s) * 0.5f;
+                        c.translate(ox, oy);
+                        c.scale(s, s);
+                    } else {
+                        // STRETCH: хаб/редактор заполняют экран целиком, как раньше.
+                        c.scale(rw / logicW, rh / logicH);
+                    }
                     for (String line : frame.split("\n")) drawLine(c, line);
                     c.restore();
                 } else {
@@ -460,8 +474,9 @@ public class MainActivity extends Activity {
                 }
 
                 boolean editor = editorFrame_;
+                boolean hubOrMenu = renderMode != MODE_GAME;
                 if (editor || hubOrMenu) drawTitle(c, rw, rh, editor);
-                if (frame.contains("PROJECTS") || frame.isEmpty()) drawDiag(c, rw, rh);
+                if (renderMode == MODE_HUB || frame.isEmpty()) drawDiag(c, rw, rh);
                 getHolder().unlockCanvasAndPost(c);
                 Thread.sleep(16);
               } catch (Throwable t) {
@@ -665,14 +680,24 @@ public class MainActivity extends Activity {
             int a = e.getActionMasked();
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
-            // Маппинг тапа в логику должен совпадать с contain‑вписыванием выше:
-            // тот же масштаб s и те же смещения ox/oy, иначе тапы "уедут" в портрете.
-            float s = (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f)
-                    ? Math.min(rw / logicW, rh / logicH) : 1.0f;
-            float ox = (rw - logicW * s) * 0.5f;
-            float oy = (rh - logicH * s) * 0.5f;
-            float lx = (e.getX() - ox) / s;
-            float ly = (e.getY() - oy) / s;
+
+            // Обратная трансформация тапа ДОЛЖНА совпадать с трансформацией рисунка:
+            // игра -> contain (тот же s/ox/oy), хаб/редактор -> stretch (по осям).
+            float lx, ly;
+            if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
+                if (renderMode == MODE_GAME) {
+                    float s  = Math.min(rw / logicW, rh / logicH);
+                    float ox = (rw - logicW * s) * 0.5f;
+                    float oy = (rh - logicH * s) * 0.5f;
+                    lx = (e.getX() - ox) / s;
+                    ly = (e.getY() - oy) / s;
+                } else {
+                    lx = e.getX() * logicW / rw;
+                    ly = e.getY() * logicH / rh;
+                }
+            } else {
+                lx = e.getX(); ly = e.getY();
+            }
 
             if (a == MotionEvent.ACTION_DOWN && count == 1 && !clIdx.isEmpty()
                     && lx >= CODE_X0 && lx <= CODE_X1 && ly >= CODE_Y0 && ly <= CODE_Y1) {
@@ -711,8 +736,21 @@ public class MainActivity extends Activity {
             }
 
             if (count >= 2) {
-                float x0 = (e.getX(0) - ox) / s, y0 = (e.getY(0) - oy) / s;
-                float x1 = (e.getX(1) - ox) / s, y1 = (e.getY(1) - oy) / s;
+                float x0, y0, x1, y1;
+                if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
+                    if (renderMode == MODE_GAME) {
+                        float s  = Math.min(rw / logicW, rh / logicH);
+                        float ox = (rw - logicW * s) * 0.5f;
+                        float oy = (rh - logicH * s) * 0.5f;
+                        x0 = (e.getX(0) - ox) / s; y0 = (e.getY(0) - oy) / s;
+                        x1 = (e.getX(1) - ox) / s; y1 = (e.getY(1) - oy) / s;
+                    } else {
+                        x0 = e.getX(0) * logicW / rw; y0 = e.getY(0) * logicH / rh;
+                        x1 = e.getX(1) * logicW / rw; y1 = e.getY(1) * logicH / rh;
+                    }
+                } else {
+                    x0 = e.getX(0); y0 = e.getY(0); x1 = e.getX(1); y1 = e.getY(1);
+                }
                 int ph = (a == MotionEvent.ACTION_POINTER_DOWN || a == MotionEvent.ACTION_DOWN) ? 1
                        : (a == MotionEvent.ACTION_POINTER_UP   || a == MotionEvent.ACTION_UP)   ? 3 : 2;
                 nativeMultiTouch(ph, x0, y0, x1, y1);
@@ -724,4 +762,4 @@ public class MainActivity extends Activity {
             return true;
         }
     }
-        }
+                }
