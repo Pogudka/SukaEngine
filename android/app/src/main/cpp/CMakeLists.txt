@@ -6,7 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-get_filename_component(SUKA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+# Путь до корня репозитория:
+# android/app/src/main/cpp -> ../../../../../ -> корень репо
+get_filename_component(SUKA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABSOLUTE)
+
+message(STATUS "SUKA_ROOT=${SUKA_ROOT}")
 
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
@@ -64,7 +68,11 @@ FetchContent_Populate(miniaudio)
 add_library(
     suka
     SHARED
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/android_bridge.cpp"
+
+    # android_bridge.cpp лежит рядом с этим CMakeLists.txt
+    "${CMAKE_CURRENT_SOURCE_DIR}/android_bridge.cpp"
+
+    # Sound.cpp лежит в корне репо в src/
     "${SUKA_ROOT}/src/Sound.cpp"
 )
 
@@ -101,6 +109,7 @@ if(ANDROID)
     find_library(log-lib log)
     find_library(android-lib android)
     find_library(OpenSLES-lib OpenSLES)
+    find_library(atomic-lib atomic)
 
     target_link_libraries(
         suka
@@ -109,6 +118,10 @@ if(ANDROID)
         ${android-lib}
         ${OpenSLES-lib}
     )
+
+    if(atomic-lib)
+        target_link_libraries(suka PRIVATE ${atomic-lib})
+    endif()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID)
