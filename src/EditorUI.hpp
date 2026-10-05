@@ -52,6 +52,8 @@ struct EditorUiInput {
     bool imeShown;
 
     const std::vector<std::string>& luaLog;
+
+    bool showFuncs;
 };
 
 inline std::string editorDash(int depth) {
@@ -336,7 +338,6 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
                 addLbl("InText", "Text: " + static_cast<Label*>(nd)->text, 900, 364, 16, th.ink);
             }
 
-            // ==== Camera2D inspector: zoom + follow + ZOOM button ====
             if (std::string(nd->typeName()) == "Camera2D") {
                 Camera2D* cm = static_cast<Camera2D*>(nd);
                 addLbl("InZoom", "Zoom  " + std::to_string((int)(cm->zoom * 100)) + "%   (frame = view/zoom)", 900, 364, 16, parseColor("#FF8800"));
@@ -444,6 +445,7 @@ inline Scene buildEditorScene(const EditorUiInput& in) {
     { UiButton b; b.touch.id = "save"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "SAVE"; b.action = "ed_save"; b.color = parseColor("#2E7D32"); s.ui.push_back(b); }
     { UiButton b; b.touch.id = "eback"; b.touch.rect = Rect{tx, 34, 40, 26}; tx += 42; b.text = "<"; b.action = "ed_back"; b.color = GO; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "plus"; b.touch.rect = Rect{tx, 34, 40, 26}; tx += 42; b.text = "+"; b.action = "create_open"; b.color = GO; s.ui.push_back(b); }
+    { UiButton b; b.touch.id = "fnbtn"; b.touch.rect = Rect{tx, 34, 56, 26}; tx += 58; b.text = "FN"; b.action = "funcs_open"; b.color = in.showFuncs ? GO : th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "tex"; b.touch.rect = Rect{tx, 34, 40, 26}; tx += 42; b.text = "TEX"; b.action = "assets_open"; b.color = in.showAssets ? GO : th.accent; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "file"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "FILES"; b.action = "files_open"; b.color = in.showFiles ? GO : th.button; s.ui.push_back(b); }
     { UiButton b; b.touch.id = "play"; b.touch.rect = Rect{tx, 34, 44, 26}; tx += 46; b.text = "PLAY"; b.action = "ed_play"; b.color = parseColor("#2EC4B6"); s.ui.push_back(b); }
