@@ -1,0 +1,183 @@
+{
+  "name": "Level2",
+  "gravity": 900,
+  "bg": "#0B1026",
+  "nodes": [
+    {
+      "type": "Camera2D",
+      "name": "Cam2",
+      "x": 640,
+      "y": 360,
+      "zoom": 1,
+      "follow": "PlatformerPlayer",
+      "children": [
+        {
+          "type": "Label",
+          "name": "Title2",
+          "x": -600,
+          "y": -320,
+          "text": "Platformer Layer Demo",
+          "font_size": 26,
+          "color": "#EAF2FF"
+        },
+        {
+          "type": "Label",
+          "name": "Stats2",
+          "x": -600,
+          "y": -286,
+          "text": "booting level2",
+          "font_size": 16,
+          "color": "#FCBF49"
+        }
+      ]
+    },
+    {
+      "type": "Player",
+      "name": "PlatformerPlayer",
+      "x": 120,
+      "y": 500,
+      "w": 48,
+      "h": 48,
+      "shape": "square",
+      "color": "#40C040",
+      "speed": 240,
+      "mode": "platformer",
+      "jump_speed": 380
+    },
+    {
+      "type": "Solid2D",
+      "name": "Ground2",
+      "x": 640,
+      "y": 670,
+      "w": 1280,
+      "h": 40,
+      "shape": "square",
+      "color": "#4A4A5E"
+    },
+    {
+      "type": "Solid2D",
+      "name": "Plat2A",
+      "x": 400,
+      "y": 520,
+      "w": 180,
+      "h": 24,
+      "shape": "square",
+      "color": "#6C757D"
+    },
+    {
+      "type": "Solid2D",
+      "name": "Plat2B",
+      "x": 760,
+      "y": 420,
+      "w": 180,
+      "h": 24,
+      "shape": "square",
+      "color": "#6C757D"
+    },
+    {
+      "type": "Coin",
+      "name": "Coin2A",
+      "x": 400,
+      "y": 470,
+      "w": 48,
+      "h": 48,
+      "radius": 28,
+      "shape": "circle",
+      "color": "#E0C040"
+    },
+    {
+      "type": "Coin",
+      "name": "Coin2B",
+      "x": 760,
+      "y": 370,
+      "w": 48,
+      "h": 48,
+      "radius": 28,
+      "shape": "circle",
+      "color": "#E0C040"
+    },
+    {
+      "type": "Enemy",
+      "name": "Enemy2A",
+      "x": 950,
+      "y": 600,
+      "w": 52,
+      "h": 52,
+      "shape": "square",
+      "color": "#C04040",
+      "speed": 70
+    }
+  ],
+  "ui": [
+    {
+      "id": "L2Back",
+      "x": 760,
+      "y": 16,
+      "w": 100,
+      "h": 44,
+      "text": "BACK",
+      "action": "call:goMain",
+      "color": "#2EC4B6",
+      "angle": 0,
+      "alpha": 1
+    },
+    {
+      "id": "L2Reset",
+      "x": 870,
+      "y": 16,
+      "w": 100,
+      "h": 44,
+      "text": "RESET",
+      "action": "call:resetLevel2",
+      "color": "#8E44AD",
+      "angle": 0,
+      "alpha": 1
+    },
+    {
+      "id": "L2Hub",
+      "x": 980,
+      "y": 16,
+      "w": 100,
+      "h": 44,
+      "text": "HUB",
+      "action": "hub:",
+      "color": "#D62828",
+      "angle": 0,
+      "alpha": 1
+    },
+    {
+      "id": "L2Dbg",
+      "x": 1090,
+      "y": 16,
+      "w": 100,
+      "h": 44,
+      "text": "DBG",
+      "action": "dbg:",
+      "color": "#555566",
+      "angle": 0,
+      "alpha": 1
+    },
+    {
+      "id": "attack",
+      "x": 980,
+      "y": 560,
+      "w": 120,
+      "h": 100,
+      "text": "ATK",
+      "color": "#F72585",
+      "angle": 0,
+      "alpha": 1
+    },
+    {
+      "id": "jump",
+      "x": 1120,
+      "y": 560,
+      "w": 120,
+      "h": 100,
+      "text": "JUMP",
+      "color": "#40C040",
+      "angle": 0,
+      "alpha": 1
+    }
+  ]
+}
