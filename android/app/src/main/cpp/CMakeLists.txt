@@ -1,77 +1,116 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(sukaengine LANGUAGES C CXX)
+project(suka LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
-
-add_compile_options(-frtti -fexceptions)
-
-set(SUKA_PROJECT_ROOT "/data/data/com.sukaengine.app/files")
+get_filename_component(SUKA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 
 include(FetchContent)
+set(FETCHCONTENT_QUIET OFF)
 
-# Lua 5.4
-FetchContent_Declare(lua
-    GIT_REPOSITORY https://github.com/lua/lua.git
-    GIT_TAG        v5.4.7
-    GIT_SHALLOW    TRUE)
-FetchContent_MakeAvailable(lua)
-
-file(GLOB LUA_CORE_SOURCES "${lua_SOURCE_DIR}/*.c")
-list(REMOVE_ITEM LUA_CORE_SOURCES
-    "${lua_SOURCE_DIR}/lua.c"
-    "${lua_SOURCE_DIR}/luac.c"
-    "${lua_SOURCE_DIR}/onelua.c")
-
-add_library(lua_static STATIC ${LUA_CORE_SOURCES})
-set_target_properties(lua_static PROPERTIES LINKER_LANGUAGE C)
-target_include_directories(lua_static PUBLIC "${lua_SOURCE_DIR}")
-target_compile_options(lua_static PRIVATE -w)
-
-# Box2D v2.4.1
-FetchContent_Declare(box2d
-    GIT_REPOSITORY https://github.com/erincatto/box2d.git
-    GIT_TAG        v2.4.1
-    GIT_SHALLOW    TRUE)
-set(BOX2D_BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
-set(BOX2D_BUILD_TESTBED    OFF CACHE BOOL "" FORCE)
-set(BOX2D_BUILD_DOCS       OFF CACHE BOOL "" FORCE)
-set(BOX2D_SAMPLES          OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(box2d)
-
-# Корень репозитория: android/app/src/main/cpp -> ../../../../../ -> корень
-get_filename_component(SUKA_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
-get_filename_component(SUKA_REPO_ROOT2 "${SUKA_REPO_ROOT}/.." ABSOLUTE)
-
-add_library(suka SHARED
-    android_bridge.cpp)
-
-target_include_directories(suka PRIVATE
-    "${SUKA_REPO_ROOT2}/src"
-    "${lua_SOURCE_DIR}"
+# -------------------------
+# Lua 5.4.6
+# -------------------------
+FetchContent_Declare(
+    lua
+    URL https://www.lua.org/ftp/lua-5.4.6.tar.gz
 )
 
-target_compile_definitions(suka PRIVATE
-    PROJECT_ROOT="${SUKA_PROJECT_ROOT}"
-)
+FetchContent_Populate(lua)
 
-# Box2D: пробуем оба варианта имени таргета (Box2D или box2d)
-if(TARGET Box2D)
-    target_link_libraries(suka android log lua_static Box2D)
-elseif(TARGET box2d)
-    target_link_libraries(suka android log lua_static box2d)
-else()
-    message(WARNING "Box2D target not found, linking may fail")
-    target_link_libraries(suka android log lua_static)
+file(GLOB LUA_ALL_SOURCES CONFIGURE_DEPENDS "${lua_SOURCE_DIR}/src/*.c")
+list(FILTER LUA_ALL_SOURCES EXCLUDE REGEX "(^|/)(lua|luac|onelua)\\.c$")
+
+add_library(lua_static STATIC ${LUA_ALL_SOURCES})
+
+target_include_directories(lua_static PUBLIC "${lua_SOURCE_DIR}/src")
+target_compile_definitions(lua_static PUBLIC LUA_USE_POSIX)
+
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(lua_static PRIVATE -w)
 endif()
 
-target_compile_options(suka PRIVATE
-    $<$<CONFIG:Release>:-O2>
-    $<$<CONFIG:Debug>:-O0 -g>
+# -------------------------
+# Box2D v2.4.1
+# -------------------------
+FetchContent_Declare(
+    box2d
+    URL https://github.com/erincatto/box2d/archive/refs/tags/v2.4.1.zip
 )
+
+set(BOX2D_BUILD_TESTBED OFF CACHE BOOL "" FORCE)
+set(BOX2D_BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(BOX2D_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(box2d)
+
+# -------------------------
+# miniaudio
+# -------------------------
+FetchContent_Declare(
+    miniaudio
+    URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.21.zip
+)
+
+FetchContent_Populate(miniaudio)
+
+# -------------------------
+# Основная библиотека
+# -------------------------
+add_library(
+    suka
+    SHARED
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/android_bridge.cpp"
+    "${SUKA_ROOT}/src/Sound.cpp"
+)
+
+target_include_directories(
+    suka
+    PRIVATE
+    "${SUKA_ROOT}/src"
+    "${lua_SOURCE_DIR}/src"
+    "${box2d_SOURCE_DIR}/include"
+    "${miniaudio_SOURCE_DIR}"
+)
+
+target_link_libraries(
+    suka
+    PRIVATE
+    lua_static
+    box2d
+)
+
+target_compile_definitions(
+    suka
+    PRIVATE
+    PROJECT_ROOT=\"/data/data/com.sukaengine.app/files\"
+)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(suka PRIVATE -frtti -fexceptions)
+endif()
+
+find_package(Threads REQUIRED)
+target_link_libraries(suka PRIVATE Threads::Threads)
+
+if(ANDROID)
+    find_library(log-lib log)
+    find_library(android-lib android)
+    find_library(OpenSLES-lib OpenSLES)
+
+    target_link_libraries(
+        suka
+        PRIVATE
+        ${log-lib}
+        ${android-lib}
+        ${OpenSLES-lib}
+    )
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID)
+    target_link_libraries(suka PRIVATE m)
+endif()
