@@ -71,7 +71,7 @@ inline std::mutex g_triggerMtx;
 inline std::unique_ptr<b2World> g_world;
 inline Scene* g_physScene = nullptr;
 
-// ---- слушатель контактов: on_collide / on_trigger ----
+// ---- слушатель контактов: on_collide / on_trigger / on_trigger_exit ----
 class SukaContactListener : public b2ContactListener {
 public:
     void BeginContact(b2Contact* c) override {
@@ -84,6 +84,8 @@ public:
 
 private:
     void handle(b2Contact* c, bool begin) {
+        if (!c) return;
+
         b2Fixture* fa = c->GetFixtureA();
         b2Fixture* fb = c->GetFixtureB();
         if (!fa || !fb) return;
@@ -102,7 +104,9 @@ private:
             auto ita = g_bodyNames.find(ba);
             auto itb = g_bodyNames.find(bb);
 
-            if (ita == g_bodyNames.end() || itb == g_bodyNames.end()) return;
+            if (ita == g_bodyNames.end() || itb == g_bodyNames.end()) {
+                return;
+            }
 
             na = ita->second;
             nb = itb->second;
@@ -151,6 +155,7 @@ inline void bodyRemove(const std::string& nm) {
             std::lock_guard<std::mutex> ln(g_bodyNamesMtx);
             g_bodyNames.erase(it->second.bb);
         }
+
         g_world->DestroyBody(it->second.bb);
     }
 
@@ -200,6 +205,7 @@ inline void physicsReset() {
 // Создание b2-тела по ноде
 inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     ensureWorld();
+    if (!g_world || !n) return;
 
     b2BodyDef bd;
 
@@ -216,6 +222,7 @@ inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     bd.awake = true;
 
     b2Body* body = g_world->CreateBody(&bd);
+    if (!body) return;
 
     {
         std::lock_guard<std::mutex> lk(g_bodyNamesMtx);
@@ -301,6 +308,8 @@ inline void physicsUpdate(Scene& sc, float dt) {
     g_physScene = &sc;
 
     ensureWorld();
+    if (!g_world) return;
+
     g_world->SetGravity(b2Vec2(0.0f, g_gravity * INV_PPM));
 
     std::vector<std::string> names;
@@ -310,20 +319,18 @@ inline void physicsUpdate(Scene& sc, float dt) {
     }
 
     // Синхронизация записей с нодами и телами
-    for (auto& nm : names) {
+    for (const std::string& nm : names) {
         Body* Bp = nullptr;
-        std::string* stableName = nullptr;
 
         {
             std::lock_guard<std::mutex> lk(g_bodiesMtx);
             auto it = g_bodies.find(nm);
             if (it != g_bodies.end()) {
                 Bp = &it->second;
-                stableName = const_cast<std::string*>(&it->first); // stable pointer to map key
             }
         }
 
-        if (!Bp || !stableName) continue;
+        if (!Bp) continue;
         Body& B = *Bp;
 
         Node* rn = sc.root->findNode(nm);
@@ -335,15 +342,17 @@ inline void physicsUpdate(Scene& sc, float dt) {
                     std::lock_guard<std::mutex> ln(g_bodyNamesMtx);
                     g_bodyNames.erase(B.bb);
                 }
+
                 g_world->DestroyBody(B.bb);
             }
+
             B.bb = nullptr;
             continue;
         }
 
         B.isCircle = (std::string(n->shape) == "circle");
 
-        if (!B.bb) createB2Body(*stableName, B, n);
+        if (!B.bb) createB2Body(nm, B, n);
         if (!B.bb) continue;
 
         // Живые правки параметров
@@ -370,11 +379,15 @@ inline void physicsUpdate(Scene& sc, float dt) {
     }
 
     // Чтение результатов обратно в ноды + onGround + скорости для Lua
-    for (auto& nm : names) {
-        Body* Bp;
+    for (const std::string& nm : names) {
+        Body* Bp = nullptr;
+
         {
             std::lock_guard<std::mutex> lk(g_bodiesMtx);
-            Bp = bodyGet(nm);
+            auto it = g_bodies.find(nm);
+            if (it != g_bodies.end()) {
+                Bp = &it->second;
+            }
         }
 
         if (!Bp || !Bp->bb) continue;
@@ -407,7 +420,11 @@ inline void physicsUpdate(Scene& sc, float dt) {
             b2Contact* ct = ce->contact;
             if (!ct || !ct->IsTouching()) continue;
 
-            if (ct->GetFixtureA()->IsSensor() || ct->GetFixtureB()->IsSensor()) {
+            b2Fixture* fa = ct->GetFixtureA();
+            b2Fixture* fb = ct->GetFixtureB();
+            if (!fa || !fb) continue;
+
+            if (fa->IsSensor() || fb->IsSensor()) {
                 continue;
             }
 
@@ -431,6 +448,8 @@ inline void physicsUpdate(Scene& sc, float dt) {
 
 // ==== Отладочные хитбоксы: реальные формы Box2D ====
 inline void emitBodiesDebug(Scene& sc, std::string& out, float S, float OX, float OY) {
+    (void)sc;
+
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
 
     for (auto& kv : g_bodies) {
@@ -467,9 +486,10 @@ inline void emitBodiesDebug(Scene& sc, std::string& out, float S, float OX, floa
 
         for (b2Fixture* f = B.bb->GetFixtureList(); f; f = f->GetNext()) {
             b2Shape* sh = f->GetShape();
+            if (!sh) continue;
 
             if (sh->GetType() == b2Shape::e_circle) {
-                b2CircleShape* cs = (b2CircleShape*)sh;
+                b2CircleShape* cs = static_cast<b2CircleShape*>(sh);
 
                 float r = cs->m_radius * PPM;
                 float cxp = xf.p.x * PPM;
@@ -490,7 +510,7 @@ inline void emitBodiesDebug(Scene& sc, std::string& out, float S, float OX, floa
                     py0 = py1;
                 }
             } else if (sh->GetType() == b2Shape::e_polygon) {
-                b2PolygonShape* ps = (b2PolygonShape*)sh;
+                b2PolygonShape* ps = static_cast<b2PolygonShape*>(sh);
                 int cnt = ps->m_count;
 
                 for (int k = 0; k < cnt; ++k) {
@@ -520,7 +540,7 @@ struct SukaRayCallback : public b2RayCastCallback {
                         float fraction_) override {
         if (!fixture) return 1.0f;
 
-        // Сенсоры/триггеры raycastом не бьём, если не захотим позже отдельно.
+        // Сенсоры/триггеры raycastom не бьём.
         if (fixture->IsSensor()) return 1.0f;
 
         b2Body* body = fixture->GetBody();
@@ -571,23 +591,30 @@ static int l_add_trigger(lua_State* L) {
     const char* nm = luaL_checkstring(L, 1);
     if (!nm) return 0;
 
-    bodyAdd(nm, true, 1.0f);
-
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
-    auto it = g_bodies.find(nm);
-    if (it != g_bodies.end()) {
-        it->second.isStatic = true;
-        it->second.isTrigger = true;
 
-        // Если тело уже было создано как обычное — пересоздадим в следующем кадре.
-        if (it->second.bb && g_world) {
-            {
-                std::lock_guard<std::mutex> ln(g_bodyNamesMtx);
-                g_bodyNames.erase(it->second.bb);
-            }
-            g_world->DestroyBody(it->second.bb);
-            it->second.bb = nullptr;
+    auto it = g_bodies.find(nm);
+    if (it == g_bodies.end()) {
+        Body B;
+        B.isStatic = true;
+        B.isTrigger = true;
+        g_bodies[nm] = B;
+        return 0;
+    }
+
+    Body& B = it->second;
+    B.isStatic = true;
+    B.isTrigger = true;
+
+    // Если тело уже было создано как обычное — пересоздадим в следующем кадре.
+    if (B.bb && g_world) {
+        {
+            std::lock_guard<std::mutex> ln(g_bodyNamesMtx);
+            g_bodyNames.erase(B.bb);
         }
+
+        g_world->DestroyBody(B.bb);
+        B.bb = nullptr;
     }
 
     return 0;
@@ -597,9 +624,18 @@ static int l_set_trigger(lua_State* L) {
     const char* nm = luaL_checkstring(L, 1);
     bool val = lua_gettop(L) >= 2 && lua_toboolean(L, 2);
 
+    if (!nm) return 0;
+
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
+
     auto it = g_bodies.find(nm);
-    if (it == g_bodies.end()) return 0;
+    if (it == g_bodies.end()) {
+        Body B;
+        B.isStatic = true;
+        B.isTrigger = val;
+        g_bodies[nm] = B;
+        return 0;
+    }
 
     Body& B = it->second;
     if (B.isTrigger == val) return 0;
@@ -613,6 +649,7 @@ static int l_set_trigger(lua_State* L) {
             std::lock_guard<std::mutex> ln(g_bodyNamesMtx);
             g_bodyNames.erase(B.bb);
         }
+
         g_world->DestroyBody(B.bb);
         B.bb = nullptr;
     }
@@ -621,8 +658,12 @@ static int l_set_trigger(lua_State* L) {
 }
 
 static int l_is_trigger(lua_State* L) {
-    Body* b = bodyGet(luaL_checkstring(L, 1));
-    lua_pushboolean(L, b ? b->isTrigger : false);
+    const char* nm = luaL_checkstring(L, 1);
+
+    std::lock_guard<std::mutex> lk(g_bodiesMtx);
+    auto it = g_bodies.find(nm);
+
+    lua_pushboolean(L, it != g_bodies.end() && it->second.isTrigger);
     return 1;
 }
 
@@ -774,6 +815,9 @@ static int l_raycast(lua_State* L) {
     float x2 = (float)luaL_checknumber(L, 3);
     float y2 = (float)luaL_checknumber(L, 4);
 
+    // Нулевой луч не имеет смысла.
+    if (x1 == x2 && y1 == y2) return 0;
+
     SukaRayCallback cb;
 
     if (lua_gettop(L) >= 5 && lua_isstring(L, 5)) {
@@ -783,11 +827,8 @@ static int l_raycast(lua_State* L) {
     b2Vec2 p1(x1 * INV_PPM, y1 * INV_PPM);
     b2Vec2 p2(x2 * INV_PPM, y2 * INV_PPM);
 
-    b2Filter filter;
-    filter.categoryBits = 0xFFFF;
-    filter.maskBits = 0xFFFF;
-
-    g_world->RayCast(&cb, p1, p2, 1.0f, filter);
+    // Box2D v2.4.1: RayCast(callback, point1, point2)
+    g_world->RayCast(&cb, p1, p2);
 
     if (!cb.hit) return 0;
 
@@ -859,7 +900,6 @@ inline void physicsDispatchLua(lua_State* L) {
                 lua_pushstring(L, e.second.c_str());
 
                 if (lua_pcall(L, 2, 0, 0) != 0) {
-                    // Логаем ошибку? Пока просто глотаем, чтобы не ронять игру.
                     lua_pop(L, 1);
                 }
             } else {
