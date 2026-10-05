@@ -1,40 +1,38 @@
 #pragma once
 
 #include <string>
-#include <iostream>
+
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+}
 
 namespace suka {
 
-class ISoundBackend {
-public:
-    virtual ~ISoundBackend() = default;
-    virtual void load(const std::string& name, const std::string& path) = 0;
-    virtual void play(const std::string& name) = 0;
-};
+bool audioInit();
+void audioShutdown();
 
-class LogSoundBackend : public ISoundBackend {
-public:
-    void load(const std::string& name, const std::string& path) override {
-        std::cout << "[Sound] load: " << name << " -> " << path << "\n";
-    }
-    void play(const std::string& name) override {
-        std::cout << "[Sound] play: " << name << "\n";
-    }
-};
+int  audioLoadSound(const std::string& path, bool decode = false);
+bool audioUnloadSound(int id);
 
-class SoundManager {
-public:
-    explicit SoundManager(ISoundBackend& backend) : backend_(backend) {}
+int  audioPlaySound(int id, float volume = 1.0f, bool loop = false);
+bool audioStopSound(int id);
+bool audioPauseSound(int id);
+bool audioResumeSound(int id);
 
-    void load(const std::string& name, const std::string& path) {
-        backend_.load(name, path);
-    }
-    void play(const std::string& name) {
-        backend_.play(name);
-    }
+bool audioSetSoundVolume(int id, float volume);
+bool audioSetSoundPitch(int id, float pitch);
+bool audioIsSoundPlaying(int id);
 
-private:
-    ISoundBackend& backend_;
-};
+void  audioSetMasterVolume(float volume);
+float audioGetMasterVolume();
+void  audioStopAllSounds();
+
+int  audioPlayMusic(const std::string& path, float volume = 1.0f);
+void audioStopMusic();
+bool audioSetMusicVolume(float volume);
+bool audioIsMusicPlaying();
+
+void registerSoundLuaApi(lua_State* L);
 
 } // namespace suka
