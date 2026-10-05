@@ -11,6 +11,10 @@ struct RawTouch {
     int id = 0;
 };
 
+// TouchProcessor: только кнопки. Нативный джойстик намеренно удалён
+// (раньше блок if (raw.x < 640) двигал input.joystick.axisX/Y).
+// В level2 движение делается через get_button_pressed + Lua, поэтому
+// джойстик здесь не нужен и не должен перехватывать левую половину экрана.
 class TouchProcessor {
 public:
     void onTouch(const RawTouch& raw, Scene& scene, InputManager& input) {
@@ -31,32 +35,11 @@ public:
             }
         }
 
-        if (raw.action == RawTouch::Action::Down || raw.action == RawTouch::Action::Move) {
-            if (raw.x < 640) {
-                if (!input.joystick.active && raw.action == RawTouch::Action::Down) {
-                    input.joystick.active = true;
-                    joyFinger_ = raw.id;
-                }
-                if (input.joystick.active && raw.id == joyFinger_) {
-                    input.joystick.axisX = (raw.x - 320) / 320.0f;
-                    input.joystick.axisY = (raw.y - 360) / 360.0f;
-                    if (input.joystick.axisX >  1.0f) input.joystick.axisX =  1.0f;
-                    if (input.joystick.axisX < -1.0f) input.joystick.axisX = -1.0f;
-                    if (input.joystick.axisY >  1.0f) input.joystick.axisY =  1.0f;
-                    if (input.joystick.axisY < -1.0f) input.joystick.axisY = -1.0f;
-                }
-            }
-        }
-
-        if (raw.action == RawTouch::Action::Up && raw.id == joyFinger_) {
-            input.joystick.active = false;
-            input.joystick.axisX = 0;
-            input.joystick.axisY = 0;
-            joyFinger_ = -1;
-        }
+        // Нативный джойстик удалён. Если когда-нибудь вернёшь платформерный
+        // Player и захочешь стик — восстанови блок отсюда и до resetJoystick.
     }
 
-    void resetJoystick() { joyFinger_ = -1; }
+    void resetJoystick() { /* джойстика нет, пусто */ }
 
 private:
     int joyFinger_ = -1;
