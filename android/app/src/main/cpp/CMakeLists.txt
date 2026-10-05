@@ -1,72 +1,87 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(suka)
+project(sukaengine LANGUAGES C CXX)
 
+# ---------------------------------------------------------------------------
+# Общие стандарты и флаги
+# ---------------------------------------------------------------------------
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR} SUKA_SOURCES)
-
-if(NOT SUKA_SOURCES)
-    message(FATAL_ERROR "No .cpp sources found in ${CMAKE_CURRENT_SOURCE_DIR}. Expected android_bridge.cpp")
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
 endif()
 
-add_library(suka SHARED ${SUKA_SOURCES})
+# RTTI и exceptions обязательны: ядро использует dynamic_cast и unique_ptr/throw
+add_compile_options(-frtti -fexceptions)
 
-# ---------------------------------------------------------------------------
-# Real Lua 5.4, downloaded and built at configure time.
-# No Lua sources are stored in the repo; CI fetches them from lua.org.
-# ---------------------------------------------------------------------------
+# Корень данных приложения на устройстве (туда restructure() кладёт assets/ и projects/)
+set(SUKA_PROJECT_ROOT "/data/data/com.sukaengine.app/files")
+
 include(FetchContent)
 
-FetchContent_Declare(
-    luadep
-    URL https://www.lua.org/ftp/lua-5.4.7.tar.gz
-)
+# ---------------------------------------------------------------------------
+# Lua 5.4 ( собираем из исходников как статическую C-библиотеку )
+# ---------------------------------------------------------------------------
+FetchContent_Declare(lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG        v5.4.7
+    GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(lua)
 
-# Download + extract only.
-# Lua ships a Makefile, not a CMakeLists.txt, so we build its sources manually.
-FetchContent_Populate(luadep)
+file(GLOB LUA_CORE_SOURCES "${lua_SOURCE_DIR}/*.c")
+# убираем точки входа с main()
+list(REMOVE_ITEM LUA_CORE_SOURCES
+    "${lua_SOURCE_DIR}/lua.c"
+    "${lua_SOURCE_DIR}/luac.c"
+    "${lua_SOURCE_DIR}/onelua.c")
 
-set(LUA_SRC_DIR ${luadep_SOURCE_DIR}/src)
+add_library(lua_static STATIC ${LUA_CORE_SOURCES})
+set_target_properties(lua_static PROPERTIES LINKER_LANGUAGE C)
+target_include_directories(lua_static PUBLIC "${lua_SOURCE_DIR}")
+target_compile_options(lua_static PRIVATE -w)   # чужой C-код без варнингов
 
-file(GLOB LUA_C_ALL CONFIGURE_DEPENDS "${LUA_SRC_DIR}/*.c")
+# ---------------------------------------------------------------------------
+# Box2D v2.4.1 (настоящая физика: контакты, трение, качение, сон тел)
+# ---------------------------------------------------------------------------
+FetchContent_Declare(box2d
+    GIT_REPOSITORY https://github.com/erincatto/box2d.git
+    GIT_TAG        v2.4.1
+    GIT_SHALLOW    TRUE)
+set(BOX2D_BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(BOX2D_BUILD_TESTBED    OFF CACHE BOOL "" FORCE)
+set(BOX2D_BUILD_DOCS       OFF CACHE BOOL "" FORCE)
+set(BOX2D_SAMPLES          OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(box2d)
 
-# Exclude standalone interpreter/compiler targets because they contain main().
-set(LUA_C_SRC "")
+# ---------------------------------------------------------------------------
+# Нативная библиотека движка
+# ---------------------------------------------------------------------------
+# Репозиторий: android/app/src/main/cpp  ->  корень репо на 4 уровня выше
+get_filename_component(SUKA_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../" ABSOLUTE)
 
-foreach(_f ${LUA_C_ALL})
-    get_filename_component(_n ${_f} NAME)
+add_library(suka SHARED
+    android_bridge.cpp)
 
-    if(NOT _n STREQUAL "lua.c" AND
-       NOT _n STREQUAL "luac.c" AND
-       NOT _n STREQUAL "onelua.c")
-        list(APPEND LUA_C_SRC ${_f})
-    endif()
-endforeach()
-
-add_library(lua STATIC ${LUA_C_SRC})
-
-# Lua is pure C.
-set_target_properties(lua PROPERTIES
-    LINKER_LANGUAGE C
-    POSITION_INDEPENDENT_CODE ON
-)
-
-target_include_directories(lua PUBLIC ${LUA_SRC_DIR})
-
-# Android is POSIX. This enables normal stdio/popen/time behavior in Lua.
-target_compile_definitions(lua PRIVATE LUA_USE_POSIX)
-
-# Make <lua.h> visible to suka.
 target_include_directories(suka PRIVATE
-    ${LUA_SRC_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../src
+    "${SUKA_REPO_ROOT}/src"          # все header-only модули ядра (GameApp.hpp и т.д.)
+    "${lua_SOURCE_DIR}"
 )
 
-# IMPORTANT: use ONE keyword-style target_link_libraries for suka.
-# Do not mix it with plain target_link_libraries(suka log android).
-target_link_libraries(suka PRIVATE
-    lua
+target_compile_definitions(suka PRIVATE
+    PROJECT_ROOT="${SUKA_PROJECT_ROOT}"
+)
+
+target_link_libraries(suka
     android
     log
+    lua_static
+    Box2D
+)
+
+# Оптимизации для релиза, без них физика и рендер-строки медленные
+target_compile_options(suka PRIVATE
+    $<$<CONFIG:Release>:-O2>
+    $<$<CONFIG:Debug>:-O0 -g>
 )
