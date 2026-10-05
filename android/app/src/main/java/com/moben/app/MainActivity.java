@@ -1,4 +1,4 @@
-package com.sukaengine.app;
+package com.moben.app;
 
 import android.app.Activity;
 import android.content.Context;
@@ -46,7 +46,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class MainActivity extends Activity {
-    static { System.loadLibrary("suka"); }
+    static { System.loadLibrary("moben"); }
 
     private static final String GAME_DIR = "DemoGame";
     private static final float DEFAULT_LOGIC_W = 1280f;
@@ -708,14 +708,14 @@ public class MainActivity extends Activity {
             if (editor) {
                 float size = Math.max(26f, rh * 0.035f);
                 paint.setTextSize(size); paint.setTextAlign(Paint.Align.RIGHT);
-                paint.setColor(Color.argb(150, 0, 0, 0)); c.drawText("SukaEngine", rw - 18 + 2, size + 4, paint);
-                paint.setColor(Color.rgb(234, 242, 255)); c.drawText("SukaEngine", rw - 18, size + 2, paint);
+                paint.setColor(Color.argb(150, 0, 0, 0)); c.drawText("Moben", rw - 18 + 2, size + 4, paint);
+                paint.setColor(Color.rgb(234, 242, 255)); c.drawText("Moben", rw - 18, size + 2, paint);
             } else {
                 float size = Math.max(40f, rh * 0.055f);
                 paint.setTextSize(size); paint.setTextAlign(Paint.Align.CENTER);
                 float cx = rw / 2f, cy = size + rh * 0.03f;
-                paint.setColor(Color.argb(160, 0, 0, 0)); c.drawText("SukaEngine", cx + 3, cy + 3, paint);
-                paint.setColor(Color.WHITE); c.drawText("SukaEngine", cx, cy, paint);
+                paint.setColor(Color.argb(160, 0, 0, 0)); c.drawText("Moben", cx + 3, cy + 3, paint);
+                paint.setColor(Color.WHITE); c.drawText("Moben", cx, cy, paint);
             }
             paint.setTextAlign(Paint.Align.LEFT);
         }
@@ -895,28 +895,11 @@ public class MainActivity extends Activity {
             } catch (Exception e) { }
         }
 
-        // Экран -> логические координаты. В игре обратный letterbox, в hub/editor stretch.
-        private void toLogical(float sx, float sy, int rw, int rh, float[] out) {
-            if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
-                if (renderMode == MODE_GAME) {
-                    float s  = Math.min(rw / logicW, rh / logicH);
-                    float ox = (rw - logicW * s) * 0.5f;
-                    float oy = (rh - logicH * s) * 0.5f;
-                    out[0] = (sx - ox) / s;
-                    out[1] = (sy - oy) / s;
-                } else {
-                    out[0] = sx * logicW / rw;
-                    out[1] = sy * logicH / rh;
-                }
-            } else { out[0] = sx; out[1] = sy; }
-        }
-
         @Override public boolean onTouchEvent(MotionEvent e) {
             int a = e.getActionMasked();
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
 
-            // Игровой оверлей DBG/X (только одиночный тап пальцем 0).
             if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
                 float[] R = ovBtnRects(rw, rh);
                 float ex = e.getX(), ey = e.getY();
@@ -924,33 +907,24 @@ public class MainActivity extends Activity {
                 if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeSetAction("ov:close:"); return true; }
             }
 
-            // ИГРА: мультитач. Каждый палец шлётся отдельным nativeTouch со своим id,
-            // поэтому d-pad слева и ATK справа работают одновременно.
-            if (renderMode == MODE_GAME) {
-                int masked = e.getActionMasked();
-                int idx = (masked == MotionEvent.ACTION_POINTER_DOWN || masked == MotionEvent.ACTION_POINTER_UP)
-                        ? e.getActionIndex() : -1;
-                for (int i = 0; i < count; ++i) {
-                    int act; // 0=Down 1=Up 2=Move (совпадает с feedTouch)
-                    if (masked == MotionEvent.ACTION_MOVE) act = 2;
-                    else if (masked == MotionEvent.ACTION_DOWN) act = (i == 0) ? 0 : 2;
-                    else if (masked == MotionEvent.ACTION_POINTER_DOWN) act = (i == idx) ? 0 : 2;
-                    else if (masked == MotionEvent.ACTION_UP) act = (i == 0) ? 1 : 2;
-                    else if (masked == MotionEvent.ACTION_POINTER_UP) act = (i == idx) ? 1 : 2;
-                    else act = 2;
-                    float[] lp = new float[2];
-                    toLogical(e.getX(i), e.getY(i), rw, rh, lp);
-                    nativeTouch(act, lp[0], lp[1]);
+            float lx, ly;
+            if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
+                if (renderMode == MODE_GAME) {
+                    float s  = Math.min(rw / logicW, rh / logicH);
+                    float ox = (rw - logicW * s) * 0.5f;
+                    float oy = (rh - logicH * s) * 0.5f;
+                    lx = (e.getX() - ox) / s;
+                    ly = (e.getY() - oy) / s;
+                } else {
+                    lx = e.getX() * logicW / rw;
+                    ly = e.getY() * logicH / rh;
                 }
-                return true;
+            } else {
+                lx = e.getX(); ly = e.getY();
             }
 
-            // РЕДАКТОР/ХАБ: курсор в коде (action 9) по одному пальцу.
             if (a == MotionEvent.ACTION_DOWN && count == 1 && !clIdx.isEmpty()
-                    && e.getX() >= CODE_X0 && e.getX() <= CODE_X1 && e.getY() >= CODE_Y0 && e.getY() <= CODE_Y1) {
-                float[] lp = new float[2];
-                toLogical(e.getX(), e.getY(), rw, rh, lp);
-                float lx = lp[0], ly = lp[1];
+                    && lx >= CODE_X0 && lx <= CODE_X1 && ly >= CODE_Y0 && ly <= CODE_Y1) {
                 int bi = 0; float bd = Float.MAX_VALUE;
                 for (int k = 0; k < clY.size(); ++k) {
                     float mid = clY.get(k) + 9.5f;
@@ -985,24 +959,31 @@ public class MainActivity extends Activity {
                 return true;
             }
 
-            // РЕДАКТОР/ХАБ: два пальца = пинч/панорама.
             if (count >= 2) {
-                float[] l0 = new float[2], l1 = new float[2];
-                toLogical(e.getX(0), e.getY(0), rw, rh, l0);
-                toLogical(e.getX(1), e.getY(1), rw, rh, l1);
+                float x0, y0, x1, y1;
+                if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
+                    if (renderMode == MODE_GAME) {
+                        float s  = Math.min(rw / logicW, rh / logicH);
+                        float ox = (rw - logicW * s) * 0.5f;
+                        float oy = (rh - logicH * s) * 0.5f;
+                        x0 = (e.getX(0) - ox) / s; y0 = (e.getY(0) - oy) / s;
+                        x1 = (e.getX(1) - ox) / s; y1 = (e.getY(1) - oy) / s;
+                    } else {
+                        x0 = e.getX(0) * logicW / rw; y0 = e.getY(0) * logicH / rh;
+                        x1 = e.getX(1) * logicW / rw; y1 = e.getY(1) * logicH / rh;
+                    }
+                } else {
+                    x0 = e.getX(0); y0 = e.getY(0); x1 = e.getX(1); y1 = e.getY(1);
+                }
                 int ph = (a == MotionEvent.ACTION_POINTER_DOWN || a == MotionEvent.ACTION_DOWN) ? 1
                        : (a == MotionEvent.ACTION_POINTER_UP   || a == MotionEvent.ACTION_UP)   ? 3 : 2;
-                nativeMultiTouch(ph, l0[0], l0[1], l1[0], l1[1]);
+                nativeMultiTouch(ph, x0, y0, x1, y1);
                 return true;
             }
-
-            // РЕДАКТОР/ХАБ: одиночный палец.
-            float[] lp = new float[2];
-            toLogical(e.getX(), e.getY(), rw, rh, lp);
             if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_MOVE || a == MotionEvent.ACTION_UP) {
-                nativeTouch(a, lp[0], lp[1]);
+                nativeTouch(a, lx, ly);
             }
             return true;
         }
     }
-                                           }
+                                  }
