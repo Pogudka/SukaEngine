@@ -19,6 +19,7 @@ extern "C" {
 #include <box2d/box2d.h>
 
 #include "Scene.hpp"
+#include "Sound.hpp"
 
 namespace suka {
 
@@ -873,6 +874,10 @@ inline void registerPhysicsLuaApi(lua_State* L) {
     lua_register(L, "show_hitboxes", l_show_hitboxes);
 
     lua_register(L, "raycast", l_raycast);
+
+    // Звук подключаем сюда же, чтобы не менять GameApp/Script.
+    registerSoundLuaApi(L);
+    audioInit();
 }
 
 // Вызывать каждый кадр после physicsUpdate().
