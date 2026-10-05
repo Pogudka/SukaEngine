@@ -55,8 +55,8 @@ public:
     void BeginContact(b2Contact* c) override {
         b2Body* a = c->GetFixtureA()->GetBody();
         b2Body* b = c->GetFixtureB()->GetBody();
-        void* uda = a->GetUserData();
-        void* udb = b->GetUserData();
+        void* uda = a->GetUserData().pointer;
+        void* udb = b->GetUserData().pointer;
         if (uda && udb) {
             const char* na = reinterpret_cast<const char*>(uda);
             const char* nb = reinterpret_cast<const char*>(udb);
@@ -120,7 +120,10 @@ inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     bd.allowSleep = true;
     bd.awake = true;
     b2Body* body = g_world->CreateBody(&bd);
-    body->SetUserData(reinterpret_cast<void*>(const_cast<char*>(nm.c_str())));
+    
+    b2BodyUserData userData;
+    userData.pointer = reinterpret_cast<uintptr_t>(const_cast<char*>(nm.c_str()));
+    body->SetUserData(userData);
 
     std::string shape = n->shape;
     B.isCircle = (shape == "circle");
