@@ -55,9 +55,11 @@ public:
     void BeginContact(b2Contact* c) override {
         b2Body* a = c->GetFixtureA()->GetBody();
         b2Body* b = c->GetFixtureB()->GetBody();
-        const char* na = (const char*)a->GetUserData();
-        const char* nb = (const char*)b->GetUserData();
-        if (na && nb) {
+        void* uda = a->GetUserData();
+        void* udb = b->GetUserData();
+        if (uda && udb) {
+            const char* na = reinterpret_cast<const char*>(uda);
+            const char* nb = reinterpret_cast<const char*>(udb);
             std::lock_guard<std::mutex> lk(g_collideMtx);
             g_collideEvents.push_back(std::make_pair(std::string(na), std::string(nb)));
         }
@@ -118,7 +120,7 @@ inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     bd.allowSleep = true;
     bd.awake = true;
     b2Body* body = g_world->CreateBody(&bd);
-    body->SetUserData((void*)nm.c_str());
+    body->SetUserData(reinterpret_cast<void*>(const_cast<char*>(nm.c_str())));
 
     std::string shape = n->shape;
     B.isCircle = (shape == "circle");
@@ -248,9 +250,11 @@ inline void physicsUpdate(Scene& sc, float dt) {
         for (b2ContactEdge* ce = bb->GetContactList(); ce; ce = ce->next) {
             b2Contact* ct = ce->contact;
             if (!ct->IsTouching()) continue;
+            const b2Manifold* manifold = ct->GetManifold();
+            if (!manifold) continue;
             b2WorldManifold wm;
             ct->GetWorldManifold(&wm);
-            for (int k = 0; k < wm.pointCount; ++k) {
+            for (int k = 0; k < manifold->pointCount; ++k) {
                 if (wm.points[k].y > bb->GetPosition().y + 0.01f) { B.onGround = true; break; }
             }
             if (B.onGround) break;
