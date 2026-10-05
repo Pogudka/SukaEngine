@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(suka LANGUAGES C CXX)
+project(moben LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,9 +8,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Путь до корня репозитория:
 # android/app/src/main/cpp -> ../../../../../ -> корень репо
-get_filename_component(SUKA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABSOLUTE)
+get_filename_component(MOBEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABSOLUTE)
 
-message(STATUS "SUKA_ROOT=${SUKA_ROOT}")
+message(STATUS "MOBEN_ROOT=${MOBEN_ROOT}")
 
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
@@ -66,44 +66,44 @@ FetchContent_Populate(miniaudio)
 # Основная библиотека
 # -------------------------
 add_library(
-    suka
+    moben
     SHARED
 
     # android_bridge.cpp лежит рядом с этим CMakeLists.txt
     "${CMAKE_CURRENT_SOURCE_DIR}/android_bridge.cpp"
 
     # Sound.cpp лежит в корне репо в src/
-    "${SUKA_ROOT}/src/Sound.cpp"
+    "${MOBEN_ROOT}/src/Sound.cpp"
 )
 
 target_include_directories(
-    suka
+    moben
     PRIVATE
-    "${SUKA_ROOT}/src"
+    "${MOBEN_ROOT}/src"
     "${lua_SOURCE_DIR}/src"
     "${box2d_SOURCE_DIR}/include"
     "${miniaudio_SOURCE_DIR}"
 )
 
 target_link_libraries(
-    suka
+    moben
     PRIVATE
     lua_static
     box2d
 )
 
 target_compile_definitions(
-    suka
+    moben
     PRIVATE
-    PROJECT_ROOT=\"/data/data/com.sukaengine.app/files\"
+    PROJECT_ROOT=\"/data/data/com.moben.app/files\"
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(suka PRIVATE -frtti -fexceptions)
+    target_compile_options(moben PRIVATE -frtti -fexceptions)
 endif()
 
 find_package(Threads REQUIRED)
-target_link_libraries(suka PRIVATE Threads::Threads)
+target_link_libraries(moben PRIVATE Threads::Threads)
 
 if(ANDROID)
     find_library(log-lib log)
@@ -112,7 +112,7 @@ if(ANDROID)
     find_library(atomic-lib atomic)
 
     target_link_libraries(
-        suka
+        moben
         PRIVATE
         ${log-lib}
         ${android-lib}
@@ -120,10 +120,10 @@ if(ANDROID)
     )
 
     if(atomic-lib)
-        target_link_libraries(suka PRIVATE ${atomic-lib})
+        target_link_libraries(moben PRIVATE ${atomic-lib})
     endif()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID)
-    target_link_libraries(suka PRIVATE m)
+    target_link_libraries(moben PRIVATE m)
 endif()
