@@ -56,7 +56,7 @@ public:
     void BeginContact(b2Contact* c) override {
         b2Body* a = c->GetFixtureA()->GetBody();
         b2Body* b = c->GetFixtureB()->GetBody();
-        // Box2D v2.4.1: GetUserData() returns struct with uintptr_t pointer
+        // Box2D v2.4.1: GetUserData() returns b2BodyUserData with uintptr_t pointer
         void* uda = reinterpret_cast<void*>(a->GetUserData().pointer);
         void* udb = reinterpret_cast<void*>(b->GetUserData().pointer);
         if (uda && udb) {
@@ -123,8 +123,10 @@ inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     bd.awake = true;
     b2Body* body = g_world->CreateBody(&bd);
     
-    // Box2D v2.4.1: SetUserData takes void*
-    body->SetUserData(reinterpret_cast<void*>(const_cast<char*>(nm.c_str())));
+    // Box2D v2.4.1: SetUserData takes b2BodyUserData structure
+    b2BodyUserData userData;
+    userData.pointer = reinterpret_cast<uintptr_t>(const_cast<char*>(nm.c_str()));
+    body->SetUserData(userData);
 
     std::string shape = n->shape;
     B.isCircle = (shape == "circle");
