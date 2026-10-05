@@ -331,7 +331,6 @@ inline int GameApp::applyEditorAction(const std::string& act) {
     if (act == "scup") { scriptScroll_ -= 3; imeChanged_ = true; rebuild(); return 1; }
     if (act == "scdn") { scriptScroll_ += 3; imeChanged_ = true; rebuild(); return 1; }
     if (act == "snew") { pendingName_ = true; pendingKind_ = 2; rebuild(); return 1; }
-    // Панель функций: независима от меню создания (ряды разведены по вертикали).
     if (act == "funcs_open") { showFuncs_ = !showFuncs_; rebuild(); return 1; }
     if (scriptMode_) return 0;
 
@@ -790,6 +789,15 @@ inline std::string GameApp::stepEditor() {
                 out += "DRAW button|STOP|568|516|62|26|#D62828|0|\n";
             }
         }
+
+        // Отладочные хитбоксы в редакторе (внутри клипа вьюпорта).
+        if (g_showBodies && es) {
+            float Sd = 0.46875f * edZoom_;
+            float OXd = 596.0f - Sd * (es->camX + 640.0f);
+            float OYd = 310.0f - Sd * (es->camY + 360.0f);
+            emitBodiesDebug(*es, out, Sd, OXd, OYd);
+        }
+
         out += "DRAW clipoff\n";
 
         std::string wTxt = "W " + std::to_string((int)projCamW_);
@@ -803,8 +811,7 @@ inline std::string GameApp::stepEditor() {
         out += "DRAW text|" + oTxt + "|" + std::to_string((int)CAM_PX0 + 6) + "|" + std::to_string((int)CAM_BTN_O_Y0 + 2) + "|14|#FFD700|0\n";
     }
 
-    // Ряд функций: своя тёмная подложка во всю ширину, ниже рядов создания (y=656),
-    // поэтому меню [+] и [FN] могут быть открыты одновременно и НЕ перекрываются.
+    // Ряд функций: своя тёмная подложка, ниже рядов создания (y=656), не перекрывается.
     if (!scriptMode_ && showFuncs_) {
         int fy = (int)FNR_Y;
         out += "DRAW rect|300|" + std::to_string(fy - 4) + "|592|34|#14141C|0\n";
@@ -813,6 +820,7 @@ inline std::string GameApp::stepEditor() {
         out += "DRAW button|NOGRAV|528|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
         out += "DRAW button|BOUNCY|612|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
         out += "DRAW button|CLEAR|696|" + std::to_string(fy) + "|70|26|#555566|0|\n";
+        out += "DRAW button|HBOX|770|" + std::to_string(fy) + "|80|26|" + std::string(g_showBodies ? "#33FF99" : "#555566") + "|0|\n";
         out += "DRAW button|X|860|" + std::to_string(fy) + "|32|26|#D62828|0|\n";
     }
     if (!scriptMode_ && funcMsgTimer_ > 0) {
