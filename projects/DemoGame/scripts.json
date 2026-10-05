@@ -1,5 +1,6 @@
 {
   "scripts": [
-    { "node": "Box", "path": "scripts/main.lua" }
+    { "node": "Hero", "path": "scripts/demo.lua" },
+    { "node": "PlatformerPlayer", "path": "scripts/demo.lua" }
   ]
 }
