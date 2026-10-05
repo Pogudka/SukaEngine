@@ -1,0 +1,5 @@
+Ground=staticbody
+WallLeft=staticbody
+WallRight=staticbody
+PlatformMain=staticbody
+SND:SoundAuto=coin|-|auto
