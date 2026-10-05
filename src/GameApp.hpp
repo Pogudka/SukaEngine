@@ -134,8 +134,8 @@ static const float CAM_BTN_W_Y0 = 66.0f,  CAM_BTN_W_Y1 = 90.0f;
 static const float CAM_BTN_H_Y0 = 92.0f,  CAM_BTN_H_Y1 = 116.0f;
 static const float CAM_BTN_O_Y0 = 118.0f, CAM_BTN_O_Y1 = 142.0f;
 
-static const float FN_BTN_X = 864.0f, FN_BTN_Y = 34.0f, FN_BTN_W = 28.0f, FN_BTN_H = 26.0f;
-static const float FNR_Y = 652.0f, FNR_H = 26.0f;
+// Ряд кнопок функций (ниже рядов создания 560..644, со своей подложкой).
+static const float FNR_Y = 656.0f, FNR_H = 26.0f;
 static const float FNR_RIG_X0 = 300.0f, FNR_RIG_X1 = 410.0f;
 static const float FNR_STA_X0 = 414.0f, FNR_STA_X1 = 524.0f;
 static const float FNR_NOG_X0 = 528.0f, FNR_NOG_X1 = 608.0f;
@@ -327,7 +327,7 @@ private:
             editor_.get(), scriptMode_, edZoom_, manip_, pickParent_, showCreate_, showAssets_, showSettings_, showPrefabs_, showFiles_,
             hierScroll_, fsScroll_, assetScroll_, scriptScroll_, prefabScroll_,
             collapsed_, fsPath_, project_.rootPath, pendingDeleteFile_, scriptPath_, scriptLines_,
-            curLine_, curCol_, imeShown_, g_luaLog
+            curLine_, curCol_, imeShown_, g_luaLog, showFuncs_
         };
     }
     EditorRenderInput makeEditorRenderInput() { return EditorRenderInput{ editor_.get(), edZoom_, manip_, pickParent_, pickChild_, lastMsg_, fps_, projCamW_, projCamH_, projVertical_, screenRatio_ }; }
