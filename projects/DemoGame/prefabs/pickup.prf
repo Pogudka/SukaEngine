@@ -1,0 +1,30 @@
+{
+  "name": "pickup",
+  "nodes": [
+    {
+      "type": "Node2D",
+      "name": "Pickup",
+      "x": 0,
+      "y": 0,
+      "w": 42,
+      "h": 42,
+      "shape": "diamond",
+      "color": "#FFD166",
+      "alpha": 1
+    }
+  ],
+  "ui": [
+    {
+      "id": "PFButton",
+      "x": 820,
+      "y": 180,
+      "w": 90,
+      "h": 36,
+      "text": "PICK",
+      "action": "call:pickupTap",
+      "color": "#FFD166",
+      "angle": 0,
+      "alpha": 1
+    }
+  ]
+}
