@@ -57,10 +57,8 @@ public class MainActivity extends Activity {
     private static final float CODE_TEXT_X = 340f;
     private static final float CODE_FONT = 14f;
 
-    // Границы вьюпорта редактора (совпадают с C++: 300,64 .. 892,556).
     private static final float EDV_X0 = 300f, EDV_Y0 = 64f, EDV_X1 = 892f, EDV_Y1 = 556f;
 
-    // 0 = hub, 1 = editor, 2 = game. hub/editor -> STRETCH; game -> CONTAIN.
     private static final int MODE_HUB = 0, MODE_EDITOR = 1, MODE_GAME = 2;
 
     private static volatile boolean g_initOk = false;
@@ -79,12 +77,11 @@ public class MainActivity extends Activity {
     private volatile String importCatRes_ = "";
     private volatile String importNameRes_ = "";
 
-    // ==== Звук ====
     private SoundPool sp = null;
     private final Map<String, Integer> spMap = new HashMap<>();
-    private final Map<String, String> mp3Map = new HashMap<>();   // mp3 не в SoundPool: он их режет
-    private MediaPlayer mp = null;      // музыка (loop)
-    private MediaPlayer mpOne = null;   // одиночные mp3-эффекты
+    private final Map<String, String> mp3Map = new HashMap<>();
+    private MediaPlayer mp = null;
+    private MediaPlayer mpOne = null;
     private volatile String projRoot = "";
 
     private void loadSounds(String dir) {
@@ -179,7 +176,6 @@ public class MainActivity extends Activity {
         if (hasFocus) hideSystemBars();
     }
 
-    // При сворачивании/выходе музыка и эффекты останавливаются полностью.
     @Override protected void onStop() {
         super.onStop();
         stopMusic();
@@ -377,7 +373,7 @@ public class MainActivity extends Activity {
     native void nativeMultiTouch(int phase, float x0, float y0, float x1, float y1);
     native void nativeSetText(String text);
     native void nativeSetName(String text);
-    native void nativeSetAction(String text);   // оверлей X/DBG шлёт "ov:...", surface шлёт "sys:ratio|..."
+    native void nativeSetAction(String text);
     native void nativeSetNumber(String text);
     native void nativeScriptText(String text);
     native void nativeScriptCompose(String text);
@@ -579,7 +575,6 @@ public class MainActivity extends Activity {
                         stopMusic();
                     }
                 }
-                // Вышли из игрового режима -> музыка останавливается сама.
                 if (newMode != MODE_GAME) { stopMusic(); try { if (mpOne != null) { mpOne.stop(); mpOne.release(); mpOne = null; } } catch (Throwable t) { } }
                 renderMode = newMode;
                 ovStat = newStat;
@@ -900,11 +895,28 @@ public class MainActivity extends Activity {
             } catch (Exception e) { }
         }
 
+        // Экран -> логические координаты. В игре обратный letterbox, в hub/editor stretch.
+        private void toLogical(float sx, float sy, int rw, int rh, float[] out) {
+            if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
+                if (renderMode == MODE_GAME) {
+                    float s  = Math.min(rw / logicW, rh / logicH);
+                    float ox = (rw - logicW * s) * 0.5f;
+                    float oy = (rh - logicH * s) * 0.5f;
+                    out[0] = (sx - ox) / s;
+                    out[1] = (sy - oy) / s;
+                } else {
+                    out[0] = sx * logicW / rw;
+                    out[1] = sy * logicH / rh;
+                }
+            } else { out[0] = sx; out[1] = sy; }
+        }
+
         @Override public boolean onTouchEvent(MotionEvent e) {
             int a = e.getActionMasked();
             int count = e.getPointerCount();
             int rw = getWidth(), rh = getHeight();
 
+            // Игровой оверлей DBG/X (только одиночный тап пальцем 0).
             if (renderMode == MODE_GAME && count == 1 && a == MotionEvent.ACTION_DOWN) {
                 float[] R = ovBtnRects(rw, rh);
                 float ex = e.getX(), ey = e.getY();
@@ -912,24 +924,33 @@ public class MainActivity extends Activity {
                 if (ex >= R[4] && ex <= R[6] && ey >= R[5] && ey <= R[7]) { nativeSetAction("ov:close:"); return true; }
             }
 
-            float lx, ly;
-            if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
-                if (renderMode == MODE_GAME) {
-                    float s  = Math.min(rw / logicW, rh / logicH);
-                    float ox = (rw - logicW * s) * 0.5f;
-                    float oy = (rh - logicH * s) * 0.5f;
-                    lx = (e.getX() - ox) / s;
-                    ly = (e.getY() - oy) / s;
-                } else {
-                    lx = e.getX() * logicW / rw;
-                    ly = e.getY() * logicH / rh;
+            // ИГРА: мультитач. Каждый палец шлётся отдельным nativeTouch со своим id,
+            // поэтому d-pad слева и ATK справа работают одновременно.
+            if (renderMode == MODE_GAME) {
+                int masked = e.getActionMasked();
+                int idx = (masked == MotionEvent.ACTION_POINTER_DOWN || masked == MotionEvent.ACTION_POINTER_UP)
+                        ? e.getActionIndex() : -1;
+                for (int i = 0; i < count; ++i) {
+                    int act; // 0=Down 1=Up 2=Move (совпадает с feedTouch)
+                    if (masked == MotionEvent.ACTION_MOVE) act = 2;
+                    else if (masked == MotionEvent.ACTION_DOWN) act = (i == 0) ? 0 : 2;
+                    else if (masked == MotionEvent.ACTION_POINTER_DOWN) act = (i == idx) ? 0 : 2;
+                    else if (masked == MotionEvent.ACTION_UP) act = (i == 0) ? 1 : 2;
+                    else if (masked == MotionEvent.ACTION_POINTER_UP) act = (i == idx) ? 1 : 2;
+                    else act = 2;
+                    float[] lp = new float[2];
+                    toLogical(e.getX(i), e.getY(i), rw, rh, lp);
+                    nativeTouch(act, lp[0], lp[1]);
                 }
-            } else {
-                lx = e.getX(); ly = e.getY();
+                return true;
             }
 
+            // РЕДАКТОР/ХАБ: курсор в коде (action 9) по одному пальцу.
             if (a == MotionEvent.ACTION_DOWN && count == 1 && !clIdx.isEmpty()
-                    && lx >= CODE_X0 && lx <= CODE_X1 && ly >= CODE_Y0 && ly <= CODE_Y1) {
+                    && e.getX() >= CODE_X0 && e.getX() <= CODE_X1 && e.getY() >= CODE_Y0 && e.getY() <= CODE_Y1) {
+                float[] lp = new float[2];
+                toLogical(e.getX(), e.getY(), rw, rh, lp);
+                float lx = lp[0], ly = lp[1];
                 int bi = 0; float bd = Float.MAX_VALUE;
                 for (int k = 0; k < clY.size(); ++k) {
                     float mid = clY.get(k) + 9.5f;
@@ -964,31 +985,24 @@ public class MainActivity extends Activity {
                 return true;
             }
 
+            // РЕДАКТОР/ХАБ: два пальца = пинч/панорама.
             if (count >= 2) {
-                float x0, y0, x1, y1;
-                if (rw > 0 && rh > 0 && logicW > 1.0f && logicH > 1.0f) {
-                    if (renderMode == MODE_GAME) {
-                        float s  = Math.min(rw / logicW, rh / logicH);
-                        float ox = (rw - logicW * s) * 0.5f;
-                        float oy = (rh - logicH * s) * 0.5f;
-                        x0 = (e.getX(0) - ox) / s; y0 = (e.getY(0) - oy) / s;
-                        x1 = (e.getX(1) - ox) / s; y1 = (e.getY(1) - oy) / s;
-                    } else {
-                        x0 = e.getX(0) * logicW / rw; y0 = e.getY(0) * logicH / rh;
-                        x1 = e.getX(1) * logicW / rw; y1 = e.getY(1) * logicH / rh;
-                    }
-                } else {
-                    x0 = e.getX(0); y0 = e.getY(0); x1 = e.getX(1); y1 = e.getY(1);
-                }
+                float[] l0 = new float[2], l1 = new float[2];
+                toLogical(e.getX(0), e.getY(0), rw, rh, l0);
+                toLogical(e.getX(1), e.getY(1), rw, rh, l1);
                 int ph = (a == MotionEvent.ACTION_POINTER_DOWN || a == MotionEvent.ACTION_DOWN) ? 1
                        : (a == MotionEvent.ACTION_POINTER_UP   || a == MotionEvent.ACTION_UP)   ? 3 : 2;
-                nativeMultiTouch(ph, x0, y0, x1, y1);
+                nativeMultiTouch(ph, l0[0], l0[1], l1[0], l1[1]);
                 return true;
             }
+
+            // РЕДАКТОР/ХАБ: одиночный палец.
+            float[] lp = new float[2];
+            toLogical(e.getX(), e.getY(), rw, rh, lp);
             if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_MOVE || a == MotionEvent.ACTION_UP) {
-                nativeTouch(a, lx, ly);
+                nativeTouch(a, lp[0], lp[1]);
             }
             return true;
         }
     }
-            }
+                                           }
