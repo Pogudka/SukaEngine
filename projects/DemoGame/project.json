@@ -1,9 +1,10 @@
 {
   "name": "DemoGame",
   "engine": "SukaEngine",
-  "package": "com.suka.demo",
-  "version": "2.0",
+  "package": "com.sukaengine.demogame",
+  "version": "3.0",
   "main_scene": "scenes/main.json",
   "orientation": "landscape",
-  "default_font": "assets/fonts/Ubuntu-Regular.ttf"
+  "default_font": "assets/fonts/Ubuntu-Regular.ttf",
+  "save_vars": true
 }
