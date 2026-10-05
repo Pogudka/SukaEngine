@@ -142,6 +142,7 @@ static const float FNR_NOG_X0 = 528.0f, FNR_NOG_X1 = 608.0f;
 static const float FNR_BOU_X0 = 612.0f, FNR_BOU_X1 = 692.0f;
 static const float FNR_CLR_X0 = 696.0f, FNR_CLR_X1 = 766.0f;
 static const float FNR_X_X0  = 860.0f, FNR_X_X1  = 892.0f;
+static const float FNR_HB_X0 = 770.0f, FNR_HB_X1 = 850.0f;   // кнопка HBOX в ряду функций
 
 // Панель звука — ВНУТРИ вьюпорта (низ), чтобы не налезала на инспектор.
 static const float SNP_Y0 = 516.0f, SNP_Y1 = 542.0f;
