@@ -9,6 +9,7 @@
 #include <memory>
 #include <algorithm>
 #include <utility>
+#include <cstdint>
 
 extern "C" {
 #include "lua.h"
@@ -21,7 +22,6 @@ extern "C" {
 
 namespace suka {
 
-// Масштаб: 100 пикселей = 1 метр (Box2D любит метры).
 static const float PPM = 100.0f;
 static const float INV_PPM = 1.0f / PPM;
 
@@ -29,37 +29,35 @@ struct Body {
     bool isStatic = false;
     bool isCircle = false;
     float mass = 1.0f;
-    float vx = 0.0f, vy = 0.0f;   // желаемая/последняя скорость, px/s
-    float w = 0.0f;               // угловая, рад/с
+    float vx = 0.0f, vy = 0.0f;
+    float w = 0.0f;
     bool gravity = true;
     bool hasGravityFlag = true;
     float restitution = 0.0f;
     float friction = 0.4f;
     bool onGround = false;
-    bool pendingVel = false;      // применить vx/vy при создании тела
+    bool pendingVel = false;
     b2Body* bb = nullptr;
 };
 
 inline std::map<std::string, Body> g_bodies;
 inline std::mutex g_bodiesMtx;
-inline float g_gravity = 900.0f;                       // px/s^2
+inline float g_gravity = 900.0f;
 inline bool g_showBodies = false;
 inline std::vector<std::pair<std::string, std::string>> g_collideEvents;
 inline std::mutex g_collideMtx;
 inline std::unique_ptr<b2World> g_world;
 inline Scene* g_physScene = nullptr;
 
-// ---- слушатель контактов: on_collide ----
 class SukaContactListener : public b2ContactListener {
 public:
     void BeginContact(b2Contact* c) override {
         b2Body* a = c->GetFixtureA()->GetBody();
         b2Body* b = c->GetFixtureB()->GetBody();
-        void* uda = a->GetUserData().pointer;
-        void* udb = b->GetUserData().pointer;
-        if (uda && udb) {
-            const char* na = reinterpret_cast<const char*>(uda);
-            const char* nb = reinterpret_cast<const char*>(udb);
+        // Box2D v2.4.1: GetUserData() возвращает void*
+        const char* na = (const char*)a->GetUserData();
+        const char* nb = (const char*)b->GetUserData();
+        if (na && nb) {
             std::lock_guard<std::mutex> lk(g_collideMtx);
             g_collideEvents.push_back(std::make_pair(std::string(na), std::string(nb)));
         }
@@ -100,7 +98,6 @@ inline void ensureWorld() {
     }
 }
 
-// Полностью сбрасывает мир (вызывается автоматически при смене сцены).
 inline void physicsReset() {
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
     for (auto& kv : g_bodies) kv.second.bb = nullptr;
@@ -110,7 +107,6 @@ inline void physicsReset() {
     g_collideEvents.clear();
 }
 
-// Создание b2-тела по ноде
 inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     ensureWorld();
     b2BodyDef bd;
@@ -120,10 +116,8 @@ inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     bd.allowSleep = true;
     bd.awake = true;
     b2Body* body = g_world->CreateBody(&bd);
-    
-    b2BodyUserData userData;
-    userData.pointer = reinterpret_cast<uintptr_t>(const_cast<char*>(nm.c_str()));
-    body->SetUserData(userData);
+    // Box2D v2.4.1: SetUserData принимает void*
+    body->SetUserData((void*)nm.c_str());
 
     std::string shape = n->shape;
     B.isCircle = (shape == "circle");
@@ -182,7 +176,6 @@ inline void physicsUpdate(Scene& sc, float dt) {
     if (dt > 0.05f) dt = 0.05f;
     if (!sc.root) return;
 
-    // Смена сцены -> полный сброс мира
     if (g_physScene != &sc) physicsReset();
     g_physScene = &sc;
 
@@ -195,7 +188,6 @@ inline void physicsUpdate(Scene& sc, float dt) {
         for (auto& kv : g_bodies) names.push_back(kv.first);
     }
 
-    // Синхронизация записей с нодами и телами
     for (auto& nm : names) {
         Body* Bp;
         { std::lock_guard<std::mutex> lk(g_bodiesMtx); Bp = bodyGet(nm); }
@@ -212,23 +204,19 @@ inline void physicsUpdate(Scene& sc, float dt) {
         if (!B.bb) createB2Body(nm, B, n);
         if (!B.bb) continue;
 
-        // живые правки параметров
         B.bb->SetGravityScale(B.gravity ? 1.0f : 0.0f);
         for (b2Fixture* f = B.bb->GetFixtureList(); f; f = f->GetNext()) {
             f->SetFriction(B.friction);
             f->SetRestitution(B.restitution);
         }
         if (B.isStatic) {
-            // статика следует за позицией ноды (редактор/Lua)
             B.bb->SetTransform(b2Vec2(n->position.x * INV_PPM, n->position.y * INV_PPM), n->rotation);
         }
     }
 
-    // Шаг мира
     const int SUB = 2;
     for (int s = 0; s < SUB; ++s) g_world->Step(dt / SUB, 8, 3);
 
-    // Чтение результатов обратно в ноды + onGround + скорости для Lua
     for (auto& nm : names) {
         Body* Bp;
         { std::lock_guard<std::mutex> lk(g_bodiesMtx); Bp = bodyGet(nm); }
@@ -248,7 +236,6 @@ inline void physicsUpdate(Scene& sc, float dt) {
             B.vx = v.x * PPM; B.vy = v.y * PPM;
             B.w = bb->GetAngularVelocity();
         }
-        // земля: любой касающийся контакт с точкой ниже центра
         B.onGround = false;
         for (b2ContactEdge* ce = bb->GetContactList(); ce; ce = ce->next) {
             b2Contact* ct = ce->contact;
@@ -265,7 +252,6 @@ inline void physicsUpdate(Scene& sc, float dt) {
     }
 }
 
-// ==== Отладочные хитбоксы: реальные формы Box2D ====
 inline void emitBodiesDebug(Scene& sc, std::string& out, float S, float OX, float OY) {
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
     for (auto& kv : g_bodies) {
@@ -311,7 +297,6 @@ inline void emitBodiesDebug(Scene& sc, std::string& out, float S, float OX, floa
     }
 }
 
-// ================= Lua-биндинги =================
 static int l_add_rigidbody(lua_State* L) {
     const char* nm = luaL_checkstring(L, 1);
     float mass = lua_gettop(L) >= 2 && lua_isnumber(L, 2) ? (float)lua_tonumber(L, 2) : 1.0f;
