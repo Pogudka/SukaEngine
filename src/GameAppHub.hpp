@@ -70,6 +70,8 @@ inline std::string GameApp::stepHub() {
         if (pendingNewProject_) out += "REQ_NAME|Project\n";
         else if (pendingHubRename_) out += "REQ_NAME|" + pendingHubCurrentName_ + "\n";
     }
+    // Звуковая очередь дренируется и в хабе: STOP/выход гасят музыку всегда.
+    drainSoundCmds(out);
     out += "MODE|hub\n";
     out += "RES|1280|720\n";
     input_.endFrame(); return out;
