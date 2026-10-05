@@ -331,6 +331,8 @@ inline int GameApp::applyEditorAction(const std::string& act) {
     if (act == "scup") { scriptScroll_ -= 3; imeChanged_ = true; rebuild(); return 1; }
     if (act == "scdn") { scriptScroll_ += 3; imeChanged_ = true; rebuild(); return 1; }
     if (act == "snew") { pendingName_ = true; pendingKind_ = 2; rebuild(); return 1; }
+    // Панель функций: независима от меню создания (ряды разведены по вертикали).
+    if (act == "funcs_open") { showFuncs_ = !showFuncs_; rebuild(); return 1; }
     if (scriptMode_) return 0;
 
     Node* sn = editor_->selected();
@@ -470,7 +472,6 @@ inline int GameApp::applyEditorAction(const std::string& act) {
             }
             return 0;
         }
-        // Звуковой файл: назначить на Sound-объект, иначе подсказать (НЕ как текстуру).
         {
             size_t dpos = rel.find_last_of('.');
             if (dpos != std::string::npos) {
@@ -513,7 +514,7 @@ inline int GameApp::applyEditorAction(const std::string& act) {
     if (act == "manip:move") { manip_ = Manip::Move; rebuild(); return 1; }
     if (act == "manip:rotate") { manip_ = Manip::Rotate; rebuild(); return 1; }
     if (act == "manip:scale") { manip_ = Manip::Scale; rebuild(); return 1; }
-    if (act == "create_open") { showCreate_ = !showCreate_; if (showCreate_) showFuncs_ = false; rebuild(); return 1; }
+    if (act == "create_open") { showCreate_ = !showCreate_; rebuild(); return 1; }
     if (act == "edit_text") { if (!lk) { pendingRgb_ = 0; if (ub) { pendingText_ = true; pendingTextCur_ = ub->text; } else if (sn && std::string(sn->typeName()) == "Label") { pendingText_ = true; pendingTextCur_ = static_cast<Label*>(sn)->text; } } return 0; }
     if (act == "edit_action") { if (!lk) { pendingAction_ = true; pendingActionCur_ = ub ? ub->action : (s2 ? s2->action : std::string("")); } return 0; }
     if (act.rfind("num:", 0) == 0) {
@@ -716,9 +717,6 @@ inline std::string GameApp::stepEditor() {
         clearTransition();
         appMode_ = AppMode::Hub; rebuildHub(); return "";
     }
-    // Меню создания и меню функций не могут быть открыты одновременно.
-    if (showCreate_ && showFuncs_) showFuncs_ = false;
-
     consumeDialogResults();
     if (scriptMode_) imeApply();
     if (dragging_ || gizmoRot_ || gizmoSclX_ || gizmoSclY_ || gizmoRotUi_) { buildEditorPanels(); input_.setUi(&editorScene_.ui); }
@@ -756,7 +754,6 @@ inline std::string GameApp::stepEditor() {
             drawParticlePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY, sel);
             drawTexturePreviewTree(*es->root, ident, out, edZoom_, es->camX, es->camY);
 
-            // Маркеры объектов звука — ВНУТРИ клипа вьюпорта, имя обрезано.
             std::vector<Node*> stack;
             stack.push_back(es->root.get());
             while (!stack.empty()) {
@@ -781,9 +778,8 @@ inline std::string GameApp::stepEditor() {
         }
         emitEditorGizmos(*editor_->scene(), out, makeEditorRenderInput());
 
-        // Панель звука выделенного Sound-объекта — тоже внутри вьюпорта.
         {
-            Node* snp = editor_->selected();
+            Node* snp = editor_ ? editor_->selected() : nullptr;
             if (snp && projSounds_.count(snp->name)) {
                 SoundDef& sd = projSounds_[snp->name];
                 out += "DRAW text|sound: " + (sd.snd.empty() ? std::string("-") : sd.snd) + "|310|498|14|#2EC4B6|0\n";
@@ -807,24 +803,24 @@ inline std::string GameApp::stepEditor() {
         out += "DRAW text|" + oTxt + "|" + std::to_string((int)CAM_PX0 + 6) + "|" + std::to_string((int)CAM_BTN_O_Y0 + 2) + "|14|#FFD700|0\n";
     }
 
-    // Кнопка FN в стиле тулбара (скруглённая) + ряд функций внизу (y=652, не пересекает меню создания)
+    // Ряд функций: своя тёмная подложка во всю ширину, ниже рядов создания (y=656),
+    // поэтому меню [+] и [FN] могут быть открыты одновременно и НЕ перекрываются.
+    if (!scriptMode_ && showFuncs_) {
+        int fy = (int)FNR_Y;
+        out += "DRAW rect|300|" + std::to_string(fy - 4) + "|592|34|#14141C|0\n";
+        out += "DRAW button|RIGIDBODY|300|" + std::to_string(fy) + "|110|26|#8E44AD|0|\n";
+        out += "DRAW button|STATICBODY|414|" + std::to_string(fy) + "|110|26|#8E44AD|0|\n";
+        out += "DRAW button|NOGRAV|528|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
+        out += "DRAW button|BOUNCY|612|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
+        out += "DRAW button|CLEAR|696|" + std::to_string(fy) + "|70|26|#555566|0|\n";
+        out += "DRAW button|X|860|" + std::to_string(fy) + "|32|26|#D62828|0|\n";
+    }
+    if (!scriptMode_ && funcMsgTimer_ > 0) {
+        --funcMsgTimer_;
+        out += "DRAW rect|300|64|592|26|#FFD700|0\n";
+        out += "DRAW text|" + funcMsg_ + "|306|68|16|#1A1A2E|0\n";
+    }
     if (!scriptMode_) {
-        out += "DRAW button|FN|" + std::to_string((int)FN_BTN_X) + "|" + std::to_string((int)FN_BTN_Y) + "|" + std::to_string((int)FN_BTN_W) + "|" + std::to_string((int)FN_BTN_H) + "|" + (showFuncs_ ? "#FFD700" : "#FF8800") + "|0|\n";
-        if (showFuncs_) {
-            int fy = (int)FNR_Y;
-            out += "DRAW rect|300|" + std::to_string(fy) + "|592|26|#20202A|0\n";
-            out += "DRAW button|RIGIDBODY|300|" + std::to_string(fy) + "|110|26|#8E44AD|0|\n";
-            out += "DRAW button|STATICBODY|414|" + std::to_string(fy) + "|110|26|#8E44AD|0|\n";
-            out += "DRAW button|NOGRAV|528|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
-            out += "DRAW button|BOUNCY|612|" + std::to_string(fy) + "|80|26|#8E44AD|0|\n";
-            out += "DRAW button|CLEAR|696|" + std::to_string(fy) + "|70|26|#555566|0|\n";
-            out += "DRAW button|X|860|" + std::to_string(fy) + "|32|26|#D62828|0|\n";
-        }
-        if (funcMsgTimer_ > 0) {
-            --funcMsgTimer_;
-            out += "DRAW rect|300|64|592|26|#FFD700|0\n";
-            out += "DRAW text|" + funcMsg_ + "|306|68|16|#1A1A2E|0\n";
-        }
         Node* fsn = editor_ ? editor_->selected() : nullptr;
         if (fsn) {
             std::string ff = funcsOf(fsn->name);
@@ -842,6 +838,7 @@ inline std::string GameApp::stepEditor() {
     if (pendingAction_ && appMode_ == AppMode::Editor) { out += "REQ_ACTION|" + pendingActionCur_ + "\n"; pendingAction_ = false; }
     if (pendingNum_ && appMode_ == AppMode::Editor) { out += "REQ_NUM|" + pendingNumCur_ + "\n"; pendingNum_ = false; }
     if (!pendingImportCategory_.empty() && appMode_ == AppMode::Editor) { out += "REQ_IMPORT|" + pendingImportCategory_ + "|" + project_.rootPath + "\n"; pendingImportCategory_.clear(); }
+    drainSoundCmds(out);   // PLAY/STOP/MS звучат и гаснут прямо в редакторе
     out += "MODE|editor\n";
     out += "RES|1280|720\n";
     input_.endFrame(); return out;
