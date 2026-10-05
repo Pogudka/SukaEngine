@@ -185,6 +185,21 @@ inline std::string GameApp::stepGame() {
         }
     }
 
+    // Отладочные хитбоксы в игре (в логических координатах с учётом камеры).
+    if (g_showBodies && sceneMgr_ && sceneMgr_->current()) {
+        Scene* bs = sceneMgr_->current();
+        float S2 = 1.0f, OX2 = 0.0f, OY2 = 0.0f;
+        Node* cn2 = bs->root ? bs->root->findByType("Camera2D") : nullptr;
+        if (cn2) {
+            Camera2D* cm2 = static_cast<Camera2D*>(cn2);
+            float z2 = cm2->zoom > 0.01f ? cm2->zoom : 1.0f;
+            S2 = z2;
+            OX2 = logicW_ * 0.5f - z2 * cm2->position.x;
+            OY2 = logicH_ * 0.5f - z2 * cm2->position.y;
+        }
+        emitBodiesDebug(*bs, out, S2, OX2, OY2);
+    }
+
     if (transActive_) out += "TRANS|" + std::to_string(transType_) + "|" + std::to_string(transPhase_) + "|" + std::to_string(transProgress_) + "\n";
     else out += "TRANS|0|0|0\n";
 
