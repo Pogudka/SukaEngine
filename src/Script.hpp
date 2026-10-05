@@ -1,12 +1,31 @@
 #pragma once
 
 #include <string>
-#include <sstream>
+#include <vector>
 #include <map>
-#include <iostream>
-#include <cmath>
+#include <fstream>
+#include <sstream>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cctype>
+#include <algorithm>
+#include <utility>
+#include <mutex>
+#include <type_traits>
+#include <dirent.h>
 
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
+}
+
+#include "Core.hpp"
 #include "Scene.hpp"
+#include "Particles.hpp"
+#include "LuaGameApi.hpp"
+#include "Physics.hpp"
 
 namespace suka {
 
@@ -140,10 +159,9 @@ static int l_hide(lua_State* L) { Node2D* n = findNode2D(luaL_checkstring(L,1));
 static int l_show(lua_State* L) { Node2D* n = findNode2D(luaL_checkstring(L,1)); if (n) n->alpha=1.0f; return 0; }
 static int l_exists(lua_State* L) { lua_pushboolean(L, findNode2D(luaL_checkstring(L,1)) != nullptr || findUi(lua_tostring(L,1)) != nullptr); return 1; }
 
-// === ВСТАВКА 1: Lua видит "кнопка зажата" (для удержания d-pad в level2). ===
-// Читает g_scene->ui[].touch.pressed. g_scene жива только внутри
-// on_update / callGlobal / callCollide, поэтому звать из этих колбэков
-// корректно; вне колбэка вернёт false (g_scene == nullptr).
+// === ВСТАВКА 1: Lua видит "кнопка зажата" (удержание d-pad в level2). ===
+// g_scene жива только внутри on_update / callGlobal / callCollide, поэтому
+// звать из этих колбэков корректно; вне колбэка вернёт false.
 static int l_get_button_pressed(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     bool p = false;
