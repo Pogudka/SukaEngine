@@ -1,19 +1,35 @@
 {
   "name": "Main",
-  "gravity": 0,
+  "gravity": 900,
   "bg": "#16213E",
   "nodes": [
-    { "type": "Label", "name": "Title", "x": 640, "y": 70, "text": "SukaEngine Demo 2", "font_size": 34, "color": "#F4EDE4" },
-    { "type": "Label", "name": "Hint", "x": 640, "y": 112, "text": "tap red box / gem / buttons", "font_size": 18, "color": "#87CEEB" },
-    { "type": "Node2D", "name": "Box", "x": 420, "y": 320, "w": 90, "h": 90, "shape": "square", "color": "#D62828", "action": "call:boxTap" },
-    { "type": "Label", "name": "Counter", "x": 420, "y": 402, "text": "taps: {taps}", "font_size": 22, "color": "#FCBF49" },
-    { "type": "Light2D", "name": "Lamp", "x": 820, "y": 300, "radius": 170, "color": "#FFD700" },
-    { "type": "Node2D", "name": "Gem", "x": 820, "y": 300, "w": 46, "h": 46, "shape": "diamond", "color": "#2EC4B6", "action": "call:gemTap" },
-    { "type": "Node2D", "name": "Spinner", "x": 640, "y": 520, "w": 120, "h": 16, "shape": "square", "color": "#F4EDE4" }
+    { "type": "Label", "name": "Title", "x": 640, "y": 40,  "text": "SukaEngine Demo 3", "font_size": 30, "color": "#F4EDE4" },
+    { "type": "Label", "name": "Hint",  "x": 640, "y": 74,  "text": "tap player / gem / enemies / buttons", "font_size": 16, "color": "#87CEEB" },
+    { "type": "Label", "name": "Stats", "x": 640, "y": 104, "text": "score {score}  hits {taps}  alive {enemies}  grav {grav}  hb {hb}  snd {snd}  nog {nog}", "font_size": 16, "color": "#FCBF49" },
+
+    { "type": "Node2D", "name": "Ground",   "x": 640,  "y": 712, "w": 1280, "h": 28,  "shape": "square", "color": "#555566" },
+    { "type": "Node2D", "name": "WallL",    "x": 16,   "y": 360, "w": 32,   "h": 720, "shape": "square", "color": "#444455" },
+    { "type": "Node2D", "name": "WallR",    "x": 1264, "y": 360, "w": 32,   "h": 720, "shape": "square", "color": "#444455" },
+    { "type": "Node2D", "name": "Plat1",    "x": 340,  "y": 500, "w": 220,  "h": 22,  "shape": "square", "color": "#77AA77" },
+    { "type": "Node2D", "name": "Plat2",    "x": 920,  "y": 420, "w": 220,  "h": 22,  "shape": "square", "color": "#77AA77" },
+
+    { "type": "Node2D", "name": "Box",      "x": 140,  "y": 600, "w": 44, "h": 60, "shape": "square",  "color": "#66CCFF", "action": "call:boxTap" },
+    { "type": "Node2D", "name": "KillZone", "x": 1180, "y": 640, "w": 80, "h": 80, "shape": "square",  "color": "#FF3333" },
+    { "type": "Node2D", "name": "Checkpoint","x": 640, "y": 640, "w": 50, "h": 50, "shape": "circle",  "color": "#33FF99", "action": "call:cpTap" },
+    { "type": "Node2D", "name": "Coin",     "x": 920,  "y": 360, "w": 26, "h": 26, "shape": "circle",  "color": "#FFD966", "action": "call:coinTap" },
+    { "type": "Node2D", "name": "Enemy1",   "x": 520,  "y": 640, "w": 40, "h": 40, "shape": "square",  "color": "#FF7755", "action": "call:enemyTap" },
+    { "type": "Node2D", "name": "Enemy2",   "x": 1000, "y": 360, "w": 40, "h": 40, "shape": "circle",  "color": "#AA55FF", "action": "call:enemyTap" },
+
+    { "type": "Light2D", "name": "Lamp",    "x": 920,  "y": 360, "radius": 150, "color": "#FFD700" }
   ],
   "ui": [
-    { "id": "go",   "x": 1050, "y": 600, "w": 160, "h": 70, "text": "GO",   "action": "call:go", "color": "#2EC4B6" },
-    { "id": "spin", "x": 850,  "y": 600, "w": 160, "h": 70, "text": "SPIN", "action": "set_var:spinning:1", "color": "#FCBF49" },
-    { "id": "stop", "x": 650,  "y": 600, "w": 160, "h": 70, "text": "STOP", "action": "set_var:spinning:0", "color": "#D62828" }
+    { "id": "jump",  "x": 110, "y": 648, "w": 180, "h": 44, "text": "JUMP",  "action": "call:doJump",     "color": "#2EC4B6" },
+    { "id": "fire",  "x": 330, "y": 648, "w": 180, "h": 44, "text": "FIRE",  "action": "call:doFire",     "color": "#FCBF49" },
+    { "id": "grav",  "x": 550, "y": 648, "w": 180, "h": 44, "text": "GRAV",  "action": "call:toggleGrav",  "color": "#87CEEB" },
+    { "id": "bnc",   "x": 770, "y": 648, "w": 180, "h": 44, "text": "BOUNCE","action": "call:toggleBounce","color": "#F4EDE4" },
+    { "id": "hb",    "x": 110, "y": 700, "w": 180, "h": 44, "text": "HITBOX","action": "call:toggleHB",    "color": "#9B5DE5" },
+    { "id": "snd",   "x": 330, "y": 700, "w": 180, "h": 44, "text": "SOUND", "action": "call:toggleMute",  "color": "#00F5D4" },
+    { "id": "nog",   "x": 550, "y": 700, "w": 180, "h": 44, "text": "NOGRAV","action": "call:toggleNoGrav","color": "#F15BB5" },
+    { "id": "reset", "x": 770, "y": 700, "w": 180, "h": 44, "text": "RESET", "action": "call:go",          "color": "#D62828" }
   ]
 }
