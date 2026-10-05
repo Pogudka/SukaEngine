@@ -86,13 +86,8 @@ inline void GameApp::feedTouch(int action, float x, float y) {
         }
     }
 
-    // Панель функций F
+    // Ряд кнопок функций (кнопка FN теперь в тулбаре как ui-кнопка).
     if (appMode_ == AppMode::Editor && !scriptMode_) {
-        if (t.action == RawTouch::Action::Down && x >= FN_BTN_X && x <= FN_BTN_X + FN_BTN_W && y >= FN_BTN_Y && y <= FN_BTN_Y + FN_BTN_H) {
-            showFuncs_ = !showFuncs_;
-            if (showFuncs_) showCreate_ = false;
-            return;
-        }
         if (showFuncs_ && t.action == RawTouch::Action::Down && y >= FNR_Y && y <= FNR_Y + FNR_H) {
             if (x >= FNR_RIG_X0 && x <= FNR_RIG_X1) { addFuncToSelected("rigidbody"); return; }
             if (x >= FNR_STA_X0 && x <= FNR_STA_X1) { addFuncToSelected("staticbody"); return; }
@@ -103,7 +98,7 @@ inline void GameApp::feedTouch(int action, float x, float y) {
         }
     }
 
-    // Инспектор звука
+    // Панель звука выделенного Sound-объекта (внизу вьюпорта).
     if (appMode_ == AppMode::Editor && !scriptMode_ && t.action == RawTouch::Action::Down
         && y >= SNP_Y0 && y <= SNP_Y1) {
         Node* sn0 = editor_ ? editor_->selected() : nullptr;
