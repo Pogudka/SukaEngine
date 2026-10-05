@@ -1,10 +1,11 @@
 #pragma once
 
-#include <memory>
+#include <iostream>
 #include <string>
 #include <vector>
 #include <map>
-#include <iostream>
+#include <memory>
+#include <cmath>
 
 #include "Nodes.hpp"
 #include "Json.hpp"
@@ -56,8 +57,13 @@ public:
     bool bgSet() const { return !bg.empty(); }
 
     void update(Context& ctx, double dt) {
-        if (root) { root->update(ctx, dt); if (gravity > 0.0f) physicsStep(ctx, dt); root->prune(); }
+        if (root) {
+            root->update(ctx, dt);
+            if (gravity > 0.0f) physicsStep(ctx, dt);
+            root->prune();
+        }
     }
+
     void resolveLinks() {
         if (!root) return;
         Node* camNode = root->findByType("Camera2D");
@@ -74,86 +80,258 @@ private:
         if (n2 && std::string(n2->typeName()) == t) out.push_back(n2);
         for (auto& c : n.getChildren()) collectByType(*c, t, out);
     }
+
     static bool aabb(Player* p, Solid2D* s) {
-        return std::abs(p->position.x - s->position.x) < 16.0f + s->w/2.0f && std::abs(p->position.y - s->position.y) < 16.0f + s->h/2.0f;
+        return std::abs(p->position.x - s->position.x) < 16.0f + s->w / 2.0f &&
+               std::abs(p->position.y - s->position.y) < 16.0f + s->h / 2.0f;
     }
+
     void physicsStep(Context& ctx, double dt) {
         if (!root) return;
-        std::vector<Node2D*> players, solids;
-        collectByType(*root, "Player", players); collectByType(*root, "Solid2D", solids);
+
+        std::vector<Node2D*> players, solids, enemies;
+        collectByType(*root, "Player", players);
+        collectByType(*root, "Solid2D", solids);
+        collectByType(*root, "Enemy", enemies);
+
         for (auto* pn : players) {
             Player* pl = static_cast<Player*>(pn);
-            if (pl->mode != "platformer") continue;
+            if (pl->dead || pl->mode != "platformer") continue;
+
+            // Horizontal movement.
             pl->position.x += ctx.input.joystickX * pl->speed * float(dt);
-            for (auto* sn : solids) { Solid2D* s = static_cast<Solid2D*>(sn);
-                if (aabb(pl, s)) { if (pl->position.x < s->position.x) pl->position.x = s->position.x - s->w/2 - 16; else pl->position.x = s->position.x + s->w/2 + 16; } }
+
+            // Horizontal solid collision.
+            for (auto* sn : solids) {
+                Solid2D* s = static_cast<Solid2D*>(sn);
+                if (s->dead) continue;
+
+                if (aabb(pl, s)) {
+                    if (pl->position.x < s->position.x) {
+                        pl->position.x = s->position.x - s->w / 2 - 16;
+                    } else {
+                        pl->position.x = s->position.x + s->w / 2 + 16;
+                    }
+                }
+            }
+
+            // Gravity and jump.
             pl->vy += gravity * float(dt);
-            if (ctx.input.jumpPressed && pl->grounded) { pl->vy = -pl->jumpSpeed; pl->grounded = false; }
-            pl->position.y += pl->vy * float(dt); pl->grounded = false;
-            for (auto* sn : solids) { Solid2D* s = static_cast<Solid2D*>(sn);
-                if (aabb(pl, s)) { if (pl->vy > 0) { pl->position.y = s->position.y - s->h/2 - 16; pl->vy = 0; pl->grounded = true; }
-                    else if (pl->vy < 0) { pl->position.y = s->position.y + s->h/2 + 16; pl->vy = 0; } } }
-            ctx.playerPos = pl->position; ctx.hasPlayer = true;
+
+            if (ctx.input.jumpPressed && pl->grounded) {
+                pl->vy = -pl->jumpSpeed;
+                pl->grounded = false;
+            }
+
+            pl->position.y += pl->vy * float(dt);
+            pl->grounded = false;
+
+            // Vertical solid collision.
+            for (auto* sn : solids) {
+                Solid2D* s = static_cast<Solid2D*>(sn);
+                if (s->dead) continue;
+
+                if (aabb(pl, s)) {
+                    if (pl->vy > 0) {
+                        pl->position.y = s->position.y - s->h / 2 - 16;
+                        pl->vy = 0;
+                        pl->grounded = true;
+                    } else if (pl->vy < 0) {
+                        pl->position.y = s->position.y + s->h / 2 + 16;
+                        pl->vy = 0;
+                    }
+                }
+            }
+
+            // ------------------------------------------------------------------
+            // Minimal enemy damage patch.
+            //
+            // The original engine has no hp/respawn channel for platformer Player.
+            // This patch adds:
+            //   - horizontal knockback/separation from Enemy;
+            //   - small upward impulse;
+            //   - score penalty as "damage".
+            //
+            // A short cooldown is stored in ctx.vars["_enemyHitCd"] to avoid
+            // draining score every frame while overlapping.
+            // ------------------------------------------------------------------
+            double hitCd = 0.0;
+            auto cdIt = ctx.vars.find("_enemyHitCd");
+            if (cdIt != ctx.vars.end()) hitCd = cdIt->second;
+
+            if (hitCd > 0.0) {
+                hitCd -= dt;
+                if (hitCd < 0.0) hitCd = 0.0;
+                ctx.vars["_enemyHitCd"] = hitCd;
+            }
+
+            for (auto* en : enemies) {
+                Enemy* e = static_cast<Enemy*>(en);
+                if (e->dead) continue;
+
+                float halfW = 16.0f + e->w * 0.5f;
+                float halfH = 16.0f + e->h * 0.5f;
+
+                if (std::abs(pl->position.x - e->position.x) < halfW &&
+                    std::abs(pl->position.y - e->position.y) < halfH) {
+
+                    // Always separate horizontally so the player is not stuck inside enemy.
+                    if (pl->position.x < e->position.x) {
+                        pl->position.x = e->position.x - halfW - 2.0f;
+                    } else {
+                        pl->position.x = e->position.x + halfW + 2.0f;
+                    }
+
+                    // Apply damage only if cooldown expired.
+                    if (hitCd <= 0.0) {
+                        pl->vy = -220.0f;
+                        pl->grounded = false;
+
+                        if (ctx.score > 0) ctx.score -= 5;
+
+                        ctx.vars["_enemyHitCd"] = 0.8;
+                        hitCd = 0.8;
+                    }
+                }
+            }
+
+            ctx.playerPos = pl->position;
+            ctx.hasPlayer = true;
         }
     }
 };
 
 inline std::vector<std::string> splitTopObjects(const std::string& arr) {
     std::vector<std::string> out;
-    int depth = 0; bool inStr = false; bool esc = false; bool have = false; size_t start = 0;
+    int depth = 0;
+    bool inStr = false;
+    bool esc = false;
+    bool have = false;
+    size_t start = 0;
+
     for (size_t i = 0; i < arr.size(); ++i) {
         char c = arr[i];
+
         if (inStr) {
             if (esc) esc = false;
             else if (c == '\\') esc = true;
             else if (c == '"') inStr = false;
             continue;
         }
-        if (c == '"') { inStr = true; continue; }
-        if (c == '{') { if (depth == 0) { start = i; have = true; } depth++; }
-        else if (c == '}') {
+
+        if (c == '"') {
+            inStr = true;
+            continue;
+        }
+
+        if (c == '{') {
+            if (depth == 0) {
+                start = i;
+                have = true;
+            }
+            depth++;
+        } else if (c == '}') {
             if (depth > 0) depth--;
-            if (depth == 0 && have) { out.push_back(arr.substr(start, i - start + 1)); have = false; }
+            if (depth == 0 && have) {
+                out.push_back(arr.substr(start, i - start + 1));
+                have = false;
+            }
         }
     }
+
     return out;
 }
 
 class SceneLoader {
 public:
-    static std::unique_ptr<Node2D> parseNode(const std::string& obj, const std::string& fontPath,
-                                              const std::string& projectRoot, Scene* ownerScene) {
-        std::string type; jsonGetString(obj, "type", type);
+    static std::unique_ptr<Node2D> parseNode(const std::string& obj,
+                                             const std::string& fontPath,
+                                             const std::string& projectRoot,
+                                             Scene* ownerScene) {
+        std::string type;
+        jsonGetString(obj, "type", type);
+
         std::unique_ptr<Node2D> node2d;
 
         if (type == "Label") {
             auto label = std::make_unique<Label>();
             jsonGetString(obj, "text", label->text);
-            float fontSize = 0; if (jsonGetNumber(obj, "font_size", fontSize)) label->fontSize = (int)fontSize;
-            label->fontName = DEFAULT_FONT_NAME; label->fontPath = fontPath; label->color = currentTheme().ink;
+
+            float fontSize = 0;
+            if (jsonGetNumber(obj, "font_size", fontSize)) label->fontSize = (int)fontSize;
+
+            label->fontName = DEFAULT_FONT_NAME;
+            label->fontPath = fontPath;
+            label->color = currentTheme().ink;
+
             node2d = std::move(label);
         }
         else if (type == "Sprite2D") {
             auto sprite = std::make_unique<Sprite2D>();
             jsonGetString(obj, "texture", sprite->texturePath);
-            float w = 0, h = 0; if (jsonGetNumber(obj, "w", w)) sprite->size.x = w; if (jsonGetNumber(obj, "h", h)) sprite->size.y = h;
+
+            float w = 0, h = 0;
+            if (jsonGetNumber(obj, "w", w)) sprite->size.x = w;
+            if (jsonGetNumber(obj, "h", h)) sprite->size.y = h;
+
             node2d = std::move(sprite);
         }
         else if (type == "Player") {
             auto player = std::make_unique<Player>();
-            float speed = 0; if (jsonGetNumber(obj, "speed", speed)) player->speed = speed;
+
+            float speed = 0;
+            if (jsonGetNumber(obj, "speed", speed)) player->speed = speed;
+
             jsonGetString(obj, "mode", player->mode);
-            float js = 0; if (jsonGetNumber(obj, "jump_speed", js)) player->jumpSpeed = js;
+
+            float js = 0;
+            if (jsonGetNumber(obj, "jump_speed", js)) player->jumpSpeed = js;
+
             node2d = std::move(player);
         }
-        else if (type == "Enemy") { auto e = std::make_unique<Enemy>(); float s = 0; if (jsonGetNumber(obj, "speed", s)) e->speed = s; node2d = std::move(e); }
-        else if (type == "Coin") { auto c = std::make_unique<Coin>(); float r = 0; if (jsonGetNumber(obj, "radius", r)) c->radius = r; node2d = std::move(c); }
-        else if (type == "Solid2D") { auto s = std::make_unique<Solid2D>(); float w = 0, h = 0; if (jsonGetNumber(obj, "w", w)) s->w = w; if (jsonGetNumber(obj, "h", h)) s->h = h; node2d = std::move(s); }
-        else if (type == "Camera2D") { auto c = std::make_unique<Camera2D>(); jsonGetString(obj, "follow", c->followName); float z = 0; if (jsonGetNumber(obj, "zoom", z)) c->zoom = z; node2d = std::move(c); }
-        else if (type == "Light2D") { auto l = std::make_unique<Light2D>(); float r = 0; if (jsonGetNumber(obj, "radius", r)) l->radius = r; float i = 0; if (jsonGetNumber(obj, "intensity", i)) l->intensity = i; node2d = std::move(l); }
+        else if (type == "Enemy") {
+            auto e = std::make_unique<Enemy>();
+            float s = 0;
+            if (jsonGetNumber(obj, "speed", s)) e->speed = s;
+            node2d = std::move(e);
+        }
+        else if (type == "Coin") {
+            auto c = std::make_unique<Coin>();
+            float r = 0;
+            if (jsonGetNumber(obj, "radius", r)) c->radius = r;
+            node2d = std::move(c);
+        }
+        else if (type == "Solid2D") {
+            auto s = std::make_unique<Solid2D>();
+            float w = 0, h = 0;
+            if (jsonGetNumber(obj, "w", w)) s->w = w;
+            if (jsonGetNumber(obj, "h", h)) s->h = h;
+            node2d = std::move(s);
+        }
+        else if (type == "Camera2D") {
+            auto c = std::make_unique<Camera2D>();
+            jsonGetString(obj, "follow", c->followName);
+
+            float z = 0;
+            if (jsonGetNumber(obj, "zoom", z)) c->zoom = z;
+
+            node2d = std::move(c);
+        }
+        else if (type == "Light2D") {
+            auto l = std::make_unique<Light2D>();
+
+            float r = 0;
+            if (jsonGetNumber(obj, "radius", r)) l->radius = r;
+
+            float i = 0;
+            if (jsonGetNumber(obj, "intensity", i)) l->intensity = i;
+
+            node2d = std::move(l);
+        }
         else if (type == "Particle2D") {
             auto pe = std::make_unique<Particle2D>();
             float f = 0;
+
             if (jsonGetNumber(obj, "rate", f)) pe->rate = f;
             if (jsonGetNumber(obj, "burst", f)) pe->burst = (int)f;
             if (jsonGetNumber(obj, "vx", f)) pe->vx = f;
@@ -165,8 +343,12 @@ public:
             if (jsonGetNumber(obj, "size", f)) pe->size = f;
             if (jsonGetNumber(obj, "size_end", f)) pe->sizeEnd = f;
             if (jsonGetNumber(obj, "drag", f)) pe->drag = f;
+
             jsonGetString(obj, "glyph", pe->glyph);
-            float em = 0; if (jsonGetNumber(obj, "emitting", em)) pe->emitting = (em != 0);
+
+            float em = 0;
+            if (jsonGetNumber(obj, "emitting", em)) pe->emitting = (em != 0);
+
             node2d = std::move(pe);
         }
         else if (type == "Prefab2D") {
@@ -174,25 +356,46 @@ public:
             jsonGetString(obj, "source", pf->sourcePath);
             node2d = std::move(pf);
         }
-        else node2d = std::make_unique<Node2D>();
+        else {
+            node2d = std::make_unique<Node2D>();
+        }
 
         jsonGetString(obj, "name", node2d->name);
-        float x = 0, y = 0; if (jsonGetNumber(obj, "x", x)) node2d->position.x = x; if (jsonGetNumber(obj, "y", y)) node2d->position.y = y;
+
+        float x = 0, y = 0;
+        if (jsonGetNumber(obj, "x", x)) node2d->position.x = x;
+        if (jsonGetNumber(obj, "y", y)) node2d->position.y = y;
 
         std::string shapeStr, colorStr, texStr, actStr;
-        jsonGetString(obj, "shape", shapeStr); if (!shapeStr.empty()) node2d->shape = shapeStr;
-        jsonGetString(obj, "color", colorStr); if (!colorStr.empty()) node2d->color = parseColor(colorStr);
-        if (type != "Sprite2D") { jsonGetString(obj, "texture", texStr); if (!texStr.empty()) node2d->texture = texStr; }
-        jsonGetString(obj, "action", actStr); if (!actStr.empty()) node2d->action = actStr;
 
-        float aw = 0, ah = 0; if (jsonGetNumber(obj, "w", aw)) node2d->w = aw; if (jsonGetNumber(obj, "h", ah)) node2d->h = ah;
+        jsonGetString(obj, "shape", shapeStr);
+        if (!shapeStr.empty()) node2d->shape = shapeStr;
+
+        jsonGetString(obj, "color", colorStr);
+        if (!colorStr.empty()) node2d->color = parseColor(colorStr);
+
+        if (type != "Sprite2D") {
+            jsonGetString(obj, "texture", texStr);
+            if (!texStr.empty()) node2d->texture = texStr;
+        }
+
+        jsonGetString(obj, "action", actStr);
+        if (!actStr.empty()) node2d->action = actStr;
+
+        float aw = 0, ah = 0;
+        if (jsonGetNumber(obj, "w", aw)) node2d->w = aw;
+        if (jsonGetNumber(obj, "h", ah)) node2d->h = ah;
+
         float rotDeg = 0, scx = 1, scy = 1;
         if (jsonGetNumber(obj, "rotation", rotDeg)) node2d->rotation = rotDeg * 3.14159265f / 180.0f;
         if (jsonGetNumber(obj, "scale_x", scx)) node2d->scale.x = scx;
         if (jsonGetNumber(obj, "scale_y", scy)) node2d->scale.y = scy;
 
-        float lk = 0; if (jsonGetNumber(obj, "locked", lk)) node2d->locked = (lk != 0);
-        float alp = 1.0f; if (jsonGetNumber(obj, "alpha", alp)) node2d->alpha = alp;
+        float lk = 0;
+        if (jsonGetNumber(obj, "locked", lk)) node2d->locked = (lk != 0);
+
+        float alp = 1.0f;
+        if (jsonGetNumber(obj, "alpha", alp)) node2d->alpha = alp;
 
         if (type != "Prefab2D") {
             size_t cb = 0, ce = 0;
@@ -205,12 +408,16 @@ public:
         } else {
             static_cast<Prefab2D*>(node2d.get())->instantiate(projectRoot, fontPath, ownerScene);
         }
+
         return node2d;
     }
 
-    static bool load(const std::string& path, Scene& scene,
-                     const std::string& fontPath, const std::string& projectRoot) {
+    static bool load(const std::string& path,
+                     Scene& scene,
+                     const std::string& fontPath,
+                     const std::string& projectRoot) {
         if (!fileExists(path)) return false;
+
         std::string json = readFile(path);
         if (json.empty()) return false;
 
@@ -219,80 +426,127 @@ public:
         jsonGetNumber(json, "gravity", scene.gravity);
         jsonGetString(json, "bg", scene.bg);
 
-        scene.root = std::make_unique<Node>(); scene.root->name = scene.name;
+        scene.root = std::make_unique<Node>();
+        scene.root->name = scene.name;
 
         size_t begin = 0, end = 0;
+
         if (jsonFindArray(json, "nodes", begin, end)) {
             std::string arr = json.substr(begin, end - begin + 1);
+
             for (const auto& obj : splitTopObjects(arr)) {
                 auto n = parseNode(obj, fontPath, projectRoot, &scene);
                 if (n) scene.root->addChild(std::move(n));
             }
         }
 
-        begin = 0; end = 0;
+        begin = 0;
+        end = 0;
+
         if (jsonFindArray(json, "ui", begin, end)) {
             std::string arr = json.substr(begin, end - begin + 1);
+
             for (const auto& obj : splitTopObjects(arr)) {
-                UiButton button; button.color = currentTheme().button;
+                UiButton button;
+                button.color = currentTheme().button;
+
                 jsonGetString(obj, "id", button.touch.id);
                 jsonGetString(obj, "text", button.text);
                 jsonGetString(obj, "action", button.action);
-                std::string btnColor; jsonGetString(obj, "color", btnColor); if (!btnColor.empty()) button.color = parseColor(btnColor);
-                float btnAngle = 0; if (jsonGetNumber(obj, "angle", btnAngle)) button.angle = btnAngle;
+
+                std::string btnColor;
+                jsonGetString(obj, "color", btnColor);
+                if (!btnColor.empty()) button.color = parseColor(btnColor);
+
+                float btnAngle = 0;
+                if (jsonGetNumber(obj, "angle", btnAngle)) button.angle = btnAngle;
+
                 jsonGetString(obj, "texture", button.texture);
                 jsonGetString(obj, "group", button.group);
-                float balpha = 1.0f; if (jsonGetNumber(obj, "alpha", balpha)) button.alpha = balpha;
+
+                float balpha = 1.0f;
+                if (jsonGetNumber(obj, "alpha", balpha)) button.alpha = balpha;
+
                 float x = 0, y = 0, w = 0, h = 0;
-                jsonGetNumber(obj, "x", x); jsonGetNumber(obj, "y", y);
-                jsonGetNumber(obj, "w", w); jsonGetNumber(obj, "h", h);
+                jsonGetNumber(obj, "x", x);
+                jsonGetNumber(obj, "y", y);
+                jsonGetNumber(obj, "w", w);
+                jsonGetNumber(obj, "h", h);
+
                 button.touch.rect = Rect{x, y, w, h};
                 scene.ui.push_back(button);
             }
         }
+
         return true;
     }
 };
 
 // Loads a .prf (scene-format) file: nodes + grouped ui buttons.
-inline bool loadPrefabTree(const std::string& projectRoot, const std::string& relPath,
-                           const std::string& fontPath, std::unique_ptr<Node>& outRoot,
+inline bool loadPrefabTree(const std::string& projectRoot,
+                           const std::string& relPath,
+                           const std::string& fontPath,
+                           std::unique_ptr<Node>& outRoot,
                            std::vector<UiButton>& outUi) {
     Scene tmp;
-    if (!SceneLoader::load(projectRoot + "/" + relPath, tmp, fontPath, projectRoot)) return false;
+
+    if (!SceneLoader::load(projectRoot + "/" + relPath, tmp, fontPath, projectRoot)) {
+        return false;
+    }
+
     outRoot = std::make_unique<Node>();
+
     if (tmp.root) {
         auto kids = tmp.root->takeAllChildren();
         for (auto& k : kids) outRoot->addChild(std::move(k));
     }
+
     outUi = std::move(tmp.ui);
     return true;
 }
 
 inline void Prefab2D::detachInstance(Scene* owner) {
     clearInstanceChildren();
+
     if (owner) {
         for (auto& id : instUiIds) {
             for (auto it = owner->ui.begin(); it != owner->ui.end(); ++it) {
-                if (it->touch.id == id) { owner->ui.erase(it); break; }
+                if (it->touch.id == id) {
+                    owner->ui.erase(it);
+                    break;
+                }
             }
         }
     }
+
     instUiIds.clear();
 }
 
-inline bool Prefab2D::instantiate(const std::string& projectRoot, const std::string& fontPath, Scene* owner) {
+inline bool Prefab2D::instantiate(const std::string& projectRoot,
+                                  const std::string& fontPath,
+                                  Scene* owner) {
     detachInstance(owner);
+
     if (sourcePath.empty()) return false;
+
     std::unique_ptr<Node> loaded;
     std::vector<UiButton> ui;
+
     if (!loadPrefabTree(projectRoot, sourcePath, fontPath, loaded, ui)) return false;
     if (!loaded) return false;
+
     auto kids = loaded->takeAllChildren();
-    for (auto& k : kids) if (k) addChild(std::move(k));
-    if (owner) {
-        for (auto& b : ui) { instUiIds.push_back(b.touch.id); owner->ui.push_back(b); }
+    for (auto& k : kids) {
+        if (k) addChild(std::move(k));
     }
+
+    if (owner) {
+        for (auto& b : ui) {
+            instUiIds.push_back(b.touch.id);
+            owner->ui.push_back(b);
+        }
+    }
+
     return true;
 }
 
@@ -300,20 +554,46 @@ class SceneManager {
 public:
     SceneManager(std::string projectRoot, std::string fontPath)
         : projectRoot_(std::move(projectRoot)), fontPath_(std::move(fontPath)) {}
-    bool changeScene(const std::string& rel, ResourceManager& rm) { return switchTo(rel, rm, false); }
-    bool restartScene(const std::string& rel, ResourceManager& rm) { return switchTo(rel, rm, true); }
-    void requestChange(const std::string& rel, bool force) { pending_ = rel; pendingForce_ = force; hasPending_ = true; }
-    Scene* current() { return scene_; }
-    const std::string& currentPath() const { return currentPath_; }
+
+    bool changeScene(const std::string& rel, ResourceManager& rm) {
+        return switchTo(rel, rm, false);
+    }
+
+    bool restartScene(const std::string& rel, ResourceManager& rm) {
+        return switchTo(rel, rm, true);
+    }
+
+    void requestChange(const std::string& rel, bool force) {
+        pending_ = rel;
+        pendingForce_ = force;
+        hasPending_ = true;
+    }
+
+    Scene* current() {
+        return scene_;
+    }
+
+    const std::string& currentPath() const {
+        return currentPath_;
+    }
 
     void update(Context& ctx, double dt, InputManager& input, ResourceManager& rm) {
         if (hasPending_) {
             hasPending_ = false;
-            const std::string target = pending_; const bool force = pendingForce_;
-            input.joystick.reset(); input.setUi(nullptr);
-            if (switchTo(target, rm, force)) input.setUi(&scene_->ui);
-            else std::cout << "[SceneManager] failed to load: " << target << "\n";
+
+            const std::string target = pending_;
+            const bool force = pendingForce_;
+
+            input.joystick.reset();
+            input.setUi(nullptr);
+
+            if (switchTo(target, rm, force)) {
+                input.setUi(&scene_->ui);
+            } else {
+                std::cout << "[SceneManager] failed to load: " << target << "\n";
+            }
         }
+
         if (scene_) scene_->update(ctx, dt);
     }
 
@@ -321,21 +601,40 @@ private:
     bool switchTo(const std::string& rel, ResourceManager& rm, bool force) {
         if (!force) {
             auto it = cache_.find(rel);
-            if (it != cache_.end() && it->second) { scene_ = it->second.get(); currentPath_ = rel; return true; }
+            if (it != cache_.end() && it->second) {
+                scene_ = it->second.get();
+                currentPath_ = rel;
+                return true;
+            }
         }
+
         Scene next;
         const std::string full = projectRoot_ + "/" + rel;
+
         if (!SceneLoader::load(full, next, fontPath_, projectRoot_)) return false;
+
         auto up = std::make_unique<Scene>(std::move(next));
         Scene* ptr = up.get();
+
         cache_[rel] = std::move(up);
+
         ptr->resolveLinks();
         ptr->root->loadResources(rm, projectRoot_);
-        scene_ = ptr; currentPath_ = rel;
+
+        scene_ = ptr;
+        currentPath_ = rel;
+
         return true;
     }
-    std::string projectRoot_; std::string fontPath_; std::string currentPath_;
-    std::string pending_; bool pendingForce_ = false; bool hasPending_ = false;
+
+    std::string projectRoot_;
+    std::string fontPath_;
+    std::string currentPath_;
+
+    std::string pending_;
+    bool pendingForce_ = false;
+    bool hasPending_ = false;
+
     Scene* scene_ = nullptr;
     std::map<std::string, std::unique_ptr<Scene>> cache_;
 };
