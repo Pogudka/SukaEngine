@@ -22,7 +22,6 @@ extern "C" {
 
 namespace suka {
 
-// Масштаб: 100 пикселей = 1 метр (Box2D любит метры).
 static const float PPM = 100.0f;
 static const float INV_PPM = 1.0f / PPM;
 
@@ -42,6 +41,7 @@ struct Body {
 };
 
 inline std::map<std::string, Body> g_bodies;
+inline std::map<b2Body*, std::string> g_bodyNames;  // отдельный словарь для имён тел
 inline std::mutex g_bodiesMtx;
 inline float g_gravity = 900.0f;
 inline bool g_showBodies = false;
@@ -55,14 +55,12 @@ public:
     void BeginContact(b2Contact* c) override {
         b2Body* a = c->GetFixtureA()->GetBody();
         b2Body* b = c->GetFixtureB()->GetBody();
-        // Box2D v2.4.1: GetUserData() returns b2BodyUserData with uintptr_t pointer
-        uintptr_t uda = a->GetUserData().pointer;
-        uintptr_t udb = b->GetUserData().pointer;
-        if (uda && udb) {
-            const char* na = reinterpret_cast<const char*>(uda);
-            const char* nb = reinterpret_cast<const char*>(udb);
+        // Получаем имена из отдельного словаря
+        auto itA = g_bodyNames.find(a);
+        auto itB = g_bodyNames.find(b);
+        if (itA != g_bodyNames.end() && itB != g_bodyNames.end()) {
             std::lock_guard<std::mutex> lk(g_collideMtx);
-            g_collideEvents.push_back(std::make_pair(std::string(na), std::string(nb)));
+            g_collideEvents.push_back(std::make_pair(itA->second, itB->second));
         }
     }
 };
@@ -87,7 +85,10 @@ inline void bodyRemove(const std::string& nm) {
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
     auto it = g_bodies.find(nm);
     if (it == g_bodies.end()) return;
-    if (it->second.bb && g_world) g_world->DestroyBody(it->second.bb);
+    if (it->second.bb && g_world) {
+        g_bodyNames.erase(it->second.bb);
+        g_world->DestroyBody(it->second.bb);
+    }
     g_bodies.erase(it);
 }
 
@@ -107,6 +108,7 @@ inline void ensureWorld() {
 inline void physicsReset() {
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
     for (auto& kv : g_bodies) kv.second.bb = nullptr;
+    g_bodyNames.clear();
     g_world.reset();
     g_physScene = nullptr;
     std::lock_guard<std::mutex> lk2(g_collideMtx);
@@ -123,9 +125,8 @@ inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     bd.awake = true;
     b2Body* body = g_world->CreateBody(&bd);
     
-    // Box2D v2.4.1: SetUserData takes void* directly
-    void* userData = reinterpret_cast<void*>(const_cast<char*>(nm.c_str()));
-    body->SetUserData(userData);
+    // Сохраняем имя в отдельном словаре (обход проблемы с SetUserData)
+    g_bodyNames[body] = nm;
 
     std::string shape = n->shape;
     B.isCircle = (shape == "circle");
@@ -213,7 +214,10 @@ inline void physicsUpdate(Scene& sc, float dt) {
         Node* rn = sc.root->findNode(nm);
         Node2D* n = rn ? dynamic_cast<Node2D*>(rn) : nullptr;
         if (!n) {
-            if (B.bb && g_world) { g_world->DestroyBody(B.bb); }
+            if (B.bb && g_world) {
+                g_bodyNames.erase(B.bb);
+                g_world->DestroyBody(B.bb);
+            }
             B.bb = nullptr;
             continue;
         }
