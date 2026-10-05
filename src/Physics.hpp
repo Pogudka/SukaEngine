@@ -7,6 +7,7 @@
 #include <cmath>
 #include <mutex>
 #include <algorithm>
+#include <utility>
 
 extern "C" {
 #include "lua.h"
@@ -22,10 +23,10 @@ struct Body {
     bool isCircle = false;
     float mass = 1.0f;
     float vx = 0.0f, vy = 0.0f;
-    float w = 0.0f;             // угловая скорость, рад/с
+    float w = 0.0f;              // угловая скорость, рад/с
     bool gravity = true;
     float restitution = 0.0f;
-    float friction = 0.4f;      // по умолчанию небольшое трение => качение/торможение
+    float friction = 0.4f;
     bool onGround = false;
 };
 
@@ -60,121 +61,168 @@ inline void pushCollideEvent(const std::string& a, const std::string& b) {
     g_collideEvents.push_back(std::make_pair(a, b));
 }
 
+inline float cross2(float ax, float ay, float bx, float by) { return ax * by - ay * bx; }
+
+// ==== Коллайдеры: окружность или выпуклый полигон по форме ноды ====
+struct Poly { std::vector<std::pair<float, float>> v; };
+
 struct Ent {
     std::string nm;
     Node2D* n;
     Body* b;
-    float cx, cy;          // центр
-    float hw, hh;          // полуразмеры (для круга hw = hh = r)
-    float cs, sn;          // cos/sin поворота
-    float invM, invI;      // обратные масса и момент инерции
+    float cx, cy;
+    float hw, hh;          // полуразмеры габарита
+    float r;               // радиус для круга
+    bool isCircle;
+    Poly poly;             // мировые вершины (если не круг)
+    float invM, invI;
 };
 
-inline float cross2(float ax, float ay, float bx, float by) { return ax * by - ay * bx; }
+inline void buildPoly(Ent& e, const std::string& shape) {
+    e.poly.v.clear();
+    float cs = std::cos(e.n->rotation), sn = std::sin(e.n->rotation);
+    auto push = [&](float lx, float ly) {
+        e.poly.v.push_back(std::make_pair(e.cx + lx * cs - ly * sn, e.cy + lx * sn + ly * cs));
+    };
+    if (shape == "diamond") {
+        push(0, -e.hh); push(e.hw, 0); push(0, e.hh); push(-e.hw, 0);
+    } else if (shape == "triangle") {
+        push(0, -e.hh); push(e.hw, e.hh); push(-e.hw, e.hh);
+    } else { // square и всё остальное
+        push(-e.hw, -e.hh); push(e.hw, -e.hh); push(e.hw, e.hh); push(-e.hw, e.hh);
+    }
+}
 
 inline void entInertia(Ent& e) {
     if (e.b->isStatic) { e.invM = 0.0f; e.invI = 0.0f; return; }
     e.invM = 1.0f / e.b->mass;
     float I;
-    if (e.b->isCircle) I = 0.5f * e.b->mass * e.hw * e.hw;
+    if (e.isCircle) I = 0.5f * e.b->mass * e.r * e.r;
     else I = e.b->mass * (4.0f * e.hw * e.hw + 4.0f * e.hh * e.hh) / 12.0f;
     e.invI = I > 1e-6f ? 1.0f / I : 0.0f;
 }
 
-// ==== SAT для двух повёрнутых боксов ====
-inline float projRadius(const Ent& e, float ax, float ay) {
-    float du = ax * e.cs + ay * e.sn;
-    float dv = -ax * e.sn + ay * e.cs;
-    return e.hw * std::fabs(du) + e.hh * std::fabs(dv);
+struct Contact { float nx, ny, pen, px, py; };   // нормаль A->B
+
+inline float polyCentroid(const Poly& P, float& gx, float& gy) {
+    gx = 0; gy = 0;
+    for (auto& v : P.v) { gx += v.first; gy += v.second; }
+    gx /= (float)P.v.size(); gy /= (float)P.v.size();
+    return 0;
 }
-inline float obbOverlap(const Ent& A, const Ent& B, float& nx, float& ny) {
+
+// SAT для двух выпуклых полигонов
+inline bool satPoly(const Ent& A, const Ent& B, Contact& c) {
+    float cax, cay, cbx, cby;
+    polyCentroid(A.poly, cax, cay);
+    polyCentroid(B.poly, cbx, cby);
+    float dx = cbx - cax, dy = cby - cay;
+
     float best = 1e18f, bnx = 0, bny = 0;
-    float dx = B.cx - A.cx, dy = B.cy - A.cy;
-    const float axes[4][2] = { {A.cs, A.sn}, {-A.sn, A.cs}, {B.cs, B.sn}, {-B.sn, B.cs} };
-    for (int k = 0; k < 4; ++k) {
-        float ax = axes[k][0], ay = axes[k][1];
-        float ov = projRadius(A, ax, ay) + projRadius(B, ax, ay) - std::fabs(dx * ax + dy * ay);
-        if (ov <= 0.0f) return 0.0f;
-        if (ov < best) {
-            best = ov;
-            float s = (dx * ax + dy * ay) >= 0.0f ? 1.0f : -1.0f;
-            bnx = ax * s; bny = ay * s;
+    const Poly* P[2] = { &A.poly, &B.poly };
+    for (int p = 0; p < 2; ++p) {
+        const Poly& Q = *P[p];
+        const Poly& O = *P[1 - p];
+        for (size_t i = 0; i < Q.v.size(); ++i) {
+            size_t i2 = (i + 1) % Q.v.size();
+            float ex = Q.v[i2].first - Q.v[i].first;
+            float ey = Q.v[i2].second - Q.v[i].second;
+            float ax = -ey, ay = ex;
+            float L = std::sqrt(ax * ax + ay * ay);
+            if (L < 1e-6f) continue;
+            ax /= L; ay /= L;
+            float minQ = 1e18f, maxQ = -1e18f, minO = 1e18f, maxO = -1e18f;
+            for (auto& v : Q.v) { float d = v.first * ax + v.second * ay; if (d < minQ) minQ = d; if (d > maxQ) maxQ = d; }
+            for (auto& v : O.v) { float d = v.first * ax + v.second * ay; if (d < minO) minO = d; if (d > maxO) maxO = d; }
+            float ov = std::min(maxQ, maxO) - std::max(minQ, minO);
+            if (ov <= 0.0f) return false;
+            if (ov < best) {
+                best = ov;
+                float s = (dx * ax + dy * ay) >= 0.0f ? 1.0f : -1.0f;
+                bnx = ax * s; bny = ay * s;
+            }
         }
     }
-    nx = bnx; ny = bny;
-    return best;
+    c.nx = bnx; c.ny = bny; c.pen = best;
+    // точка контакта: самая глубокая вершина A вдоль нормали
+    float bd = -1e18f;
+    for (auto& v : A.poly.v) {
+        float d = v.first * bnx + v.second * bny;
+        if (d > bd) { bd = d; c.px = v.first; c.py = v.second; }
+    }
+    return true;
 }
 
-// ближайшая точка бокса e к мировой точке (px,py)
-inline void boxClosest(const Ent& e, float px, float py, float& qx, float& qy, bool& inside) {
-    float lx = (px - e.cx) * e.cs + (py - e.cy) * e.sn;
-    float ly = -(px - e.cx) * e.sn + (py - e.cy) * e.cs;
-    float clx = std::max(-e.hw, std::min(e.hw, lx));
-    float cly = std::max(-e.hh, std::min(e.hh, ly));
-    inside = (clx == lx && cly == ly);
-    qx = e.cx + clx * e.cs - cly * e.sn;
-    qy = e.cy + clx * e.sn + cly * e.cs;
-}
+// круг <-> полигон
+inline bool circlePoly(const Ent& C, const Ent& X, Contact& c, bool circleIsA) {
+    // ближайшая точка границы полигона к центру круга + проверка "центр внутри"
+    float bx = C.cx, by = C.cy;
+    bool inside = true;
+    {
+        // внутри выпуклого полигона: все cross(edge, c-v) одного знака
+        float sign0 = 0;
+        for (size_t i = 0; i < X.poly.v.size(); ++i) {
+            size_t i2 = (i + 1) % X.poly.v.size();
+            float ex = X.poly.v[i2].first - X.poly.v[i].first;
+            float ey = X.poly.v[i2].second - X.poly.v[i].second;
+            float rx = C.cx - X.poly.v[i].first, ry = C.cy - X.poly.v[i].second;
+            float cr = cross2(ex, ey, rx, ry);
+            if (sign0 == 0 && std::fabs(cr) > 1e-6f) sign0 = cr > 0 ? 1 : -1;
+            if (sign0 != 0 && cr * sign0 < 0) { inside = false; break; }
+        }
+    }
+    float bestD = 1e18f, qx = 0, qy = 0;
+    for (size_t i = 0; i < X.poly.v.size(); ++i) {
+        size_t i2 = (i + 1) % X.poly.v.size();
+        float ax = X.poly.v[i].first, ay = X.poly.v[i].second;
+        float ex = X.poly.v[i2].first - ax, ey = X.poly.v[i2].second - ay;
+        float L2 = ex * ex + ey * ey;
+        float t = L2 > 1e-9f ? ((C.cx - ax) * ex + (C.cy - ay) * ey) / L2 : 0.0f;
+        if (t < 0) t = 0; if (t > 1) t = 1;
+        float px = ax + ex * t, py = ay + ey * t;
+        float d = (px - C.cx) * (px - C.cx) + (py - C.cy) * (py - C.cy);
+        if (d < bestD) { bestD = d; qx = px; qy = py; }
+    }
+    float d = std::sqrt(bestD);
 
-struct Contact { float nx, ny, pen, px, py; };
+    float nxPolyToCircle, nyPolyToCircle, pen;
+    float cpx, cpy;
+    if (inside) {
+        // выталкиваем к ближайшей грани: нормаль полигона наружу
+        float nx = C.cx - qx, ny = C.cy - qy;
+        float L = std::sqrt(nx * nx + ny * ny);
+        if (L < 1e-6f) { nx = 0; ny = -1; L = 1; }
+        nxPolyToCircle = -nx / L; nyPolyToCircle = -ny / L;  // наружу от полигона через центр
+        pen = C.r + d;
+        cpx = qx; cpy = qy;
+    } else {
+        if (d >= C.r || d < 1e-6f) return false;
+        nxPolyToCircle = (C.cx - qx) / d; nyPolyToCircle = (C.cy - qy) / d;
+        pen = C.r - d;
+        cpx = qx; cpy = qy;
+    }
+    // нормаль должна быть A->B
+    if (circleIsA) { c.nx = -nxPolyToCircle; c.ny = -nyPolyToCircle; }   // A=круг: A->B = круг->полигон
+    else { c.nx = nxPolyToCircle; c.ny = nyPolyToCircle; }               // A=полигон: A->B = полигон->круг
+    c.pen = pen; c.px = cpx; c.py = cpy;
+    return true;
+}
 
 inline bool makeContact(const Ent& A, const Ent& B, Contact& c) {
-    bool circA = A.b->isCircle, circB = B.b->isCircle;
-    if (circA && circB) {
+    if (A.isCircle && B.isCircle) {
         float dx = B.cx - A.cx, dy = B.cy - A.cy;
         float d = std::sqrt(dx * dx + dy * dy);
-        float r = A.hw + B.hw;
-        if (d >= r || d < 1e-6f) return false;
-        c.nx = dx / d; c.ny = dy / d; c.pen = r - d;
-        c.px = A.cx + c.nx * A.hw; c.py = A.cy + c.ny * A.hw;
+        float rr = A.r + B.r;
+        if (d >= rr || d < 1e-6f) return false;
+        c.nx = dx / d; c.ny = dy / d; c.pen = rr - d;
+        c.px = A.cx + c.nx * A.r; c.py = A.cy + c.ny * A.r;
         return true;
     }
-    if (circA != circB) {
-        const Ent& C = circA ? A : B;
-        const Ent& X = circA ? B : A;
-        float qx, qy; bool inside;
-        boxClosest(X, C.cx, C.cy, qx, qy, inside);
-        float dx = C.cx - qx, dy = C.cy - qy;
-        float d = std::sqrt(dx * dx + dy * dy);
-        if (inside) {
-            // центр круга внутри бокса: выталкиваем по ближайшей грани
-            float lx = (C.cx - X.cx) * X.cs + (C.cy - X.cy) * X.sn;
-            float ly = -(C.cx - X.cx) * X.sn + (C.cy - X.cy) * X.cs;
-            float px_ = X.hw - std::fabs(lx), py_ = X.hh - std::fabs(ly);
-            float nxL, nyL;
-            if (px_ < py_) { nxL = lx > 0 ? 1 : -1; nyL = 0; c.pen = px_ + C.hw; }
-            else { nxL = 0; nyL = ly > 0 ? 1 : -1; c.pen = py_ + C.hw; }
-            float wx = nxL * X.cs - nyL * X.sn, wy = nxL * X.sn + nyL * X.cs;
-            c.nx = wx; c.ny = wy;
-            c.px = C.cx - wx * C.hw; c.py = C.cy - wy * C.hw;
-            if (!circA) { c.nx = -c.nx; c.ny = -c.ny; }   // нормаль всегда A->B
-            return true;
-        }
-        if (d >= C.hw || d < 1e-6f) return false;
-        float wx = dx / d, wy = dy / d;      // от бокса к кругу
-        c.pen = C.hw - d;
-        c.px = qx; c.py = qy;
-        if (circA) { c.nx = -wx; c.ny = -wy; }  // A=круг, нормаль A->B = от круга к боксу
-        else { c.nx = wx; c.ny = wy; }          // A=бокс, B=круг: нормаль A->B = от бокса к кругу
-        return true;
+    if (A.isCircle != B.isCircle) {
+        if (A.isCircle) return circlePoly(A, B, c, true);
+        return circlePoly(B, A, c, false);
     }
-    // бокс-бокс
-    float nx, ny;
-    float pen = obbOverlap(A, B, nx, ny);
-    if (pen <= 0.0f) return false;
-    c.nx = nx; c.ny = ny; c.pen = pen;
-    // точка контакта: самый «глубокий» угол A вдоль нормали
-    float best = -1e18f, bpx = A.cx, bpy = A.cy;
-    for (int k = 0; k < 4; ++k) {
-        float sx = (k & 1) ? 1.0f : -1.0f;
-        float sy = (k & 2) ? 1.0f : -1.0f;
-        float px_ = A.cx + (sx * A.hw) * A.cs - (sy * A.hh) * A.sn;
-        float py_ = A.cy + (sx * A.hw) * A.sn + (sy * A.hh) * A.cs;
-        float d = px_ * nx + py_ * ny;
-        if (d > best) { best = d; bpx = px_; bpy = py_; }
-    }
-    c.px = bpx; c.py = bpy;
-    return true;
+    return satPoly(A, B, c);
 }
 
 inline void physicsStepOnce(Scene& sc, float dt) {
@@ -190,11 +238,14 @@ inline void physicsStepOnce(Scene& sc, float dt) {
             Ent e;
             e.nm = kv.first; e.n = n; e.b = &kv.second;
             e.cx = n->position.x; e.cy = n->position.y;
-            e.b->isCircle = (std::string(n->shape) == "circle");
+            std::string shape = n->shape;
+            e.isCircle = (shape == "circle");
+            kv.second.isCircle = e.isCircle;
             float sx = std::fabs(n->scale.x), sy = std::fabs(n->scale.y);
-            if (e.b->isCircle) { e.hw = e.hh = std::max(1.0f, n->w * sx * 0.5f); }
-            else { e.hw = std::max(1.0f, n->w * sx * 0.5f); e.hh = std::max(1.0f, n->h * sy * 0.5f); }
-            e.cs = std::cos(n->rotation); e.sn = std::sin(n->rotation);
+            e.hw = std::max(1.0f, n->w * sx * 0.5f);
+            e.hh = std::max(1.0f, n->h * sy * 0.5f);
+            e.r = e.hw;
+            if (!e.isCircle) buildPoly(e, shape);
             entInertia(e);
             ents.push_back(e);
         }
@@ -208,8 +259,9 @@ inline void physicsStepOnce(Scene& sc, float dt) {
         if (e.b->vy < -2000.0f) e.b->vy = -2000.0f;
         if (e.b->vx >  2000.0f) e.b->vx =  2000.0f;
         if (e.b->vx < -2000.0f) e.b->vx = -2000.0f;
-        if (e.b->w  >  30.0f)  e.b->w  =  30.0f;
-        if (e.b->w  < -30.0f)  e.b->w  = -30.0f;
+        if (e.b->w  >  25.0f)  e.b->w  =  25.0f;
+        if (e.b->w  < -25.0f)  e.b->w  = -25.0f;
+        e.b->w *= (1.0f - 0.4f * dt);          // угловое затухание
         e.n->position.x += e.b->vx * dt;
         e.n->position.y += e.b->vy * dt;
         e.n->rotation   += e.b->w * dt;
@@ -229,14 +281,13 @@ inline void physicsStepOnce(Scene& sc, float dt) {
             float rAx = c.px - A.cx, rAy = c.py - A.cy;
             float rBx = c.px - B.cx, rBy = c.py - B.cy;
 
-            // скорости точек контакта
             float vAx = A.b->vx - A.b->w * rAy, vAy = A.b->vy + A.b->w * rAx;
             float vBx = B.b->vx - B.b->w * rBy, vBy = B.b->vy + B.b->w * rBx;
             float rvx = vBx - vAx, rvy = vBy - vAy;
             float vn = rvx * c.nx + rvy * c.ny;
 
             float e_ = std::max(A.b->restitution, B.b->restitution);
-            if (vn > -40.0f) e_ = 0.0f;   // покой без микро-отскоков
+            if (vn > -40.0f) e_ = 0.0f;
 
             float rnA = cross2(rAx, rAy, c.nx, c.ny);
             float rnB = cross2(rBx, rBy, c.nx, c.ny);
@@ -249,7 +300,7 @@ inline void physicsStepOnce(Scene& sc, float dt) {
             A.b->vx -= jx * A.invM; A.b->vy -= jy * A.invM; A.b->w -= cross2(rAx, rAy, jx, jy) * A.invI;
             B.b->vx += jx * B.invM; B.b->vy += jy * B.invM; B.b->w += cross2(rBx, rBy, jx, jy) * B.invI;
 
-            // трение (даёт качение кругам и опрокидывание кубам)
+            // трение
             float tx = -c.ny, ty = c.nx;
             vAx = A.b->vx - A.b->w * rAy; vAy = A.b->vy + A.b->w * rAx;
             vBx = B.b->vx - B.b->w * rBy; vBy = B.b->vy + B.b->w * rBx;
@@ -268,7 +319,24 @@ inline void physicsStepOnce(Scene& sc, float dt) {
                 B.b->vx += fx * B.invM; B.b->vy += fy * B.invM; B.b->w += cross2(rBx, rBy, fx, fy) * B.invI;
             }
 
-            // позиционная коррекция (без неё тела тонут друг в друге)
+            // УСЛОВИЕ КАЧЕНИЯ для кругов: угловая скорость согласуется с касательной
+            auto roll = [&](Ent& D, float ux, float uy) {
+                if (!D.isCircle || D.b->isStatic) return;
+                float t90x = -uy, t90y = ux;                 // u = от центра к контакту
+                float vtan = D.b->vx * t90x + D.b->vy * t90y;
+                float target = -vtan / (D.r > 1.0f ? D.r : 1.0f);
+                D.b->w += (target - D.b->w) * 0.6f;
+            };
+            {
+                float ux = c.px - A.cx, uy = c.py - A.cy;
+                float L = std::sqrt(ux * ux + uy * uy);
+                if (L > 1e-6f) roll(A, ux / L, uy / L);
+                float wx2 = c.px - B.cx, wy2 = c.py - B.cy;
+                float L2 = std::sqrt(wx2 * wx2 + wy2 * wy2);
+                if (L2 > 1e-6f) roll(B, wx2 / L2, wy2 / L2);
+            }
+
+            // позиционная коррекция
             float slop = 0.5f, percent = 0.8f;
             float corr = std::max(c.pen - slop, 0.0f) * percent / (A.invM + B.invM + 1e-9f);
             A.cx -= c.nx * corr * A.invM; A.cy -= c.ny * corr * A.invM;
@@ -276,9 +344,15 @@ inline void physicsStepOnce(Scene& sc, float dt) {
             if (!A.b->isStatic) { A.n->position.x = A.cx; A.n->position.y = A.cy; }
             if (!B.b->isStatic) { B.n->position.x = B.cx; B.n->position.y = B.cy; }
 
-            if (B.b->onGround == false && c.ny < -0.5f) B.b->onGround = true;
-            if (A.b->onGround == false && c.ny >  0.5f) A.b->onGround = true;
+            if (c.ny < -0.5f) B.b->onGround = true;
+            if (c.ny >  0.5f) A.b->onGround = true;
         }
+    }
+
+    // покой: гасим микровращение стоящих тел
+    for (auto& e : ents) {
+        if (e.b->isStatic) continue;
+        if (e.b->onGround && std::fabs(e.b->w) < 0.5f) e.b->w = 0.0f;
     }
 }
 
@@ -289,7 +363,7 @@ inline void physicsUpdate(Scene& sc, float dt) {
     for (int s = 0; s < SUB; ++s) physicsStepOnce(sc, dt / SUB);
 }
 
-// ==== Отладочные хитбоксы: sx = OX + wx*S ====
+// ==== Отладочные хитбоксы: рисуют РЕАЛЬНЫЙ коллайдер (полигон или круг) ====
 inline void emitBodiesDebug(Scene& sc, std::string& out, float S, float OX, float OY) {
     if (!sc.root) return;
     std::lock_guard<std::mutex> lk(g_bodiesMtx);
@@ -297,45 +371,51 @@ inline void emitBodiesDebug(Scene& sc, std::string& out, float S, float OX, floa
         Node* rn = sc.root->findNode(kv.first);
         Node2D* n = rn ? dynamic_cast<Node2D*>(rn) : nullptr;
         if (!n) continue;
-        bool circ = kv.second.isCircle;
         const char* col = kv.second.isStatic ? "#FF5555" : "#33FF99";
         float cx = n->position.x, cy = n->position.y;
         float hw = std::max(1.0f, n->w * std::fabs(n->scale.x) * 0.5f);
         float hh = std::max(1.0f, n->h * std::fabs(n->scale.y) * 0.5f);
-        if (circ) hh = hw;
-        float cs = std::cos(n->rotation), sn = std::sin(n->rotation);
-        float th = 2.0f / (S > 0.01f ? S : 1.0f);   // толщина линии ~2 px экрана
+        bool circ = (std::string(n->shape) == "circle");
+        float th = 2.0f / (S > 0.01f ? S : 1.0f);
         if (th < 0.5f) th = 0.5f;
+
+        std::vector<std::pair<float, float>> pts;
         if (circ) {
             const int SEG = 14;
-            for (int k = 0; k < SEG; ++k) {
-                float a0 = k * 6.28318f / SEG, a1 = (k + 1) * 6.28318f / SEG;
-                float x0 = cx + std::cos(a0) * hw, y0 = cy + std::sin(a0) * hw;
-                float x1 = cx + std::cos(a1) * hw, y1 = cy + std::sin(a1) * hw;
-                float mx = (x0 + x1) * 0.5f, my = (y0 + y1) * 0.5f;
-                float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) + th;
-                float ang = std::atan2(y1 - y0, x1 - x0) * 57.2957795f;
-                float sx = OX + mx * S, sy = OY + my * S;
-                out += "DRAW rect|" + std::to_string((int)(sx - len * S / 2)) + "|" + std::to_string((int)(sy - th * S / 2)) + "|" + std::to_string((int)(len * S)) + "|" + std::to_string((int)(th * S)) + "|" + col + "|" + std::to_string((int)ang) + "\n";
+            for (int k = 0; k <= SEG; ++k) {
+                float a = k * 6.28318f / SEG;
+                pts.push_back(std::make_pair(cx + std::cos(a) * hw, cy + std::sin(a) * hw));
             }
         } else {
-            float px[4], py[4];
-            for (int k = 0; k < 4; ++k) {
-                float sx_ = (k & 1) ? hw : -hw;
-                float sy_ = (k & 2) ? hh : -hh;
-                px[k] = cx + sx_ * cs - sy_ * sn;
-                py[k] = cy + sx_ * sn + sy_ * cs;
+            float cs = std::cos(n->rotation), sn = std::sin(n->rotation);
+            std::string shape = n->shape;
+            if (shape == "diamond") {
+                pts.push_back(std::make_pair(cx + (0 * cs - -hh * sn), cy + (0 * sn + -hh * cs)));
+                pts.push_back(std::make_pair(cx + (hw * cs - 0 * sn),  cy + (hw * sn + 0 * cs)));
+                pts.push_back(std::make_pair(cx + (0 * cs - hh * sn),  cy + (0 * sn + hh * cs)));
+                pts.push_back(std::make_pair(cx + (-hw * cs - 0 * sn), cy + (-hw * sn + 0 * cs)));
+                pts.push_back(pts[0]);
+            } else if (shape == "triangle") {
+                pts.push_back(std::make_pair(cx + (0 * cs - -hh * sn), cy + (0 * sn + -hh * cs)));
+                pts.push_back(std::make_pair(cx + (hw * cs - hh * sn), cy + (hw * sn + hh * cs)));
+                pts.push_back(std::make_pair(cx + (-hw * cs - hh * sn), cy + (-hw * sn + hh * cs)));
+                pts.push_back(pts[0]);
+            } else {
+                pts.push_back(std::make_pair(cx + (-hw * cs - -hh * sn), cy + (-hw * sn + -hh * cs)));
+                pts.push_back(std::make_pair(cx + (hw * cs - -hh * sn),  cy + (hw * sn + -hh * cs)));
+                pts.push_back(std::make_pair(cx + (hw * cs - hh * sn),   cy + (hw * sn + hh * cs)));
+                pts.push_back(std::make_pair(cx + (-hw * cs - hh * sn),  cy + (-hw * sn + hh * cs)));
+                pts.push_back(pts[0]);
             }
-            const int order[4][2] = { {0,1}, {1,3}, {3,2}, {2,0} };
-            for (int k = 0; k < 4; ++k) {
-                float x0 = px[order[k][0]], y0 = py[order[k][0]];
-                float x1 = px[order[k][1]], y1 = py[order[k][1]];
-                float mx = (x0 + x1) * 0.5f, my = (y0 + y1) * 0.5f;
-                float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) + th;
-                float ang = std::atan2(y1 - y0, x1 - x0) * 57.2957795f;
-                float sx = OX + mx * S, sy = OY + my * S;
-                out += "DRAW rect|" + std::to_string((int)(sx - len * S / 2)) + "|" + std::to_string((int)(sy - th * S / 2)) + "|" + std::to_string((int)(len * S)) + "|" + std::to_string((int)(th * S)) + "|" + col + "|" + std::to_string((int)ang) + "\n";
-            }
+        }
+        for (size_t k = 0; k + 1 < pts.size(); ++k) {
+            float x0 = pts[k].first, y0 = pts[k].second;
+            float x1 = pts[k + 1].first, y1 = pts[k + 1].second;
+            float mx = (x0 + x1) * 0.5f, my = (y0 + y1) * 0.5f;
+            float len = std::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) + th;
+            float ang = std::atan2(y1 - y0, x1 - x0) * 57.2957795f;
+            float sx = OX + mx * S, sy = OY + my * S;
+            out += "DRAW rect|" + std::to_string((int)(sx - len * S / 2)) + "|" + std::to_string((int)(sy - th * S / 2)) + "|" + std::to_string((int)(len * S)) + "|" + std::to_string((int)(th * S)) + "|" + col + "|" + std::to_string((int)ang) + "\n";
         }
     }
 }
@@ -347,11 +427,7 @@ static int l_add_rigidbody(lua_State* L) {
     if (nm) bodyAdd(nm, false, mass);
     return 0;
 }
-static int l_add_staticbody(lua_State* L) {
-    const char* nm = luaL_checkstring(L, 1);
-    if (nm) bodyAdd(nm, true, 1.0f);
-    return 0;
-}
+static int l_add_staticbody(lua_State* L) { const char* nm = luaL_checkstring(L, 1); if (nm) bodyAdd(nm, true, 1.0f); return 0; }
 static int l_remove_body(lua_State* L) { const char* nm = luaL_checkstring(L, 1); if (nm) bodyRemove(nm); return 0; }
 static int l_set_velocity(lua_State* L) { Body* b = bodyGet(luaL_checkstring(L, 1)); if (b) { b->vx = (float)luaL_checknumber(L, 2); b->vy = (float)luaL_checknumber(L, 3); } return 0; }
 static int l_add_velocity(lua_State* L) { Body* b = bodyGet(luaL_checkstring(L, 1)); if (b) { b->vx += (float)luaL_checknumber(L, 2); b->vy += (float)luaL_checknumber(L, 3); } return 0; }
