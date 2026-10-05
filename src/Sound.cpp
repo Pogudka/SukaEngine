@@ -22,7 +22,7 @@
 namespace suka {
 namespace {
 
-ma_engine g_engine;
+ma_engine g_engine{};
 bool g_inited = false;
 
 int g_nextId = 1;
@@ -32,6 +32,14 @@ struct Entry {
     std::unique_ptr<ma_sound> snd;
     std::string path;
     bool decode = false;
+
+    // Эмуляция паузы для miniaudio 0.11.21:
+    // ma_sound_set_paused() там нет, поэтому запоминаем позицию и останавливаем звук.
+    bool paused = false;
+    ma_uint64 pausedFrame = 0;
+
+    float volume = 1.0f;
+    bool loop = false;
 };
 
 std::unordered_map<int, Entry> g_sounds;
@@ -52,7 +60,7 @@ std::string resolvePath(const std::string& p) {
         return p;
     }
 
-    std::string root = PROJECT_ROOT;
+    std::string root = projectRootRef();
     if (!root.empty() && root.back() != '/') {
         root += '/';
     }
@@ -114,7 +122,16 @@ int loadLocked(const std::string& path, bool decode) {
 
     int id = g_nextId++;
 
-    g_sounds.emplace(id, Entry{std::move(snd), path, decode});
+    Entry e;
+    e.snd = std::move(snd);
+    e.path = path;
+    e.decode = decode;
+    e.paused = false;
+    e.pausedFrame = 0;
+    e.volume = 1.0f;
+    e.loop = false;
+
+    g_sounds.emplace(id, std::move(e));
     g_byPath.emplace(path, id);
 
     return id;
@@ -185,10 +202,15 @@ int audioPlaySound(int id, float volume, bool loop) {
 
     ma_sound* s = it->second.snd.get();
 
+    it->second.paused = false;
+    it->second.pausedFrame = 0;
+    it->second.volume = clampf(volume, 0.0f, 4.0f);
+    it->second.loop = loop;
+
     ma_sound_stop(s);
     ma_sound_seek_to_pcm_frame(s, 0);
-    ma_sound_set_volume(s, clampf(volume, 0.0f, 4.0f));
-    ma_sound_set_looping(s, loop ? MA_TRUE : MA_FALSE);
+    ma_sound_set_volume(s, it->second.volume);
+    ma_sound_set_looping(s, it->second.loop ? MA_TRUE : MA_FALSE);
 
     ma_result r = ma_sound_start(s);
     if (r != MA_SUCCESS) {
@@ -205,7 +227,14 @@ bool audioStopSound(int id) {
     auto it = g_sounds.find(id);
     if (it == g_sounds.end() || !it->second.snd) return false;
 
-    ma_sound_stop(it->second.snd.get());
+    ma_sound* s = it->second.snd.get();
+
+    ma_sound_stop(s);
+    ma_sound_seek_to_pcm_frame(s, 0);
+
+    it->second.paused = false;
+    it->second.pausedFrame = 0;
+
     return true;
 }
 
@@ -215,7 +244,27 @@ bool audioPauseSound(int id) {
     auto it = g_sounds.find(id);
     if (it == g_sounds.end() || !it->second.snd) return false;
 
-    ma_sound_set_paused(it->second.snd.get(), MA_TRUE);
+    ma_sound* s = it->second.snd.get();
+
+    if (it->second.paused) {
+        return true;
+    }
+
+    if (!ma_sound_is_playing(s)) {
+        return false;
+    }
+
+    ma_uint64 cursor = 0;
+    ma_result rc = ma_sound_get_cursor_in_pcm_frames(s, &cursor);
+    if (rc != MA_SUCCESS) {
+        cursor = 0;
+    }
+
+    ma_sound_stop(s);
+
+    it->second.paused = true;
+    it->second.pausedFrame = cursor;
+
     return true;
 }
 
@@ -225,7 +274,25 @@ bool audioResumeSound(int id) {
     auto it = g_sounds.find(id);
     if (it == g_sounds.end() || !it->second.snd) return false;
 
-    ma_sound_set_paused(it->second.snd.get(), MA_FALSE);
+    if (!it->second.paused) {
+        return false;
+    }
+
+    ma_sound* s = it->second.snd.get();
+
+    ma_sound_seek_to_pcm_frame(s, it->second.pausedFrame);
+    ma_sound_set_volume(s, it->second.volume);
+    ma_sound_set_looping(s, it->second.loop ? MA_TRUE : MA_FALSE);
+
+    ma_result r = ma_sound_start(s);
+    if (r != MA_SUCCESS) {
+        SUKA_SOUND_LOGE("ma_sound_start(resume) failed: %d", (int)r);
+        it->second.paused = false;
+        it->second.pausedFrame = 0;
+        return false;
+    }
+
+    it->second.paused = false;
     return true;
 }
 
@@ -235,7 +302,9 @@ bool audioSetSoundVolume(int id, float volume) {
     auto it = g_sounds.find(id);
     if (it == g_sounds.end() || !it->second.snd) return false;
 
-    ma_sound_set_volume(it->second.snd.get(), clampf(volume, 0.0f, 4.0f));
+    it->second.volume = clampf(volume, 0.0f, 4.0f);
+    ma_sound_set_volume(it->second.snd.get(), it->second.volume);
+
     return true;
 }
 
@@ -254,6 +323,8 @@ bool audioIsSoundPlaying(int id) {
 
     auto it = g_sounds.find(id);
     if (it == g_sounds.end() || !it->second.snd) return false;
+
+    if (it->second.paused) return false;
 
     return ma_sound_is_playing(it->second.snd.get()) != 0;
 }
@@ -281,6 +352,8 @@ void audioStopAllSounds() {
         if (kv.second.snd) {
             ma_sound_stop(kv.second.snd.get());
             ma_sound_seek_to_pcm_frame(kv.second.snd.get(), 0);
+            kv.second.paused = false;
+            kv.second.pausedFrame = 0;
         }
     }
 
@@ -300,9 +373,14 @@ int audioPlayMusic(const std::string& path, float volume) {
 
     ma_sound* s = it->second.snd.get();
 
+    it->second.paused = false;
+    it->second.pausedFrame = 0;
+    it->second.volume = clampf(volume, 0.0f, 1.0f);
+    it->second.loop = true;
+
     ma_sound_stop(s);
     ma_sound_seek_to_pcm_frame(s, 0);
-    ma_sound_set_volume(s, clampf(volume, 0.0f, 1.0f));
+    ma_sound_set_volume(s, it->second.volume);
     ma_sound_set_looping(s, MA_TRUE);
 
     ma_result r = ma_sound_start(s);
@@ -323,6 +401,9 @@ void audioStopMusic() {
     auto it = g_sounds.find(g_musicId);
     if (it != g_sounds.end() && it->second.snd) {
         ma_sound_stop(it->second.snd.get());
+        ma_sound_seek_to_pcm_frame(it->second.snd.get(), 0);
+        it->second.paused = false;
+        it->second.pausedFrame = 0;
     }
 
     g_musicId = 0;
@@ -336,7 +417,9 @@ bool audioSetMusicVolume(float volume) {
     auto it = g_sounds.find(g_musicId);
     if (it == g_sounds.end() || !it->second.snd) return false;
 
-    ma_sound_set_volume(it->second.snd.get(), clampf(volume, 0.0f, 1.0f));
+    it->second.volume = clampf(volume, 0.0f, 1.0f);
+    ma_sound_set_volume(it->second.snd.get(), it->second.volume);
+
     return true;
 }
 
@@ -347,6 +430,8 @@ bool audioIsMusicPlaying() {
 
     auto it = g_sounds.find(g_musicId);
     if (it == g_sounds.end() || !it->second.snd) return false;
+
+    if (it->second.paused) return false;
 
     return ma_sound_is_playing(it->second.snd.get()) != 0;
 }
