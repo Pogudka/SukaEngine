@@ -94,6 +94,7 @@ inline void GameApp::feedTouch(int action, float x, float y) {
             if (x >= FNR_NOG_X0 && x <= FNR_NOG_X1) { addFuncToSelected("nogravity"); return; }
             if (x >= FNR_BOU_X0 && x <= FNR_BOU_X1) { addFuncToSelected("bouncy"); return; }
             if (x >= FNR_CLR_X0 && x <= FNR_CLR_X1) { clearFuncsSelected(); return; }
+                if (x >= FNR_HB_X0 && x <= FNR_HB_X1) { g_showBodies = !g_showBodies; return; }
             if (x >= FNR_X_X0  && x <= FNR_X_X1)  { showFuncs_ = false; return; }
         }
     }
