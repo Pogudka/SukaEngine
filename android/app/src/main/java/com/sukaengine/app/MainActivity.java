@@ -580,7 +580,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 // Вышли из игрового режима -> музыка останавливается сама.
-                if (newMode != MODE_GAME && mp != null) stopMusic();
+                if (newMode != MODE_GAME) { stopMusic(); try { if (mpOne != null) { mpOne.stop(); mpOne.release(); mpOne = null; } } catch (Throwable t) { } }
                 renderMode = newMode;
                 ovStat = newStat;
                 ovLog.clear(); ovLog.addAll(newLog);
