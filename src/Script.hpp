@@ -1,31 +1,12 @@
 #pragma once
 
 #include <string>
-#include <vector>
-#include <map>
-#include <fstream>
 #include <sstream>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <cctype>
-#include <algorithm>
-#include <utility>
-#include <mutex>
-#include <type_traits>
-#include <dirent.h>
+#include <map>
+#include <iostream>
+#include <cmath>
 
-extern "C" {
-#include "lua.h"
-#include "lauxlib.h"
-#include "lualib.h"
-}
-
-#include "Core.hpp"
 #include "Scene.hpp"
-#include "Particles.hpp"
-#include "LuaGameApi.hpp"
-#include "Physics.hpp"
 
 namespace suka {
 
@@ -159,6 +140,23 @@ static int l_hide(lua_State* L) { Node2D* n = findNode2D(luaL_checkstring(L,1));
 static int l_show(lua_State* L) { Node2D* n = findNode2D(luaL_checkstring(L,1)); if (n) n->alpha=1.0f; return 0; }
 static int l_exists(lua_State* L) { lua_pushboolean(L, findNode2D(luaL_checkstring(L,1)) != nullptr || findUi(lua_tostring(L,1)) != nullptr); return 1; }
 
+// === ВСТАВКА 1: Lua видит "кнопка зажата" (для удержания d-pad в level2). ===
+// Читает g_scene->ui[].touch.pressed. g_scene жива только внутри
+// on_update / callGlobal / callCollide, поэтому звать из этих колбэков
+// корректно; вне колбэка вернёт false (g_scene == nullptr).
+static int l_get_button_pressed(lua_State* L) {
+    const char* id = luaL_checkstring(L, 1);
+    bool p = false;
+    if (g_scene && id) {
+        for (auto& b : g_scene->ui) {
+            if (b.touch.id == id) { p = b.touch.pressed; break; }
+        }
+    }
+    lua_pushboolean(L, p ? 1 : 0);
+    return 1;
+}
+// === конец вставки 1 ===
+
 static int l_spawn(lua_State* L) {
     Node2D* n = findNode2D(luaL_checkstring(L,1)); if (!n) return 0;
     Particle2D* p = dynamic_cast<Particle2D*>(n); if (!p) return 0;
@@ -201,10 +199,20 @@ static void registerApi(lua_State* L) {
     lua_register(L, "hide", l_hide);
     lua_register(L, "show", l_show);
     lua_register(L, "exists", l_exists);
+
+    // === ВСТАВКА 2: регистрация get_button_pressed. ===
+    lua_register(L, "get_button_pressed", l_get_button_pressed);
+    // === конец вставки 2 ===
+
     lua_register(L, "spawn", l_spawn);
     lua_register(L, "emit", l_emit);
+
+    // ПОРЯДОК НЕ МЕНЯТЬ: registerGameLuaApi до registerPhysicsLuaApi.
+    // registerPhysicsLuaApi внутри зовёт registerSoundLuaApi + audioInit,
+    // поэтому miniaudio-глобалы play_sound/play_music/stop_music побеждают
+    // строковые из registerGameLuaApi. Если переставить — звук демо умрёт.
     registerGameLuaApi(L);     // transition / play_sound / play_music / stop_music
-    registerPhysicsLuaApi(L);  // rigidbody / staticbody / коллизии
+    registerPhysicsLuaApi(L);  // rigidbody / staticbody / коллизии + звук miniaudio
 }
 
 static bool endsWithStr(const std::string& s, const std::string& suf) {
