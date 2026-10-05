@@ -56,12 +56,12 @@ public:
     void BeginContact(b2Contact* c) override {
         b2Body* a = c->GetFixtureA()->GetBody();
         b2Body* b = c->GetFixtureB()->GetBody();
-        // В Box2D 2.4.1 GetUserData() возвращает b2BodyUserData { uintptr_t pointer; }
-        uintptr_t ua = a->GetUserData().pointer;
-        uintptr_t ub = b->GetUserData().pointer;
-        if (ua && ub) {
-            const char* na = reinterpret_cast<const char*>(ua);
-            const char* nb = reinterpret_cast<const char*>(ub);
+        // Box2D v2.4.1: GetUserData() returns struct with uintptr_t pointer
+        void* uda = reinterpret_cast<void*>(a->GetUserData().pointer);
+        void* udb = reinterpret_cast<void*>(b->GetUserData().pointer);
+        if (uda && udb) {
+            const char* na = reinterpret_cast<const char*>(uda);
+            const char* nb = reinterpret_cast<const char*>(udb);
             std::lock_guard<std::mutex> lk(g_collideMtx);
             g_collideEvents.push_back(std::make_pair(std::string(na), std::string(nb)));
         }
@@ -122,8 +122,8 @@ inline void createB2Body(const std::string& nm, Body& B, Node2D* n) {
     bd.allowSleep = true;
     bd.awake = true;
     b2Body* body = g_world->CreateBody(&bd);
-
-    // SetUserData в 2.4.1 принимает void*
+    
+    // Box2D v2.4.1: SetUserData takes void*
     body->SetUserData(reinterpret_cast<void*>(const_cast<char*>(nm.c_str())));
 
     std::string shape = n->shape;
@@ -198,10 +198,19 @@ inline void physicsUpdate(Scene& sc, float dt) {
 
     // Синхронизация записей с нодами и телами
     for (auto& nm : names) {
-        Body* Bp;
-        { std::lock_guard<std::mutex> lk(g_bodiesMtx); Bp = bodyGet(nm); }
-        if (!Bp) continue;
+        Body* Bp = nullptr;
+        std::string* stableName = nullptr;
+        { 
+            std::lock_guard<std::mutex> lk(g_bodiesMtx); 
+            auto it = g_bodies.find(nm);
+            if (it != g_bodies.end()) {
+                Bp = &it->second;
+                stableName = const_cast<std::string*>(&it->first); // stable pointer to map key
+            }
+        }
+        if (!Bp || !stableName) continue;
         Body& B = *Bp;
+        
         Node* rn = sc.root->findNode(nm);
         Node2D* n = rn ? dynamic_cast<Node2D*>(rn) : nullptr;
         if (!n) {
@@ -210,7 +219,7 @@ inline void physicsUpdate(Scene& sc, float dt) {
             continue;
         }
         B.isCircle = (std::string(n->shape) == "circle");
-        if (!B.bb) createB2Body(nm, B, n);
+        if (!B.bb) createB2Body(*stableName, B, n);
         if (!B.bb) continue;
 
         // живые правки параметров
