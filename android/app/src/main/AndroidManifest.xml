@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
-        android:label="SukaEngine"
+        android:label="Moben"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
         <activity
