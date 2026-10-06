@@ -1,12 +1,12 @@
 plugins { id 'com.android.application' }
 
 android {
-    namespace 'com.sukaengine.app'
+    namespace 'com.moben.app'
     compileSdk 34
     ndkVersion "25.2.9519653"
 
     defaultConfig {
-        applicationId "com.sukaengine.app"
+        applicationId "com.moben.app"
         minSdk 24
         targetSdk 34
         versionCode 1
