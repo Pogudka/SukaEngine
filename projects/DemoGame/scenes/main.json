@@ -5,7 +5,7 @@
   "nodes": [
     { "type": "Camera2D", "name": "Cam", "x": 640, "y": 360, "zoom": 1,
       "children": [
-        { "type": "Label", "name": "Title", "x": -610, "y": -330, "text": "SukaEngine Demo", "font_size": 24, "color": "#EAF2FF" },
+        { "type": "Label", "name": "Title", "x": -610, "y": -330, "text": "Moben Demo", "font_size": 24, "color": "#EAF2FF" },
         { "type": "Label", "name": "Stats", "x": -610, "y": -300, "text": "booting", "font_size": 15, "color": "#FCBF49" },
         { "type": "Label", "name": "HudVars", "x": -610, "y": -278, "text": "hits {hits} coll {collisions}", "font_size": 13, "color": "#87CEEB" },
         { "type": "Label", "name": "Help", "x": -610, "y": -256, "text": "arrows move - SHOOT ray - GRAV - FX - SND", "font_size": 12, "color": "#A0AEC0" }
@@ -42,4 +42,4 @@
     { "id": "BFx", "x": 782, "y": 648, "w": 90, "h": 56, "text": "FX", "action": "call:toggleFx", "color": "#FF6020" },
     { "id": "BSn", "x": 878, "y": 648, "w": 100, "h": 56, "text": "SND", "action": "call:audioCycle", "color": "#4CC9F0" }
   ]
-    }
+}
