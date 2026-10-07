@@ -81,6 +81,7 @@ static unsigned parseColorLocal(const std::string& raw) {
 
 static float normAlpha(double v) { if (v > 1.0 && v <= 100.0) v /= 100.0; if (v < 0.0) v = 0.0; if (v > 1.0) v = 1.0; return (float)v; }
 static float deg2rad(double d) { return (float)(d * 3.14159265358979323846 / 180.0); }
+static float rad2deg(double r) { return (float)(r * 180.0 / 3.14159265358979323846); }
 
 static Node2D* findNode2D(const std::string& nm) {
     if (!g_scene || !g_scene->root || nm.empty()) return nullptr;
@@ -159,9 +160,6 @@ static int l_hide(lua_State* L) { Node2D* n = findNode2D(luaL_checkstring(L,1));
 static int l_show(lua_State* L) { Node2D* n = findNode2D(luaL_checkstring(L,1)); if (n) n->alpha=1.0f; return 0; }
 static int l_exists(lua_State* L) { lua_pushboolean(L, findNode2D(luaL_checkstring(L,1)) != nullptr || findUi(lua_tostring(L,1)) != nullptr); return 1; }
 
-// === ВСТАВКА 1: Lua видит "кнопка зажата" (удержание d-pad в level2). ===
-// g_scene жива только внутри on_update / callGlobal / callCollide, поэтому
-// звать из этих колбэков корректно; вне колбэка вернёт false.
 static int l_get_button_pressed(lua_State* L) {
     const char* id = luaL_checkstring(L, 1);
     bool p = false;
@@ -173,7 +171,100 @@ static int l_get_button_pressed(lua_State* L) {
     lua_pushboolean(L, p ? 1 : 0);
     return 1;
 }
-// === конец вставки 1 ===
+
+// === MOBEN GETTERS: чтение свойств нод и UI из Lua (пункт 5) ===
+
+static int l_get_pos(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->position.x : 0.0);
+    lua_pushnumber(L, n ? n->position.y : 0.0);
+    return 2;
+}
+static int l_get_x(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->position.x : 0.0);
+    return 1;
+}
+static int l_get_y(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->position.y : 0.0);
+    return 1;
+}
+static int l_get_rotation(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? rad2deg(n->rotation) : 0.0);
+    return 1;
+}
+static int l_get_scale(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->scale.x : 1.0);
+    lua_pushnumber(L, n ? n->scale.y : 1.0);
+    return 2;
+}
+static int l_get_scale_x(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->scale.x : 1.0);
+    return 1;
+}
+static int l_get_scale_y(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->scale.y : 1.0);
+    return 1;
+}
+static int l_get_size(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->w : 0.0);
+    lua_pushnumber(L, n ? n->h : 0.0);
+    return 2;
+}
+static int l_get_w(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->w : 0.0);
+    return 1;
+}
+static int l_get_h(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushnumber(L, n ? n->h : 0.0);
+    return 1;
+}
+static int l_get_alpha(lua_State* L) {
+    const char* nm = luaL_checkstring(L,1);
+    Node2D* n = findNode2D(nm); if (n){ lua_pushnumber(L, n->alpha); return 1; }
+    UiButton* b = findUi(nm); if (b){ lua_pushnumber(L, b->alpha); return 1; }
+    lua_pushnumber(L, 1.0); return 1;
+}
+static int l_get_color(lua_State* L) {
+    const char* nm = luaL_checkstring(L,1);
+    Node2D* n = findNode2D(nm); if (n){ lua_pushinteger(L, (lua_Integer)n->color); return 1; }
+    UiButton* b = findUi(nm); if (b){ lua_pushinteger(L, (lua_Integer)b->color); return 1; }
+    lua_pushinteger(L, 0xFFFFFF); return 1;
+}
+static int l_get_shape(lua_State* L) {
+    Node2D* n = findNode2D(luaL_checkstring(L,1));
+    lua_pushstring(L, n ? n->shape.c_str() : "");
+    return 1;
+}
+static int l_get_texture(lua_State* L) {
+    const char* nm = luaL_checkstring(L,1);
+    Node2D* n = findNode2D(nm); if (n){ lua_pushstring(L, n->texture.c_str()); return 1; }
+    UiButton* b = findUi(nm); if (b){ lua_pushstring(L, b->texture.c_str()); return 1; }
+    lua_pushstring(L, ""); return 1;
+}
+static int l_get_action(lua_State* L) {
+    const char* nm = luaL_checkstring(L,1);
+    Node2D* n = findNode2D(nm); if (n){ lua_pushstring(L, n->action.c_str()); return 1; }
+    UiButton* b = findUi(nm); if (b){ lua_pushstring(L, b->action.c_str()); return 1; }
+    lua_pushstring(L, ""); return 1;
+}
+static int l_get_text(lua_State* L) {
+    const char* nm = luaL_checkstring(L,1);
+    Node2D* n = findNode2D(nm);
+    if (n){ Label* lb = dynamic_cast<Label*>(n); if (lb){ lua_pushstring(L, lb->text.c_str()); return 1; } }
+    UiButton* b = findUi(nm); if (b){ lua_pushstring(L, b->text.c_str()); return 1; }
+    lua_pushstring(L, ""); return 1;
+}
+
+// === конец MOBEN GETTERS ===
 
 static int l_spawn(lua_State* L) {
     Node2D* n = findNode2D(luaL_checkstring(L,1)); if (!n) return 0;
@@ -217,20 +308,33 @@ static void registerApi(lua_State* L) {
     lua_register(L, "hide", l_hide);
     lua_register(L, "show", l_show);
     lua_register(L, "exists", l_exists);
-
-    // === ВСТАВКА 2: регистрация get_button_pressed. ===
     lua_register(L, "get_button_pressed", l_get_button_pressed);
-    // === конец вставки 2 ===
+
+    // === регистрация MOBEN GETTERS ===
+    lua_register(L, "get_pos", l_get_pos);
+    lua_register(L, "get_x", l_get_x);
+    lua_register(L, "get_y", l_get_y);
+    lua_register(L, "get_rotation", l_get_rotation);
+    lua_register(L, "get_scale", l_get_scale);
+    lua_register(L, "get_scale_x", l_get_scale_x);
+    lua_register(L, "get_scale_y", l_get_scale_y);
+    lua_register(L, "get_size", l_get_size);
+    lua_register(L, "get_w", l_get_w);
+    lua_register(L, "get_h", l_get_h);
+    lua_register(L, "get_alpha", l_get_alpha);
+    lua_register(L, "get_color", l_get_color);
+    lua_register(L, "get_shape", l_get_shape);
+    lua_register(L, "get_texture", l_get_texture);
+    lua_register(L, "get_action", l_get_action);
+    lua_register(L, "get_text", l_get_text);
+    // === конец регистрации ===
 
     lua_register(L, "spawn", l_spawn);
     lua_register(L, "emit", l_emit);
 
     // ПОРЯДОК НЕ МЕНЯТЬ: registerGameLuaApi до registerPhysicsLuaApi.
-    // registerPhysicsLuaApi внутри зовёт registerSoundLuaApi + audioInit,
-    // поэтому miniaudio-глобалы play_sound/play_music/stop_music побеждают
-    // строковые из registerGameLuaApi. Если переставить — звук демо умрёт.
-    registerGameLuaApi(L);     // transition / play_sound / play_music / stop_music
-    registerPhysicsLuaApi(L);  // rigidbody / staticbody / коллизии + звук miniaudio
+    registerGameLuaApi(L);
+    registerPhysicsLuaApi(L);
 }
 
 static bool endsWithStr(const std::string& s, const std::string& suf) {
@@ -252,7 +356,6 @@ class ScriptSystem {
 public:
     lua_State* L = nullptr;
 
-    // Контекст последнего update — используется колбэком on_collide.
     Context* lastCtx = nullptr;
     SceneManager* lastSm = nullptr;
     Scene* lastScene = nullptr;
@@ -314,7 +417,6 @@ public:
         g_ctx = nullptr; g_sm = nullptr; g_scene = nullptr; g_vars = nullptr;
     }
 
-    // Колбэк коллизий: on_collide(nameA, nameB)
     void callCollide(const std::string& a, const std::string& b) {
         if (!L) return;
         g_ctx = lastCtx; g_sm = lastSm; g_scene = lastScene; g_vars = lastVars;
