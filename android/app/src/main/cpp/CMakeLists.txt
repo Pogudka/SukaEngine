@@ -18,10 +18,17 @@ set(FETCHCONTENT_QUIET OFF)
 # -------------------------
 # Lua 5.4.6
 # -------------------------
-FetchContent_Declare(
-    lua
-    URL https://www.lua.org/ftp/lua-5.4.6.tar.gz
-)
+if(EXISTS "${MOBEN_ROOT}/lua-5.4.6.tar.gz")
+    FetchContent_Declare(
+        lua
+        URL "file://${MOBEN_ROOT}/lua-5.4.6.tar.gz"
+    )
+else()
+    FetchContent_Declare(
+        lua
+        URL https://www.lua.org/ftp/lua-5.4.6.tar.gz
+    )
+endif()
 
 FetchContent_Populate(lua)
 
