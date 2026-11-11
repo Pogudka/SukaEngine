@@ -3,7 +3,7 @@
 
 namespace suka {
 
-// === FIX 1: усечение по границе UTF-8 (чинит нативный краш NewStringUTF на demo.lua) ===
+// === FIX 1: усечение по границе UTF-8 (чинит нативный abort NewStringUTF на demo.lua) ===
 static inline std::string utf8Trunc(const std::string& s, size_t maxBytes) {
     if (s.size() <= maxBytes) return s;
     size_t cut = maxBytes;
@@ -150,10 +150,6 @@ inline void GameApp::scCompose(const std::string& text) {
     scClampView();
 }
 inline void GameApp::scCommit(const std::string& text) {
-    // === FIX 2: кламп curLine_ перед доступом (латентная защита, не про текущий краш) ===
-    if (curLine_ < 0) curLine_ = 0;
-    if (curLine_ >= (int)scriptLines_.size()) scriptLines_.resize(curLine_ + 1);
-    // === конец FIX 2 ===
     if (compAnchor_ >= 0) {
         std::string& L = scriptLines_[curLine_];
         if (compAnchor_ <= (int)L.size() && curCol_ > compAnchor_) { L.erase(L.begin() + compAnchor_, L.begin() + curCol_); curCol_ = compAnchor_; }
@@ -738,21 +734,21 @@ inline std::string GameApp::stepEditor() {
 
     if (scriptMode_) {
         const int LINES = 24;
-        // === FIX 3: utf8Trunc вместо байтового substr(0,68) (чинит краш NewStringUTF) ===
+        // === FIX 2: utf8Trunc вместо байтового substr(0,68) (чинит краш NewStringUTF) ===
         for (int i = scriptScroll_; i < (int)scriptLines_.size() && i < scriptScroll_ + LINES; ++i) {
             float y = 70 + (float)(i - scriptScroll_) * 19;
             std::string txt = utf8Trunc(sanitizeLine(scriptLines_[i]), 68);
             out += "DRAW codeline|" + std::to_string(i) + "|" + txt + "|" + std::to_string((int)y) + "|14|" +
                    (i == curLine_ ? "#FFD700" : "#D8E0F0") + "\n";
         }
-        // === конец FIX 3 ===
+        // === конец FIX 2 ===
         if (curLine_ >= scriptScroll_ && curLine_ < scriptScroll_ + LINES && curLine_ < (int)scriptLines_.size()) {
-            // === FIX 4: utf8Trunc в caret-префиксе ===
+            // === FIX 3: utf8Trunc в caret-префиксе ===
             std::string shown = utf8Trunc(sanitizeLine(scriptLines_[curLine_]), 68);
             int cut = curCol_; if (cut < 0) cut = 0; if (cut > (int)shown.size()) cut = (int)shown.size();
             while (cut > 0 && cut < (int)shown.size() && ((unsigned char)shown[cut] & 0xC0) == 0x80) --cut;
             std::string pref = shown.substr(0, cut);
-            // === конец FIX 4 ===
+            // === конец FIX 3 ===
             float y = 70 + (float)(curLine_ - scriptScroll_) * 19;
             out += "DRAW caret|" + pref + "|340|" + std::to_string((int)y) + "|16|#4CC9F0\n";
         }
